@@ -2278,3 +2278,394 @@ and a child SHALL decide its own route.
 - **GIVEN** `mode = "auto"`, a Brave backend, and a ChatGPT session
 - **WHEN** the user switches with `/model` to a GLM model
 - **THEN** after the rebuild, `web_search` is the backend function tool
+
+### Requirement: Capability limits per profile
+
+A profile SHALL be able to declare `capabilities.allow` and
+`capabilities.deny` as lists of registry id patterns (`<domain>:<name>`,
+with `*` as a wildcard). A denied capability SHALL be absent from the
+session: not active, not listed, not searchable, and not activatable. `deny`
+SHALL take precedence over `allow`. With no `allow`, every capability not
+denied is allowed. An unparseable pattern SHALL fail configuration
+resolution with its source.
+
+#### Scenario: Shell denied by profile
+- **GIVEN** a profile with `capabilities.deny = ["tool:shell"]`
+- **WHEN** a session starts on that profile
+- **THEN** the tool list has no `shell`
+- **AND** a search for "shell" returns no such entry
+
+#### Scenario: Allow list
+- **GIVEN** a profile with `capabilities.allow = ["tool:*"]`
+- **WHEN** the agent lists capabilities
+- **THEN** only tools are listed and no skill can be activated
+
+#### Scenario: Deny wins
+- **GIVEN** `allow = ["tool:*"]` and `deny = ["tool:edit"]`
+- **WHEN** a session starts
+- **THEN** `edit` is absent
+
+#### Scenario: Invalid pattern
+- **GIVEN** `capabilities.deny = ["shell"]`
+- **WHEN** configuration is resolved
+- **THEN** resolution fails naming the key, the value, and its file
+
+### Requirement: Fixed file command directory layout
+
+Smith SHALL read file commands from `commands/<name>.md` beneath the user
+state root and beneath the project's `.smith/` directory, with the file stem
+as the command's name. The layout MUST be fixed rather than configurable,
+Smith MUST NOT create either directory, and frontmatter MUST NOT be able to
+rename a command. A name MUST be 1 to 64 lowercase ASCII letters, digits, or
+hyphens.
+
+#### Scenario: Author adds a user command
+
+- **GIVEN** the user creates `commands/audit.md` under the user state root
+- **WHEN** Smith next starts in any project
+- **THEN** `/audit` is available in that session
+
+#### Scenario: Frontmatter cannot rename a command
+
+- **GIVEN** `commands/audit.md` whose frontmatter declares a different `name`
+- **WHEN** discovery runs
+- **THEN** the command is not registered
+- **AND** the mismatch is reported as a named discovery problem
+- **AND** no command is registered under the frontmatter's name
+
+#### Scenario: Nothing on disk
+
+- **GIVEN** neither location contains a `commands` directory
+- **WHEN** Smith starts
+- **THEN** only built-in commands exist
+- **AND** no directory is created
+
+### Requirement: File command discovery is bounded and fails closed per file
+
+A command file Smith cannot use SHALL be excluded and reported as a named
+discovery problem. Discovery MUST be bounded in the number of commands per
+layer, the size of a file, and the length of a description, MUST refuse a name
+that collides with a built-in command, and MUST NOT fail startup because a
+command file is malformed.
+
+#### Scenario: One malformed file among several
+
+- **GIVEN** three command files, one with unterminated frontmatter
+- **WHEN** Smith starts
+- **THEN** the session starts and the two well-formed commands are available
+- **AND** the malformed one is reported by name with its reason
+
+#### Scenario: Invalid or reserved name
+
+- **GIVEN** files named `My Command.md` and `quit.md` in a commands directory
+- **WHEN** discovery runs
+- **THEN** neither is registered
+- **AND** each is reported with the reason it was refused
+
+#### Scenario: Non-command content beside the commands
+
+- **GIVEN** a `commands` directory containing a subdirectory and a file that
+  does not end in `.md`
+- **WHEN** discovery runs
+- **THEN** neither is registered
+- **AND** neither is reported as a problem
+
+#### Scenario: A bound is exceeded
+
+- **GIVEN** a command file larger than the read bound, or more files in one
+  layer than the count bound
+- **WHEN** discovery runs
+- **THEN** the excluded commands are not registered
+- **AND** the exclusion is reported rather than silently truncated
+
+### Requirement: Project file commands are hash-bound executable trust
+
+Smith's project-trust model SHALL cover project-supplied command templates as
+a distinct kind of executable authority, decided per file content and
+persisted alongside the existing kinds. A project command MUST NOT run, and
+MUST NOT shadow a user command of the same name, until the decision covering
+its exact content is recorded. A project command file that resolves outside
+the project root MUST be refused.
+
+#### Scenario: Project ships an unreviewed command
+
+- **GIVEN** a project supplies `.smith/commands/deploy.md` nobody has approved
+- **WHEN** Smith starts
+- **THEN** the command is listed as needing approval and does not run
+- **AND** a user command named `deploy` still runs
+
+#### Scenario: Trusted project command shadows a user command
+
+- **GIVEN** a user command and a trusted project command with the same name
+- **WHEN** the user invokes that name
+- **THEN** the project command's body is used
+- **AND** the listing identifies the user command as shadowed
+
+#### Scenario: Decision binds path and content together
+
+- **GIVEN** a decision recorded for a project command
+- **WHEN** the same content appears at a different project path, or different
+  content appears at the same path
+- **THEN** the earlier decision does not authorize it
+
+#### Scenario: Project command is a symlink out of the project
+
+- **GIVEN** a project command file that canonicalizes outside the project root
+- **WHEN** discovery runs
+- **THEN** the command is not registered
+- **AND** the escape is reported as a discovery problem
+
+#### Scenario: Existing trust files remain readable
+
+- **GIVEN** a persisted trust file written before commands were trustable
+- **WHEN** Smith reads it
+- **THEN** existing decisions load unchanged
+- **AND** project commands are undecided rather than approved
+
+### Requirement: Module selection is configuration
+
+Smith SHALL decide which compiled-in modules mount from `modules.<id>.enabled`,
+resolved through the ordinary layered resolution with provenance, so that a
+profile, a project file, or a session override can carry its own module set.
+When no layer sets the key, the module's declared default applies. A key
+naming an id that no known module has MUST be rejected with the list of
+known ids. A module that is switched on but not compiled into the running
+binary MUST be reported and MUST NOT be treated as mounted.
+
+#### Scenario: Module value is explained
+
+- **GIVEN** `modules.image-generation.enabled = false` in the user
+  configuration
+- **WHEN** configuration resolves
+- **THEN** `image-generation` is off
+- **AND** its provenance names the user file and that key
+
+#### Scenario: Profile carries its own module set
+
+- **GIVEN** the user file turns `image-generation` on
+- **AND** the selected profile turns it off
+- **WHEN** configuration resolves
+- **THEN** `image-generation` is off
+- **AND** its provenance names the profile
+
+#### Scenario: Unknown module id
+
+- **GIVEN** a configuration file sets `modules.nope.enabled = true`
+- **WHEN** configuration resolves
+- **THEN** resolution fails naming `nope`
+- **AND** lists the known module ids
+
+#### Scenario: Module is on but not compiled in
+
+- **GIVEN** a binary built without the `image-generation` module
+- **AND** `modules.image-generation.enabled = true`
+- **WHEN** Smith starts
+- **THEN** the module is reported as not built
+- **AND** the session starts without it
+
+### Requirement: Ported features keep their existing switch
+
+Smith SHALL keep a ported feature's existing switch working. When an
+existing feature becomes a module, the configuration key that already
+switched it SHALL remain a valid spelling of that module's
+`enabled` key, with the same default. Setting the existing key and the
+module key to different values in the same layer MUST be an error naming
+both keys; across layers the normal layer precedence selects one winner,
+as for the existing idle-compaction alias. Every other setting of the feature MUST keep its existing key.
+
+#### Scenario: Existing key still switches the feature
+
+- **GIVEN** `tools.image_generation.enabled = false` in the user
+  configuration and no `modules.image-generation` table
+- **WHEN** configuration resolves
+- **THEN** the `image-generation` module is off
+- **AND** its provenance names `tools.image_generation.enabled`
+
+#### Scenario: Both spellings disagree in one file
+
+- **GIVEN** one file sets `tools.image_generation.enabled = true` and
+  `modules.image-generation.enabled = false`
+- **WHEN** configuration resolves
+- **THEN** resolution fails naming both keys and the file
+
+### Requirement: Plugin installation is hash-bound trust
+
+Smith MUST NOT load a plugin's content until the user has confirmed an
+inventory of what it would load, shown with a digest covering every file
+in the plugin directory, so that a script an MCP server runs is covered as
+well as the declaration that runs it. The decision
+SHALL be bound to that digest. When installed content no longer matches the
+recorded digest, the plugin MUST be withheld and reported as changed until
+confirmed again. Plugin content covered by a plugin confirmation MUST NOT
+prompt again per skill, command, or server.
+
+#### Scenario: Install shows what will load
+
+- **WHEN** the user runs `smith plugin add ./deploy-tools`
+- **THEN** Smith lists each skill and command, each MCP server's resolved
+  command line or URL, and each component it will not load, with the digest
+- **AND** installs nothing until the user confirms
+
+#### Scenario: Installed content is edited
+
+- **GIVEN** an installed, trusted plugin
+- **WHEN** a file in its install directory is modified
+- **THEN** the plugin is reported as changed and none of its content loads
+- **AND** the session starts without it
+
+#### Scenario: Update changes an MCP command line
+
+- **GIVEN** an installed plugin at one version
+- **WHEN** `smith plugin update` fetches a version with a different MCP
+  command line
+- **THEN** Smith shows the difference and asks for confirmation
+- **AND** the installed version keeps running until the user confirms
+
+### Requirement: Plugin sources and store
+
+Smith SHALL install plugins from a local directory, from
+`github:owner/repo[#ref]`, and from a git URL, and SHALL resolve
+`name@marketplace` through a registered marketplace's
+`.claude-plugin/marketplace.json` for relative-path, GitHub, and git-URL
+entries. Installation MUST copy the plugin into the user state root; Smith
+MUST NOT load a plugin from its source checkout. Each plugin SHALL have a
+data directory that survives updates. A symbolic link that resolves outside
+the plugin root MUST be refused. An unsupported source type MUST be reported
+by name.
+
+#### Scenario: Install from a marketplace
+
+- **GIVEN** a registered marketplace `acme` listing plugin `deploy-tools`
+  with a GitHub source
+- **WHEN** the user runs `smith plugin add deploy-tools@acme` and confirms
+- **THEN** the plugin is fetched, copied into the plugin store, and recorded
+  with its source, resolved commit, version, and digest
+
+#### Scenario: Git is unavailable
+
+- **GIVEN** `git` is not on the user's PATH
+- **WHEN** the user installs from a git source
+- **THEN** Smith fails with an error naming `git`
+- **AND** installs nothing
+
+#### Scenario: Unsupported source type
+
+- **GIVEN** a marketplace entry with an npm source
+- **WHEN** the user installs it
+- **THEN** Smith reports that npm sources are not supported
+
+### Requirement: Plugin enablement is configuration
+
+Smith SHALL decide whether an installed plugin loads from
+`plugins.<name>.enabled`, resolved through the ordinary layered resolution
+with provenance, defaulting to the manifest's `defaultEnabled` and otherwise
+to on. A key naming a plugin that is not installed MUST be reported and MUST
+NOT fail resolution. In non-interactive runs, enabled trusted plugins SHALL
+load, and Smith MUST NOT install, update, or trust a plugin without an
+interactive confirmation or an explicit `--yes`.
+
+#### Scenario: Plugin switched off in a profile
+
+- **GIVEN** an installed plugin that is on by default
+- **AND** the selected profile sets `plugins.deploy-tools.enabled = false`
+- **WHEN** configuration resolves
+- **THEN** the plugin is off and its provenance names the profile
+
+#### Scenario: Headless run with a changed plugin
+
+- **GIVEN** an enabled plugin whose content no longer matches its digest
+- **WHEN** `smith -p` runs
+- **THEN** the plugin's content is not loaded
+- **AND** the run continues and reports the withheld plugin
+
+### Requirement: WASM module capability grants are recorded with the plugin
+
+Smith SHALL record, with a plugin's trust decision, the capabilities
+granted to each of its WASM modules, and MUST grant a module no capability
+beyond that record. Repository and project configuration MUST NOT grant or
+widen a WASM module's capabilities. A user MAY narrow a module's grant in
+the user configuration; a narrowed capability MUST be reported in module
+listings.
+
+#### Scenario: Project file tries to widen a grant
+
+- **GIVEN** a project configuration file that names a network host for an
+  installed WASM module
+- **WHEN** configuration resolves
+- **THEN** the module's network grant is unchanged
+- **AND** the ignored setting is reported
+
+#### Scenario: User narrows a grant
+
+- **GIVEN** a WASM module granted workspace read and network access
+- **WHEN** the user configuration removes its network capability
+- **THEN** its HTTP host function fails as ungranted
+- **AND** the listing shows the capability as withheld by the user
+
+### Requirement: Trust files written by a newer Smith remain readable
+
+Smith SHALL load a persisted trust file whose records include decisions it
+does not understand, as long as each such record is a JSON object with string
+`kind` and `label` fields. A record that is not understood MUST authorize
+nothing, and persisting the store MUST write back every record that was not
+replaced with the same fields and values. A version mismatch or a structurally
+malformed file MUST still fail loudly.
+
+#### Scenario: Unknown kind does not block startup
+
+- **GIVEN** a trust file with a decision of a kind this Smith does not know,
+  next to a decision of a kind it does know
+- **WHEN** Smith reads the trust file
+- **THEN** the trust file loads
+- **AND** the known decision has the same effect as before
+
+#### Scenario: A record of an unknown kind authorizes nothing
+
+- **GIVEN** a trust file holding an `allow` record of a kind this Smith does
+  not know
+- **WHEN** Smith evaluates any artifact in that project
+- **THEN** that record does not make the artifact trusted
+
+#### Scenario: A record with an unknown decision value authorizes nothing
+
+- **GIVEN** a trust file holding a record of a known kind whose decision value
+  this Smith does not know
+- **WHEN** Smith evaluates the artifact with that kind and label
+- **THEN** the artifact is reported as undecided
+
+#### Scenario: Recording a decision preserves records that are not understood
+
+- **GIVEN** a trust file holding a record this Smith does not understand
+- **WHEN** the user records a new decision in this Smith
+- **THEN** the persisted file still contains that record with the same fields
+  and values
+
+#### Scenario: A new decision replaces a record that is not understood
+
+- **GIVEN** a trust file whose record for a known kind and label has a
+  decision value this Smith does not know
+- **WHEN** the user records a decision for that same kind and label
+- **THEN** the persisted file holds exactly one record for that kind and label
+- **AND** that record is the new decision
+
+#### Scenario: Forgetting an artifact removes records that are not understood
+
+- **GIVEN** a trust file holding a record of a known kind and label that this
+  Smith does not understand
+- **WHEN** the user forgets the artifact with that kind and label
+- **THEN** the persisted file holds no record for that kind and label
+- **AND** records for other kinds and labels are unchanged
+
+#### Scenario: Version mismatch is still refused
+
+- **GIVEN** a trust file whose `version` is not one this Smith supports
+- **WHEN** Smith reads the trust file
+- **THEN** Smith reports that it does not understand that version
+- **AND** no decision is loaded
+
+#### Scenario: A record with no kind or label is still refused
+
+- **GIVEN** a trust file holding a record that is not an object, or has no
+  string `kind` or `label`
+- **WHEN** Smith reads the trust file
+- **THEN** Smith reports the trust file as unreadable

@@ -3,66 +3,18 @@
 ## Purpose
 The versioned extension protocol, its authoring host, contribution points, and the trust and least-privilege rules extensions run under.
 ## Requirements
-### Requirement: Versioned subprocess extension protocol
-
-Smith SHALL define a language-neutral, framed-JSON protocol over stdio for
-extension initialization, version negotiation, permission declaration,
-registration, events, requests, responses, cancellation, and shutdown.
-Protocol payload size, response time, and in-flight request count MUST be
-bounded.
-
-#### Scenario: Compatible extension initializes
-
-- **GIVEN** an extension and Smith share a compatible protocol version
-- **WHEN** the extension completes initialization and declares capabilities
-- **THEN** Smith applies approved grants
-- **AND** activates its registered contributions in deterministic order
-
-#### Scenario: Protocol versions are incompatible
-
-- **GIVEN** an extension requires an unsupported protocol version
-- **WHEN** initialization is negotiated
-- **THEN** Smith rejects the extension with an actionable compatibility error
-- **AND** continues without crashing the core runtime
-
-### Requirement: Optional TypeScript authoring host
-
-Smith SHALL provide a first-party TypeScript SDK and a separate optional Node
-host. The host MUST support asynchronous extension factories, while the Rust
-core MUST start and run normally when Node is absent and no TypeScript extension
-is enabled.
-
-#### Scenario: Async extension factory
-
-- **GIVEN** a TypeScript extension performs asynchronous model discovery before
-  registering a provider
-- **WHEN** Smith starts the extension
-- **THEN** startup awaits the factory within its configured deadline
-- **AND** exposes the provider only after successful registration
-
-#### Scenario: Node is absent
-
-- **GIVEN** Node is not installed and no TypeScript extension is enabled
-- **WHEN** Smith starts
-- **THEN** all Rust-native features remain functional
-
-#### Scenario: Enabled TypeScript extension lacks Node
-
-- **GIVEN** a TypeScript extension is enabled but the configured host cannot
-  start
-- **WHEN** Smith loads extensions
-- **THEN** it reports a clear dependency error naming that extension
-- **AND** follows its configured required-or-optional failure policy
-
 ### Requirement: Pi-like initial contribution points
 
-The initial extension API SHALL support tools and trusted tool replacement,
-commands, keyboard shortcuts, lifecycle/provider/tool/session events,
-permission gates, path protection, compaction/summarization policy, provider
-registration, declarative status-line items/widgets, and MCP registration.
-Executable contributions MUST adapt to Agent Runtime's shared provider, tool,
-ability, registry, context, and event contracts rather than a Smith-local
-parallel contract.
+The extension API SHALL support tools, harness pipeline components,
+event observers, commands, declarative status-line items, and MCP
+registration. A sandboxed WASM module SHALL be limited to the contribution
+kinds of the interface version it was built against. Provider registration,
+permission-gate replacement, path protection, compaction policy, keyboard
+shortcuts, and replacement of a built-in tool MUST be available only to
+trusted compiled-in modules and MUST NOT be offered to a sandboxed module.
+Executable contributions MUST adapt to Agent Runtime's shared provider,
+tool, ability, registry, context, and event contracts rather than a
+Smith-local parallel contract.
 
 #### Scenario: Extension adds a tool and status item
 
@@ -78,6 +30,13 @@ parallel contract.
 - **GIVEN** an extension requests replacement of a built-in tool
 - **WHEN** replacement was not explicitly trusted and configured
 - **THEN** Smith rejects the conflicting registration
+
+#### Scenario: Sandboxed module names a built-in tool
+
+- **GIVEN** a WASM module contributes a tool with the name of a built-in
+- **WHEN** the module is mounted
+- **THEN** that contribution is refused and reported
+- **AND** the built-in tool is unchanged
 
 ### Requirement: Extension trust and least privilege
 
@@ -110,10 +69,11 @@ policy MUST be deterministic and visible.
 
 ### Requirement: Multiple extension tiers without unstable native loading
 
-Smith SHALL support trusted compile-time Rust registration and MCP alongside
-the subprocess protocol. It MUST NOT load arbitrary Rust dynamic libraries as a
-stable extension ABI. A future WASM Component/WASI host MAY implement the same
-versioned contribution contract without changing agent-loop semantics.
+Smith SHALL support trusted compile-time Rust registration, MCP, and a
+sandboxed WASM component host. It MUST NOT load arbitrary Rust dynamic
+libraries as a stable extension ABI. The WASM host SHALL implement the same
+versioned contribution contract as compiled-in modules without changing
+agent-loop semantics.
 
 #### Scenario: Register an MCP tool server
 
@@ -122,6 +82,14 @@ versioned contribution contract without changing agent-loop semantics.
 - **THEN** Smith registers the MCP tools through the shared ability/tool
   registry
 - **AND** applies the same approval and attribution rules as built-ins
+
+#### Scenario: Same contract across tiers
+
+- **GIVEN** a compiled-in module and a WASM module that each contribute one
+  tool
+- **WHEN** both are mounted
+- **THEN** both tools are registered through the same registry path
+- **AND** both modules appear in the same module listing with their tier
 
 ### Requirement: Module contributions do not imply capability grants
 
@@ -149,10 +117,12 @@ broker handles covered by the resolved grant.
 
 In-process Rust provider, tool, and host-service registration SHALL be
 classified as a trusted native embedding tier and MUST NOT be described or
-configured as sandboxed user plugin execution. User-installed executable
-extensions MUST use the versioned capability-brokered subprocess protocol;
-Smith MUST NOT expose a public user-installed plugin SDK until that mediation
-path is implemented and covered by conformance tests.
+configured as sandboxed user plugin execution. A module crate that a build
+adds to the compiled-in module list SHALL be trusted native, and when it is
+not part of Smith's own source it MUST be recorded and listed with a
+third-party provenance naming its crate. User-installed executable
+extensions that are not compiled in MUST run in the sandboxed WASM component
+host; Smith MUST NOT load user-installed native code.
 
 #### Scenario: Embedder supplies an in-process tool
 
@@ -167,7 +137,7 @@ path is implemented and covered by conformance tests.
   library
 - **WHEN** Smith resolves the module
 - **THEN** Smith rejects the unsupported execution tier
-- **AND** directs the extension to the subprocess protocol
+- **AND** directs the extension to the WASM component host
 
 #### Scenario: Declarative panel is rendered
 
@@ -175,6 +145,16 @@ path is implemented and covered by conformance tests.
 - **WHEN** a client renders it
 - **THEN** the extension receives no renderer memory or runtime handle
 - **AND** presentation failure cannot mutate canonical session state
+
+#### Scenario: Third-party crate is compiled in
+
+- **GIVEN** a build adds a module crate that is not part of Smith's source
+  to the compiled-in module list
+- **WHEN** Smith composes the runtime with that module mounted
+- **THEN** composition evidence labels it trusted native with third-party
+  provenance naming the crate
+- **AND** every module listing marks it as third-party
+- **AND** Smith makes no claim that its code is mediated
 
 ### Requirement: Connected MCP servers contribute registry abilities
 
@@ -411,3 +391,361 @@ directly and warns once.
 - **WHEN** Smith exits normally or closes the connection on reconfigure
 - **THEN** the server stops under Smith's existing grace and kill bounds
 - **AND** the watchdog exits with it
+
+### Requirement: File commands are content-only contributions
+
+Smith SHALL classify a file command as a content-only contribution that
+requires no extension process and no protocol. A file command MUST contribute
+prompt text only, MUST NOT receive or imply any filesystem, process, network,
+credential, provider, or approval capability, and MUST be recorded with its
+source layer in the same contribution records other modules use, so a later
+executable extension that contributes a command appears in the same listing.
+
+#### Scenario: File command is recorded without grants
+
+- **GIVEN** a runnable user command
+- **WHEN** the session's contributions are resolved
+- **THEN** the command is recorded as a command contribution from the user
+  layer
+- **AND** the record carries no requested or granted capability
+
+#### Scenario: No extension host is needed
+
+- **GIVEN** Node is absent and no executable extension is configured
+- **WHEN** the user invokes a file command
+- **THEN** the command expands and runs normally
+
+### Requirement: Compiled-in module contract
+
+Smith SHALL define one module contract for features compiled into the
+binary. A module MUST declare a stable id, a revision, and the module ids it
+requires, and MUST supply its contributions as values returned from a mount
+step rather than by mutating shared runtime state. Contributions SHALL be
+limited to tools, harness pipeline components, event observers, slash
+commands, and declarative status items, and each executable contribution
+MUST adapt to the corresponding Agent Runtime contract. Smith MUST NOT add a
+second event bus for modules.
+
+#### Scenario: Module contributes a tool
+
+- **GIVEN** a compiled-in module whose mount step returns one tool
+- **WHEN** the module is mounted and the runtime composition resolves
+- **THEN** the tool is registered through the shared ability registry
+- **AND** it is subject to the same approval and attribution rules as any
+  built-in tool
+
+#### Scenario: Module contributes a pipeline component
+
+- **GIVEN** a compiled-in module whose mount step returns a context
+  contributor
+- **WHEN** the runtime composition resolves
+- **THEN** the component joins the harness pipeline in its declared phase
+- **AND** its order is decided by the pipeline's own ordering constraints
+
+#### Scenario: Mount step fails
+
+- **GIVEN** a module whose mount step returns an error
+- **WHEN** the runtime composition resolves
+- **THEN** none of that module's contributions are present
+- **AND** Smith reports the module and the reason
+- **AND** the session starts with the remaining modules
+
+### Requirement: Mounting is reversible
+
+The set of mounted modules SHALL fully determine the module contributions in
+a runtime composition. Unmounting a module MUST leave no tool, pipeline
+component, observer, command, or status item of that module in the next
+composition. A change to the mounted set MUST take effect only at a safe
+boundary and MUST NOT interrupt a turn in progress.
+
+#### Scenario: Module is switched off during a session
+
+- **GIVEN** `image-generation` is mounted and a turn is running
+- **WHEN** the user switches the module off
+- **THEN** the running turn completes with its existing tool set
+- **AND** from the next safe boundary `generate_image` is not registered
+
+#### Scenario: Module is switched back on
+
+- **GIVEN** `image-generation` was switched off earlier in the session
+- **WHEN** the user switches it on
+- **THEN** from the next safe boundary its contributions are present again
+- **AND** the composition equals one in which it was never switched off
+
+### Requirement: Module requirements gate mounting
+
+Smith SHALL mount modules in an order that satisfies their declared
+requirements. A module whose required module is not compiled in, is switched
+off, or failed to mount MUST NOT mount, and Smith MUST report it with the
+unmet requirement. A requirement cycle MUST be rejected at composition time.
+
+#### Scenario: Required module is switched off
+
+- **GIVEN** module `b` requires module `a`
+- **AND** `a` is switched off
+- **WHEN** the runtime composition resolves
+- **THEN** `b` is not mounted
+- **AND** the module listing shows `b` as blocked by `a`
+
+#### Scenario: Requirement cycle
+
+- **GIVEN** modules `a` and `b` each require the other
+- **WHEN** the runtime composition resolves
+- **THEN** neither is mounted
+- **AND** Smith reports the cycle naming both modules
+
+### Requirement: Mounted modules are recorded as modules
+
+Each mounted module SHALL be recorded in composition evidence as a module
+with its provenance, trust tier, and contributions, the same record shape
+used for MCP servers. A module that is not mounted MUST contribute no
+record. A module record MUST NOT grant any capability its contributions did
+not already declare and receive.
+
+#### Scenario: Unmounted module leaves no record
+
+- **GIVEN** `image-generation` is switched off
+- **WHEN** the runtime composition resolves
+- **THEN** no `smith/image-generation` module is recorded
+- **AND** `generate_image` is not registered
+
+#### Scenario: First-party module is recorded
+
+- **GIVEN** `budget-notice` is mounted
+- **WHEN** the runtime composition resolves
+- **THEN** a `smith/budget-notice` module is recorded with built-in
+  provenance
+- **AND** its record lists its pipeline components and its status item
+
+### Requirement: Installable plugin bundles in the Claude Code layout
+
+Smith SHALL treat a directory in the Claude Code plugin layout as an
+installable plugin: an optional `.claude-plugin/plugin.json` manifest plus
+components in their standard locations. A `.smith-plugin/plugin.json`, when
+present, SHALL overlay the Claude Code manifest: its keys replace the same
+keys there, and Smith-specific keys MUST appear only in that file. Unknown
+manifest keys MUST be ignored. A manifest path that is not `./`-relative, resolves
+outside the plugin root, or does not exist MUST make that component fail to
+load without failing the plugin.
+
+#### Scenario: Existing Claude Code plugin is read unchanged
+
+- **GIVEN** a directory with `.claude-plugin/plugin.json`, `skills/deploy/SKILL.md`,
+  `commands/status.md`, and `.mcp.json`
+- **WHEN** Smith inspects it as a plugin
+- **THEN** its inventory lists one skill, one command, and the declared MCP
+  servers under the manifest's name
+
+#### Scenario: Plugin without a manifest
+
+- **GIVEN** a directory with `skills/` and no manifest
+- **WHEN** Smith inspects it as a plugin
+- **THEN** it is accepted and named after its directory or marketplace entry
+
+#### Scenario: Component path escapes the plugin root
+
+- **GIVEN** a manifest whose `skills` entry is `./../other`
+- **WHEN** Smith inspects the plugin
+- **THEN** that entry is reported as escaping the plugin root and is not loaded
+- **AND** the plugin's other components are still listed
+
+### Requirement: Plugin components load through existing catalogs
+
+An enabled, trusted plugin SHALL contribute its skills, file commands, and
+MCP servers through the same resolvers that load user and project ones, and
+Smith MUST NOT add a second loader for them. Plugin skills and commands MUST
+be named `<plugin>:<name>` and plugin MCP servers `<plugin>:<server>`, so a
+plugin entry never shadows and is never shadowed by an unprefixed name.
+`${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, and `${CLAUDE_PROJECT_DIR}`
+MUST resolve in MCP server command, arguments, environment, URL, and
+headers, and in skill and command bodies.
+
+#### Scenario: Plugin command runs
+
+- **GIVEN** an enabled plugin `deploy-tools` with `commands/status.md`
+- **WHEN** the user runs `/deploy-tools:status`
+- **THEN** the expanded template is submitted as an ordinary user prompt
+
+#### Scenario: Plugin skill does not shadow a user skill
+
+- **GIVEN** a user skill `deploy` and a plugin skill `deploy-tools:deploy`
+- **WHEN** the skill catalog resolves
+- **THEN** both are present under their own names
+
+#### Scenario: Plugin MCP server finds its own files
+
+- **GIVEN** a plugin MCP server declared with
+  `args = ["${CLAUDE_PLUGIN_ROOT}/server.js"]`
+- **WHEN** Smith starts the server
+- **THEN** the argument is the absolute path inside the installed plugin
+- **AND** the process environment carries `CLAUDE_PLUGIN_ROOT` and
+  `CLAUDE_PLUGIN_DATA`
+
+### Requirement: Unsupported plugin components are listed, never run
+
+Smith SHALL recognise plugin components it does not load (hooks, agents,
+LSP servers, output styles, workflows, themes, monitors, channels, a `bin/`
+directory, plugin settings, and MCP bundle files) and MUST list each with
+the reason it is not loaded. Such a component MUST NOT prevent installation
+and MUST NOT be executed. A component that references `${user_config.*}`
+MUST be listed as needing configuration and MUST NOT be loaded.
+
+#### Scenario: Plugin carries hooks
+
+- **GIVEN** a plugin with `hooks/hooks.json`
+- **WHEN** the user installs it
+- **THEN** the confirmation and the plugin listing state that its hooks will
+  not run
+- **AND** no hook command is executed in any session
+
+#### Scenario: MCP server needs user configuration
+
+- **GIVEN** a plugin MCP server whose environment references
+  `${user_config.api_token}`
+- **WHEN** the plugin is enabled
+- **THEN** that server is listed as needing configuration and is not started
+- **AND** the plugin's skills and commands still load
+
+### Requirement: Plugins are recorded as modules without authority
+
+Each enabled plugin SHALL be recorded in composition evidence with
+user-manifest provenance: its skills and commands as content-only
+contributions and its MCP servers under the trusted-MCP tier. Installing or
+enabling a plugin MUST NOT grant any capability; its MCP tools remain
+subject to the existing conservative authority and approval rules.
+
+#### Scenario: Disabled plugin leaves no record
+
+- **GIVEN** an installed plugin that is switched off
+- **WHEN** the runtime composition resolves
+- **THEN** no module is recorded for it
+- **AND** none of its skills, commands, or MCP servers are present
+
+#### Scenario: Plugin MCP tool still needs approval
+
+- **GIVEN** an enabled plugin whose MCP server advertises a mutating tool
+- **WHEN** the model calls that tool
+- **THEN** the call is subject to the same approval as any other MCP tool
+
+### Requirement: WASM modules implement the module contract
+
+Smith SHALL load a WASM component as a module through the same contract as
+a compiled-in module: the component describes itself, its mount step returns
+a list of contributions, and Smith invokes a contribution by its id. The
+interface SHALL be one versioned package with one world; a new contribution
+kind or host function MUST be added as a new package version and MUST NOT
+add a world. Smith SHALL load modules built against the current and the
+previous package version and MUST refuse any other version with an error
+naming both versions. Contribution kinds in the first version are tools,
+context contributors, tool-output processors, and status items.
+
+#### Scenario: Module contributes two tools and a status item
+
+- **GIVEN** a WASM module whose mount step returns two tools and one status
+  item
+- **WHEN** the module is mounted
+- **THEN** both tools are registered through the shared ability registry
+- **AND** the status item is offered to clients
+- **AND** the module is recorded with the sandboxed trust tier and its
+  plugin as provenance
+
+#### Scenario: Module contributes only a context contributor
+
+- **GIVEN** a WASM module whose mount step returns one context contributor
+  and no tools
+- **WHEN** the module is mounted
+- **THEN** the contributor joins the harness pipeline
+- **AND** no tool is registered for the module
+
+#### Scenario: Unsupported interface version
+
+- **GIVEN** a WASM module built against an interface version Smith does not
+  support
+- **WHEN** Smith loads it
+- **THEN** the module is reported as failed with both versions named
+- **AND** the session starts without it
+
+### Requirement: WASM modules have no ambient authority
+
+A WASM module MUST run with no filesystem, network, environment, or
+wall-clock access of its own. Smith SHALL offer host functions only for
+capabilities the module's manifest requested and the user granted: file
+access under named roots, outbound HTTP to named hosts through Smith's
+transport, a key-value store in the plugin's data directory, and read access
+to recent session history. Calling a host function for an ungranted
+capability MUST fail that call. A tool contributed by a WASM module MUST
+remain subject to the ordinary approval path and to the conservative
+authority rule applied to unreviewed tools.
+
+#### Scenario: Ungranted network access
+
+- **GIVEN** a WASM module granted no network capability
+- **WHEN** its tool calls the HTTP host function
+- **THEN** the host function returns an error naming the missing capability
+- **AND** no request leaves the machine
+
+#### Scenario: Granted host only
+
+- **GIVEN** a WASM module granted network access to `api.example.com`
+- **WHEN** its tool requests `https://other.example.net/`
+- **THEN** the request is refused
+
+#### Scenario: Mutating WASM tool needs approval
+
+- **GIVEN** a WASM module contributes a tool that writes files
+- **WHEN** the model calls it under `approval.mode = ask`
+- **THEN** the user is asked before the tool runs
+
+### Requirement: WASM module calls are bounded and isolated
+
+Every call into a WASM module MUST be bounded by a deadline, a memory cap,
+and payload size limits. A trap, timeout, memory exhaustion, oversized
+payload, or malformed result MUST fail only that call, MUST NOT end the
+session or corrupt canonical session state, and MUST be recorded as a
+diagnostic. After repeated consecutive failures Smith SHALL disable the
+module for the rest of the session and report it as failed. A failing
+pipeline contribution MUST contribute nothing for that phase.
+
+#### Scenario: Tool call times out
+
+- **GIVEN** a WASM tool that never returns
+- **WHEN** the model calls it
+- **THEN** the call ends at its deadline with a tool error
+- **AND** the turn continues
+
+#### Scenario: Module traps repeatedly
+
+- **GIVEN** a WASM module whose calls trap three times in a row
+- **WHEN** the third failure is recorded
+- **THEN** the module is disabled for the session and listed as failed
+- **AND** its tools are no longer offered from the next safe boundary
+
+#### Scenario: Context contributor fails
+
+- **GIVEN** a WASM context contributor that returns a malformed patch
+- **WHEN** the provider request is assembled
+- **THEN** the request is assembled without that contribution
+
+### Requirement: WASM modules ship inside plugin bundles
+
+A WASM module SHALL be declared in a plugin manifest with the component
+file and the capabilities it requests, and SHALL be installed, trusted,
+enabled, updated, and removed as part of that plugin. The plugin's digest
+MUST cover the component bytes and the capability request, and the install
+confirmation MUST show each requested capability. An update that requests a
+capability the user has not granted MUST invalidate the plugin's trust and
+MUST display the new capability before confirmation.
+
+#### Scenario: Install shows capabilities
+
+- **GIVEN** a plugin declaring a WASM module that requests network access
+  to `api.example.com`
+- **WHEN** the user installs the plugin
+- **THEN** the confirmation lists the module and that host
+- **AND** nothing is installed until the user confirms
+
+#### Scenario: Update adds a capability
+
+- **GIVEN** an installed plugin whose WASM module had no file access
+- **WHEN** an update requests workspace write access
+- **THEN** the plugin is withheld until the user confirms the new capability

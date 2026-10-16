@@ -341,3 +341,82 @@ modules need, and MUST NOT add a test binary.
 - **WHEN** it is split
 - **THEN** it becomes `tests/<name>/main.rs` with child modules
 - **AND** the crate builds the same number of test binaries as before
+
+### Requirement: One crate per module behind a cargo feature
+
+Each first-party module SHALL live in its own crate that depends on the
+module contract crate and Agent Runtime, and MAY depend on `smith-tools`. A
+module crate MUST NOT depend on `smith-runtime`, `smith-config`, `smith-tui`,
+or `smith-cli`; what it needs from the host MUST reach it through the module
+context. The `smith-cli` crate SHALL
+expose one cargo feature per first-party module, all enabled by default, and
+a build with default features disabled MUST compile and run as a working
+Smith with no optional module. Architecture tests SHALL check these rules
+from manifests.
+
+#### Scenario: Minimal build
+
+- **WHEN** `smith-cli` is built with default features disabled
+- **THEN** the build succeeds
+- **AND** the resulting binary starts a session with the core tools
+- **AND** its module listing shows every first-party module as not built
+
+#### Scenario: Module crate reaches into the runtime crate
+
+- **GIVEN** a contributor adds a `smith-runtime` dependency to a module
+  crate
+- **WHEN** the architecture tests run
+- **THEN** they fail naming the crate and the dependency
+
+#### Scenario: Module without a feature
+
+- **GIVEN** a first-party module crate that `smith-cli` depends on
+  unconditionally
+- **WHEN** the architecture tests run
+- **THEN** they fail naming the module
+
+### Requirement: One compiled-in module list
+
+The modules compiled into a binary SHALL be named in exactly one place in
+the composition root, one entry per module, each first-party entry gated by
+that module's cargo feature. Modules MUST NOT register themselves through
+link-time or static-constructor mechanisms.
+
+#### Scenario: Adding a module to a build
+
+- **WHEN** a build adds one entry to the compiled-in module list and the
+  crate dependency it names
+- **THEN** the module is known to that binary
+- **AND** no other source file needs to change for it to be listed and
+  mountable
+
+#### Scenario: Hidden registration is attempted
+
+- **GIVEN** a module crate that registers itself through a link-time
+  collection
+- **WHEN** the architecture tests run
+- **THEN** they fail naming the crate
+
+### Requirement: The WASM host is an optional, isolated crate
+
+The WASM component host SHALL live in its own crate, compiled only when the
+`wasm-modules` cargo feature of `smith-cli` is enabled, and no other
+workspace crate MAY take a WASM engine, or the host crate, as a production
+dependency. A test-only dependency on the host crate is permitted. The host crate MUST depend on
+the module contract crate and MUST NOT depend on `smith-tui` or `smith-cli`.
+A build without the feature MUST compile, run, and report WASM modules as
+not supported in that build. Architecture tests SHALL check these rules from
+manifests.
+
+#### Scenario: Build without the feature
+
+- **WHEN** `smith-cli` is built without `wasm-modules`
+- **THEN** no WASM engine crate is in the dependency graph
+- **AND** an installed WASM module is listed as not supported in this build
+
+#### Scenario: Engine dependency leaks
+
+- **GIVEN** a contributor adds a WASM engine as a production dependency of
+  `smith-runtime`
+- **WHEN** the architecture tests run
+- **THEN** they fail naming the crate and the dependency

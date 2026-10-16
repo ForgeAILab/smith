@@ -2948,3 +2948,327 @@ it SHALL report that as a diagnostic naming the harness.
 - **GIVEN** a harness turn that offered the bridge
 - **WHEN** the turn ends and the CLI never connected to the endpoint
 - **THEN** a diagnostic says the harness did not load Smith's tools
+
+### Requirement: Capabilities command
+
+The TUI SHALL provide `/capabilities`, which lists the capabilities active in
+the session, those available to activate, and those denied, with whether the
+profile or the session denied each. `/capabilities deny <id>` SHALL add a
+session denial and `/capabilities allow <id>` SHALL remove one the session
+added. Both SHALL require an idle turn and apply at the next safe boundary. A
+session SHALL NOT be able to allow a capability its profile denies.
+
+#### Scenario: Listing
+- **WHEN** the user runs `/capabilities`
+- **THEN** the result shows active, available, and denied capabilities
+- **AND** each denial names the profile or the session as its source
+
+#### Scenario: Deny for this session
+- **GIVEN** an idle session with `shell` active
+- **WHEN** the user runs `/capabilities deny tool:shell`
+- **THEN** the next provider request has no `shell` tool
+- **AND** `/capabilities` shows it as denied by the session
+
+#### Scenario: Cannot widen the profile
+- **GIVEN** a profile that denies `tool:shell`
+- **WHEN** the user runs `/capabilities allow tool:shell`
+- **THEN** the command is refused and names the profile setting
+
+### Requirement: File commands expand to an ordinary prompt
+
+Smith SHALL treat a discovered file command as a prompt template. Submitting
+`/<name>` followed by optional text MUST submit the template body as an
+ordinary user prompt, under the same queueing, reference, and approval rules
+as typed text, and MUST NOT execute anything while expanding it. The text the
+user typed MUST be what the composer, queue preview, and input history show,
+and the expanded prompt MUST be what the committed transcript shows. Every
+occurrence of `$ARGUMENTS` in the body MUST be replaced by the text after the
+command name in a single pass; when the body has no placeholder and the
+arguments are not empty, they MUST be appended after the body.
+
+#### Scenario: Template with a placeholder
+
+- **GIVEN** a user command `audit` whose body is `Audit $ARGUMENTS for bugs.`
+- **WHEN** the user submits `/audit src/lib.rs`
+- **THEN** the prompt sent to the provider is `Audit src/lib.rs for bugs.`
+- **AND** the queue preview and input history show `/audit src/lib.rs`
+- **AND** the committed transcript row shows the expanded prompt, live and
+  after the session is resumed
+
+#### Scenario: Template without a placeholder
+
+- **GIVEN** a user command `standup` whose body has no `$ARGUMENTS`
+- **WHEN** the user submits `/standup yesterday only`
+- **THEN** the prompt is the body followed by `yesterday only`
+
+#### Scenario: Arguments are not expanded again
+
+- **GIVEN** a command whose body contains `$ARGUMENTS`
+- **WHEN** the user's arguments themselves contain the text `$ARGUMENTS`
+- **THEN** that text reaches the provider literally
+
+#### Scenario: Template text is never executed
+
+- **GIVEN** a command body containing shell syntax or a `!` line
+- **WHEN** the user invokes the command
+- **THEN** the text is sent as prompt content
+- **AND** no process is started by the expansion
+
+#### Scenario: Edited user command applies on the next invocation
+
+- **GIVEN** a discovered user command
+- **WHEN** its file is edited and the user invokes it again in the same session
+- **THEN** the edited body is used without restarting Smith
+
+### Requirement: File commands share command discovery
+
+File commands SHALL appear in slash completion, `Ctrl+P`, and `/help` through
+the same discovery surface as built-in commands, each labelled with its source
+layer and showing its description and argument hint. A built-in command name
+MUST always resolve to the built-in.
+
+#### Scenario: Slash completion lists a file command
+
+- **GIVEN** a user command `audit` with a description
+- **WHEN** the user types `/aud`
+- **THEN** the menu lists `audit` with its description and a user-layer label
+- **AND** `Tab` completes it without submitting a prompt
+
+#### Scenario: Help lists file commands
+
+- **GIVEN** at least one runnable file command
+- **WHEN** the user submits `/help`
+- **THEN** the file commands are listed in their own group with descriptions
+
+#### Scenario: Built-in name wins
+
+- **GIVEN** a file named `model.md` in a commands directory
+- **WHEN** the user submits `/model`
+- **THEN** the built-in model command runs
+- **AND** the file is reported as a discovery problem
+
+### Requirement: File command visibility and trust command
+
+Smith SHALL provide a built-in `/commands` command that lists every discovered
+file command grouped by source layer with its description and whether it can
+run. The command MUST state why a command cannot run, MUST show which entries
+a higher layer shadowed, MUST report every discovery problem, MUST offer a way
+to grant trust to a project command, and MUST offer a way to rebuild the
+catalog from disk without restarting.
+
+#### Scenario: Inspect the catalog
+
+- **GIVEN** a session with a user command and a project command
+- **WHEN** the user runs `/commands`
+- **THEN** each is listed under its layer with its description
+- **AND** each entry states whether it can run
+
+#### Scenario: Running a withheld project command
+
+- **GIVEN** a project command nobody has approved
+- **WHEN** the user submits it
+- **THEN** Smith renders a local message naming `/commands trust <name>`
+- **AND** no provider request is issued
+
+#### Scenario: Grant trust from the command
+
+- **GIVEN** a project command awaiting confirmation
+- **WHEN** the user runs `/commands trust <name>` and confirms
+- **THEN** Smith shows the project-relative path and content identity before
+  recording the decision
+- **AND** the command runs in the same session without restarting Smith
+
+#### Scenario: Project command changes after approval
+
+- **GIVEN** a project command approved at one content digest
+- **WHEN** its file is rewritten and the user submits it
+- **THEN** the command does not run
+- **AND** it is reported as changed with the command that would re-approve it
+
+#### Scenario: Reload picks up a new file
+
+- **GIVEN** a command file created after the session started
+- **WHEN** the user runs `/commands reload` while idle
+- **THEN** the new command appears in completion and can be run
+- **AND** edited descriptions and argument hints are refreshed
+
+### Requirement: File commands in non-interactive mode
+
+`smith -p` SHALL expand a prompt whose first token is `/<name>` when `<name>`
+is a discovered file command, using the same expansion as the TUI, and MUST
+pass every other prompt through unchanged, including the names of built-in
+commands. The documented literal-slash escape MUST apply in this mode. A
+project command that is untrusted or changed MUST fail closed without a
+provider request.
+
+#### Scenario: Headless run uses a user command
+
+- **GIVEN** a user command `audit`
+- **WHEN** a caller runs `smith -p "/audit src/lib.rs"`
+- **THEN** the expanded template is the prompt for the run
+
+#### Scenario: Slash text that names no command
+
+- **GIVEN** no file command named `usr`
+- **WHEN** a caller runs `smith -p "/usr/bin/env is missing"`
+- **THEN** the text is sent as the prompt unchanged
+
+#### Scenario: Escaped slash in a headless run
+
+- **GIVEN** a user command `audit`
+- **WHEN** a caller runs `smith -p "//audit the plan"`
+- **THEN** the prompt sent to the provider is `/audit the plan`
+- **AND** the template is not expanded
+
+#### Scenario: Untrusted project command in a headless run
+
+- **GIVEN** a project command nobody has approved
+- **WHEN** a caller runs `smith -p "/<name>"`
+- **THEN** Smith exits non-zero with a diagnostic on stderr naming the command
+- **AND** no provider request is issued
+
+### Requirement: Module list and switch
+
+The TUI SHALL provide `/modules`, listing every module known to the running
+binary plus every first-party module it was built without. Each row MUST
+show the module id, a one-line description, its state (mounted, off, not
+built, blocked, or failed), the configuration key and layer that decided it,
+and whether it is first-party or third-party. `/modules <id> on|off` MUST
+write only the user configuration file, through the previewed and
+rollback-capable user-config edit, after confirmation, and MUST apply at the
+next safe boundary. When a higher-precedence layer overrides the user value,
+Smith MUST report that instead of claiming the change took effect.
+`smith config modules` SHALL print the same listing without starting a
+session.
+
+#### Scenario: Switch a module off
+
+- **GIVEN** `image-generation` is mounted from its default
+- **WHEN** the user runs `/modules image-generation off` and confirms
+- **THEN** `~/.smith/config.toml` gains `modules.image-generation.enabled = false`
+- **AND** the change applies at the next safe boundary
+- **AND** `/modules` shows it off with the user file as its source
+
+#### Scenario: Project layer overrides the user value
+
+- **GIVEN** a project file turns `image-generation` on
+- **WHEN** the user switches it off
+- **THEN** Smith reports that the project file still turns it on
+- **AND** does not claim the module is off
+
+#### Scenario: Module is not built
+
+- **GIVEN** a binary built without `image-generation`
+- **WHEN** the user runs `/modules image-generation on`
+- **THEN** Smith refuses, saying the module is not in this build
+- **AND** writes nothing
+
+#### Scenario: Third-party module is listed
+
+- **GIVEN** a binary with a compiled-in third-party module
+- **WHEN** the user runs `/modules`
+- **THEN** its row is marked third-party and names its crate
+
+#### Scenario: Unknown module id
+
+- **WHEN** the user runs `/modules nope on`
+- **THEN** Smith refuses and lists the known ids
+
+### Requirement: Module status items
+
+Smith SHALL accept declarative status items from a mounted module, each a
+bounded label with an optional severity. The TUI SHALL render them in the status
+area in a deterministic order and MUST truncate rather than let an item
+displace the built-in status. A module MUST NOT receive a renderer handle,
+and an item MUST disappear at the safe boundary where its module unmounts.
+
+#### Scenario: Budget notice is visible to the user
+
+- **GIVEN** `budget-notice` is mounted
+- **WHEN** context pressure crosses the notice threshold
+- **THEN** the status area shows the module's item while the model-facing
+  notice is active
+- **AND** the item is gone once the notice no longer applies
+
+#### Scenario: Oversized status item
+
+- **GIVEN** a module contributes a status label longer than the bound
+- **WHEN** the TUI renders the status area
+- **THEN** the label is truncated
+- **AND** the built-in status remains fully visible
+
+### Requirement: Plugin management commands
+
+Smith SHALL provide `smith plugin add`, `list`, `update`, and `remove`, and
+`smith plugin marketplace add`, `list`, `update`, and `remove`. The TUI
+SHALL provide `/plugins`, listing each installed plugin with its state (on,
+off, changed, or failed), source, version, loaded components, and components
+not loaded with the reason for each. `/plugins <name> on|off` MUST write
+only the user configuration file through the previewed, rollback-capable
+edit and apply at the next safe boundary. Removing a plugin MUST delete its
+installed content and MUST keep its data directory unless the user asks to
+delete it.
+
+#### Scenario: List shows what is not loaded
+
+- **GIVEN** an installed plugin with two skills, one command, and hooks
+- **WHEN** the user runs `/plugins`
+- **THEN** its row lists the skills and the command as loaded
+- **AND** lists its hooks as not run
+
+#### Scenario: Switch a plugin off in a session
+
+- **GIVEN** an enabled plugin
+- **WHEN** the user runs `/plugins deploy-tools off` and confirms
+- **THEN** `plugins.deploy-tools.enabled = false` is written to the user file
+- **AND** from the next safe boundary its skills, commands, and MCP servers
+  are absent
+
+#### Scenario: Remove keeps data
+
+- **WHEN** the user runs `smith plugin remove deploy-tools`
+- **THEN** its installed content and install record are deleted
+- **AND** its data directory remains
+
+### Requirement: Plugin content is attributed where it appears
+
+Skills, commands, and MCP servers that come from a plugin SHALL be labelled
+with their plugin in `/skills`, `/commands`, `/mcp`, `/help`, and slash
+completion, and MUST appear under their namespaced name.
+
+#### Scenario: Plugin command in help
+
+- **GIVEN** an enabled plugin `deploy-tools` with a `status` command
+- **WHEN** the user opens `/help`
+- **THEN** `/deploy-tools:status` is listed and labelled as from
+  `deploy-tools`
+
+### Requirement: Withheld plugin command invocations fail closed
+
+Smith SHALL refuse an invocation in an installed plugin namespace whose
+plugin is changed, untrusted, failed, or off through the file-command path and
+MUST NOT be submitted as ordinary prompt text. The refusal MUST name the
+command and plugin and state the reason and remedy. Changed content MUST
+name `smith plugin update <name>`; off plugins MUST name `/plugins <name> on`
+or `plugins.<name>.enabled = true`. Unknown uninstalled prefixes and the
+literal `//` escape MUST keep their existing behavior.
+
+#### Scenario: Headless withheld plugin invocation
+
+- **GIVEN** an installed plugin `deploy-tools` that is changed or off
+- **WHEN** the user runs `smith -p "/deploy-tools:status api"`
+- **THEN** Smith exits non-zero with the command, plugin, reason and remedy
+- **AND** no provider request is issued
+
+#### Scenario: Terminal withheld plugin invocation
+
+- **GIVEN** an installed plugin that is changed, untrusted, failed, or off
+- **WHEN** the user invokes a command in its namespace
+- **THEN** Smith shows the same local refusal as headless preflight
+- **AND** no input is submitted or queued for the provider
+
+#### Scenario: Unknown plugin prefix and literal escape
+
+- **GIVEN** no installed plugin named `unknown`
+- **WHEN** the user submits `/unknown:status` or `//deploy-tools:status`
+- **THEN** each follows its existing unknown-input or literal-input route
