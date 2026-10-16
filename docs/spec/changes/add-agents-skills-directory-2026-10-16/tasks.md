@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-16T20:40:00Z
-updated_at: 2026-10-16T23:30:00Z
+updated_at: 2026-10-17T00:30:00Z
 completed_at:
 ---
 
@@ -28,6 +28,9 @@ completed_at:
 - [x] 1.5 `docs/skills.md`: describe the accepted grammar, and keep the
       `npx skills add` claim true. Note that `name` must still match the
       directory.
+- [ ] 1.6 `read_skill`: a frontmatter `name` that differs from the
+      directory is ignored. The skill registers under the directory name,
+      and no problem is reported. `docs/skills.md` says so.
 
 ## 2. Tests
 - [x] 2.1 Discovery: a user `.agents` skill lands in the user layer; a
@@ -45,8 +48,11 @@ completed_at:
       chomping), an indented plain continuation, a quoted value, a nested
       `metadata:` map whose child is `description:` (which must not set the
       description), and the description-length bound applied after folding.
+- [ ] 2.5 The existing name-mismatch test becomes: the skill registers under
+      the directory name, nothing registers under the frontmatter name, and
+      there is no problem.
 
 ## 3. Verification
-- [x] 3.1 Full gate.
-- [x] 3.2 Live: `npx skills add` (or a hand-made `~/.agents/skills/x/SKILL.md`)
+- [ ] 3.1 Full gate.
+- [ ] 3.2 Live: `npx skills add` (or a hand-made `~/.agents/skills/x/SKILL.md`)
       shows up in `/skills`.

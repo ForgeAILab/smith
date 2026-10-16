@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-16T20:40:00Z
-updated_at: 2026-10-16T23:30:00Z
+updated_at: 2026-10-17T00:30:00Z
 ---
 
 ## Why
@@ -37,6 +37,11 @@ standard location.
   - An indented line never sets a top-level key.
   - Nothing else from YAML is accepted, and the directory-name rule is
     unchanged.
+- The remaining 18 refusals were `chatcut-*` skills whose `name` drops the
+  directory's prefix (folder `chatcut-voice` declares `name: voice`). On
+  2026-10-16 the owner chose to load these. A skill is still named only by
+  its directory, so the frontmatter `name` cannot redirect shadowing. A
+  differing `name` is now ignored instead of refused.
 
 ## Impact
 

@@ -6,7 +6,9 @@ Smith SHALL discover skills from a fixed directory layout under the user
 state root and its sibling `.agents` directory, and under the active
 project's `.smith` and `.agents` directories. It SHALL declare each skill
 into the corresponding source layer of the existing skill catalog. A skill's
-identity MUST come from its directory name rather than from its file content.
+identity MUST come from its directory name rather than from its file content:
+a frontmatter `name` that differs from the directory SHALL be ignored, not
+refused, because installers commonly prefix the directory.
 Discovery MUST NOT change the resolution order, shadowing rules, or
 activation authority the catalog already defines.
 
@@ -52,12 +54,12 @@ separately.
 
 #### Scenario: Frontmatter cannot rename a skill
 
-- **GIVEN** a skill directory named `rust-review` whose frontmatter declares a
-  different `name`
+- **GIVEN** a skill directory named `chatcut-voice` whose frontmatter declares
+  `name: voice`
 - **WHEN** discovery runs
-- **THEN** the skill is not registered
-- **AND** the mismatch is reported as a named discovery problem
-- **AND** no skill is registered under the frontmatter's name
+- **THEN** the skill registers as `chatcut-voice`
+- **AND** no skill is registered under `voice`
+- **AND** no discovery problem is reported for it
 
 #### Scenario: Nothing on disk
 
