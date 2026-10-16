@@ -169,6 +169,47 @@ async fn web_composition_routing_modes_and_fallback_keep_fetch() {
 }
 
 #[tokio::test]
+async fn web_installed_agent_turns_route_search_to_the_backend() {
+    use smith_config::model::WebSearchMode;
+    use smith_config::resolve::{ResolvedHarness, Source, Sourced};
+    // The provider here only names the model; the CLI that runs the turn
+    // never sees hosted tools, so its search must be Smith's backend tool.
+    for (mode, expected_backend) in [
+        (WebSearchMode::Auto, true),
+        (WebSearchMode::Hosted, false),
+        (WebSearchMode::Backend, true),
+    ] {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut request = web_request(workspace.path());
+        request.config.web.search.mode.value = mode;
+        request.config.harness = Some(ResolvedHarness {
+            kind: Sourced::new("claude-code".to_owned(), Source::built_in("model")),
+            program: "claude".to_owned(),
+            model: Sourced::new("opus".to_owned(), Source::built_in("model")),
+            executable: None,
+            args: Vec::new(),
+            allow_own_tools: Sourced::new(false, Source::built_in("harness.allow_own_tools")),
+            env: Default::default(),
+        });
+        let route = crate::factory::web::prepare(&request, true).await;
+        assert!(route.hosted.is_empty(), "{mode:?}");
+        assert_eq!(
+            matches!(
+                route.settings.search,
+                Some(smith_module::SearchBackendConfig::DuckDuckGo)
+            ),
+            expected_backend,
+            "{mode:?}"
+        );
+        assert_eq!(
+            route.diagnostic.is_some(),
+            mode == WebSearchMode::Hosted,
+            "{mode:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn web_plan_posture_default_and_strict_module_lists() {
     for allowed in [true, false] {
         let workspace = tempfile::tempdir().unwrap();

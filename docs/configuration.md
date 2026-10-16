@@ -1217,7 +1217,8 @@ backend = "duckduckgo" # duckduckgo | brave | tavily | searxng
 
 Hosted search is supported by OpenAI and ChatGPT Responses, xAI Responses,
 Anthropic Messages and Gemini Interactions. OpenAI-compatible Chat Completions
-and command providers use backend search in `auto`. Hosted searches appear as
+and command providers use backend search in `auto`, as do installed coding
+agents (`cli/...` models), whatever provider their profile names. Hosted searches appear as
 `Web Search("query") · hosted` rows with source hosts; citations become links in
 the assistant's text. Hosted rows are restored from the session's event journal
 when it is enabled and available. Stream-json includes `hosted_search` events.

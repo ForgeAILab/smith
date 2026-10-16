@@ -72,6 +72,9 @@ pub(super) async fn prepare(request: &RuntimeRequest, capable: bool) -> WebRoute
                 .iter()
                 .any(|id| id == "web"));
     let mode = config.web.search.mode.value;
+    // Hosted search is a provider feature. An installed agent runs the turn
+    // without calling the provider, so it can only reach the backend tool.
+    let capable = capable && config.harness.is_none();
     let use_hosted = allowed && hosted(mode, capable, request.web_search_session.unavailable());
     let backend =
         allowed && (mode == WebSearchMode::Backend || (mode == WebSearchMode::Auto && !use_hosted));
