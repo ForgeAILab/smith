@@ -47,6 +47,58 @@ fn small_png_passes_through_byte_for_byte() {
 }
 
 #[test]
+fn image_preparation_header_fits_without_decoding_pixels() {
+    let bytes = encode_image(&noise(60, 40, false), ImageFormat::Png).unwrap();
+    assert!(image_fits(&bytes, &limits()));
+    // Only the header remains: this cannot be decoded as a complete image.
+    assert!(image::load_from_memory(&bytes[..24]).is_err());
+    assert!(image_fits(&bytes[..24], &limits()));
+    assert!(!image_fits(
+        &bytes,
+        &ImageLimits {
+            max_long_edge: 30,
+            ..limits()
+        }
+    ));
+    assert!(!image_fits(
+        &bytes,
+        &ImageLimits {
+            tile_budget: Some(1),
+            ..limits()
+        }
+    ));
+    for max in [EncodedSizeLimit::Bytes(1), EncodedSizeLimit::Base64Bytes(1)] {
+        assert!(!image_fits(
+            &bytes,
+            &ImageLimits {
+                max_encoded_bytes: Some(max),
+                ..limits()
+            }
+        ));
+    }
+    let gif = b"GIF89a\x02\0\x03\0";
+    assert!(!image_fits(gif, &limits()));
+}
+
+#[test]
+fn image_preparation_data_url_preserves_fits_and_is_deterministic() {
+    let bytes = encode_image(&noise(60, 40, false), ImageFormat::WebP).unwrap();
+    let url = format!("data:image/webp;base64,{}", STANDARD.encode(&bytes));
+    assert_eq!(prepare_image_data_url(&url, &limits()).unwrap(), url);
+    let xai = ImageLimits::for_provider(ImageProvider::Xai);
+    let prepared = prepare_image_data_url(&url, &xai).unwrap();
+    assert!(prepared.starts_with("data:image/png;base64,"));
+    assert_eq!(prepare_image_data_url(&url, &xai).unwrap(), prepared);
+    for bad in [
+        "data:image/png;base64,!!!",
+        "data:image/png,foo",
+        "data:image/png;base64,AAAA",
+    ] {
+        assert!(prepare_image_data_url(bad, &xai).is_err());
+    }
+}
+
+#[test]
 fn large_jpeg_fits_each_providers_longest_side() {
     let source = DynamicImage::ImageRgb8(RgbImage::from_pixel(4096, 2048, Rgb([91, 131, 173])));
     let bytes = encode_image(&source, ImageFormat::Jpeg).unwrap();

@@ -48,6 +48,7 @@ zeroize = { workspace = true }
 nix = { version = "0.31", default-features = false, features = ["signal"] }
 
 [dev-dependencies]
+image = { workspace = true }
 rmcp = { workspace = true, features = ["client"] }
 smith-wasm-host = { workspace = true }
 smith-module-image-generation = { workspace = true }

@@ -313,7 +313,7 @@ pub(in crate::factory) async fn prepare(
     }
     // Rejected here rather than at the first model call, so a login that never
     // completed is reported while the user is still in setup.
-    if adapter == Adapter::XaiResponses {
+    if adapter == Adapter::XaiResponses && request.provider.is_none() {
         let secret = secret.as_ref().ok_or(FactoryError::XaiAuth(
             crate::xai::XaiAuthError::InvalidBundle,
         ))?;

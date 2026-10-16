@@ -1,4 +1,4 @@
-//! Prepare image files once, before they enter conversation history.
+//! Prepare images for ingestion and for the provider serving a request.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -272,6 +272,55 @@ pub fn prepare_image_path(
         .read_to_end(&mut bytes)
         .map_err(io_error)?;
     prepare_image(&bytes, limits)
+}
+
+/// Checks format, dimensions and encoded size without decoding image pixels.
+/// A matching header does not validate the pixel payload; ingestion still
+/// uses `prepare_image` to validate images before storing them in history.
+pub fn image_fits(bytes: &[u8], limits: &ImageLimits) -> bool {
+    if check_file_size(bytes.len() as u64).is_err() {
+        return false;
+    }
+    let Ok(format) = image::guess_format(bytes) else {
+        return false;
+    };
+    let Some((width, height)) = crate::image_header::image_dimensions(bytes) else {
+        return false;
+    };
+    format != ImageFormat::Gif
+        && limits.formats.contains(&format)
+        && check_pixel_count(width, height).is_ok()
+        && fitted_dimensions(width, height, limits).is_ok_and(|size| size == (width, height))
+        && limits
+            .max_encoded_bytes
+            .is_none_or(|max| max.fits(bytes.len()))
+}
+
+/// Fits a base64 image data URL, preserving an already fitting URL verbatim.
+pub fn prepare_image_data_url(
+    data_url: &str,
+    limits: &ImageLimits,
+) -> Result<String, ImageInputError> {
+    let (mime, data) = data_url
+        .strip_prefix("data:")
+        .and_then(|rest| rest.split_once(";base64,"))
+        .ok_or_else(|| invalid_image("expected a base64 image data URL"))?;
+    // Bound allocation before decoding base64, as well as checking raw bytes.
+    if data.len() as u64 > MAX_IMAGE_FILE_BYTES.div_ceil(3) * 4 {
+        return Err(ImageInputError::FileTooLarge {
+            size: (data.len() as u64 / 4) * 3,
+            max: MAX_IMAGE_FILE_BYTES,
+        });
+    }
+    let bytes = STANDARD
+        .decode(data)
+        .map_err(|_| invalid_image("invalid base64 image data"))?;
+    if image_fits(&bytes, limits)
+        && image::guess_format(&bytes).is_ok_and(|format| format.to_mime_type() == mime)
+    {
+        return Ok(data_url.to_owned());
+    }
+    Ok(prepare_image(&bytes, limits)?.data_url)
 }
 
 /// Validates, fits and encodes an image, without filesystem access.

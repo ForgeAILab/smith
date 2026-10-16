@@ -61,6 +61,10 @@ pub(super) fn construct_runtime(
             Some(&mut image_binding),
         )?,
     };
+    let provider = Arc::new(crate::image_fitting::ImageFittingProvider::new(
+        provider,
+        crate::factory::image_limits_for_provider_kind(&request.config.provider.kind.value),
+    )) as Arc<dyn Provider>;
     let provider = crate::response::apply_response_policy(
         provider,
         request
