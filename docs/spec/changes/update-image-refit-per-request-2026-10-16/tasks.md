@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-16T05:37:09Z
-updated_at: 2026-10-16T05:37:09Z
-completed_at:
+updated_at: 2026-10-16T09:48:13Z
+completed_at: 2026-10-16T09:48:13Z
 ---
 
 ## 1. Implementation
@@ -25,6 +25,11 @@ completed_at:
       capturing requests).
 
 ## 3. Verification
-- [ ] 3.1 Gate, and a live check: read an image with `visual` (ChatGPT),
+- [x] 3.1 Gate, and a live check: read an image with `visual` (ChatGPT),
       switch with `/model` to another provider, and ask about the image
       again.
+      (2026-10-16: gate green, 2,926 tests. Live: a 1024 px WebP read under
+      `chatgpt/gpt-6-astra`, then `/model openrouter/openai/gpt-4o-mini`
+      (openai-compatible, so PNG/JPEG-only limits) described it correctly.
+      xAI was not usable: its stored login fails credential refresh even
+      for text-only prompts on v0.6.0.)
