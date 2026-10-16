@@ -222,11 +222,16 @@ async fn installed_advisor_uses_harness_instructions_transcript_and_fresh_read_o
                 assert!(prompt.contains("<conversation-transcript>"));
                 assert!(prompt.contains("USER_TASK: review cancellation"));
             }
+            // The CLI reports its physical directory, and macOS temp roots
+            // sit behind the `/var` -> `/private/var` symlink.
             assert_eq!(
-                std::fs::read_to_string(cli.directory.path().join("cwd"))
-                    .unwrap()
-                    .trim(),
-                cli.fixture.project.path().to_str().unwrap()
+                std::fs::canonicalize(
+                    std::fs::read_to_string(cli.directory.path().join("cwd"))
+                        .unwrap()
+                        .trim()
+                )
+                .unwrap(),
+                std::fs::canonicalize(cli.fixture.project.path()).unwrap()
             );
             host.shutdown().await.unwrap();
         }
