@@ -44,8 +44,9 @@ completed_at:
 - [x] 4.2 `docs/security.md`: installed coding agents run their own tools
   without approval by default; name the off switch and the posture
   narrowing.
-- [ ] 4.3 Release notes for the next version flag the widened default.
-  (Written at release prep in `docs/releases/v<next>.md`.)
+- [x] 4.3 Release notes for the next version flag the widened default.
+  (Written at release prep in `docs/releases/v0.6.0.md`, under Upgrade
+  notes.)
 
 ## 5. Verification
 
