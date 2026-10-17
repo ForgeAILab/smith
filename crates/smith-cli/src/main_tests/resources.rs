@@ -685,6 +685,93 @@ fn model_resources_show_named_context_windows_and_the_active_choice() {
 }
 
 #[test]
+fn model_picker_lists_models_configured_only_with_named_windows() {
+    let home = tempfile::tempdir().expect("home");
+    let project = tempfile::tempdir().expect("project");
+    std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+    // The active model's windows leave the input limit to the runtime, which
+    // derives it from the output ceiling; the second model is not active.
+    std::fs::write(
+        project.path().join(".smith/config.toml"),
+        r#"
+    default_profile = "wide"
+
+    [profiles.wide]
+    provider = "local"
+    model = "window-model"
+
+    [providers.local]
+    kind = "fake"
+
+    [models."local/window-model"]
+    default_context_window = "128k"
+    max_output_tokens = 8192
+
+    [models."local/window-model".context_windows."128k"]
+    context_tokens = 128000
+
+    [models."local/window-model".context_windows."1m"]
+    context_tokens = 1000000
+
+    [models."local/other-window-model"]
+    default_context_window = "272k"
+    max_output_tokens = 8192
+
+    [models."local/other-window-model".context_windows."272k"]
+    context_tokens = 272000
+    max_input_tokens = 264000
+
+    [models."local/other-window-model".context_windows."872k"]
+    context_tokens = 872000
+    max_input_tokens = 864000
+    "#,
+    )
+    .expect("config");
+    let resolution = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolution");
+    let inventory = smith_config::inventory::local_inventory(&resolution, AVAILABLE_ADAPTER_KINDS)
+        .expect("local inventory");
+    let resources = runtime_resources(
+        inventory,
+        Vec::new(),
+        "session",
+        project.path(),
+        &resolution.config.agent,
+        &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
+        &["128k".to_owned(), "1m".to_owned()],
+        Some("128k"),
+        None,
+        None,
+    );
+
+    let active = resources
+        .models
+        .iter()
+        .find(|entry| entry.id == "local/window-model")
+        .expect("the active windows-only model is a /model row");
+    assert!(active.active);
+    assert_eq!(active.disabled_reason, None);
+    assert_eq!(active.description, "local · 128k context");
+    assert!(
+        active.detail.starts_with("128k context · 119.8k input · 8.1k output ceiling"),
+        "{}",
+        active.detail
+    );
+    let inactive = resources
+        .models
+        .iter()
+        .find(|entry| entry.id == "local/other-window-model")
+        .expect("an inactive windows-only model is a /model row");
+    assert!(!inactive.active);
+    assert_eq!(inactive.disabled_reason, None);
+    assert_eq!(inactive.description, "local · 272k context");
+}
+
+#[test]
 fn catalog_inventory_becomes_searchable_resource_metadata_with_disabled_reasons() {
     let home = tempfile::tempdir().expect("home");
     let project = tempfile::tempdir().expect("project");

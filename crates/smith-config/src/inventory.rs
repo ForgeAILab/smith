@@ -352,16 +352,6 @@ pub fn local_inventory_with_catalog(
         let catalog_limits = catalog_model.and_then(|entry| entry.limits);
         let model_scope = format!("models.{}.", quote(&identity));
         let active_pair = provider == *active_provider && model == *active_model;
-        let selected_window = active_pair
-            .then_some(resolution.config.context_window.as_ref())
-            .flatten()
-            .and_then(|selection| {
-                resolution
-                    .config
-                    .model_limits
-                    .context_windows
-                    .get(&selection.value)
-            });
         let mut context_windows = BTreeMap::<String, u8>::new();
         if let Some(section) = explicit {
             for name in section.context_windows.keys() {
@@ -407,6 +397,52 @@ pub fn local_inventory_with_catalog(
         if let Some(flat) = flat_source {
             context_windows.retain(|_, precedence| *precedence > flat.layer.precedence());
         }
+        // Preview the window the runtime would run: the session's selection
+        // for the active pair, otherwise the model's configured default,
+        // unless a flat limit pins the model.
+        let selected_window = if active_pair {
+            resolution
+                .config
+                .context_window
+                .as_ref()
+                .and_then(|selection| {
+                    resolution
+                        .config
+                        .model_limits
+                        .context_windows
+                        .get(&selection.value)
+                })
+                .map(|window| PreviewWindow {
+                    context_tokens: configured_limit(&window.context_tokens),
+                    max_input_tokens: window.max_input_tokens.as_ref().map(configured_limit),
+                })
+        } else {
+            explicit.and_then(|section| {
+                let name = section.default_context_window.as_deref()?;
+                if !context_windows.contains_key(name) {
+                    return None;
+                }
+                let window = section.context_windows.get(name)?;
+                let source = |field: &str| {
+                    resolution
+                        .provenance
+                        .source(&format!("{model_scope}context_windows.{name}.{field}"))
+                        .cloned()
+                };
+                Some(PreviewWindow {
+                    context_tokens: InventoryLimit {
+                        value: window.context_tokens,
+                        origin: ModelLimitOrigin::Configured(source("context_tokens")?),
+                    },
+                    max_input_tokens: window.max_input_tokens.zip(source("max_input_tokens")).map(
+                        |(value, source)| InventoryLimit {
+                            value,
+                            origin: ModelLimitOrigin::Configured(source),
+                        },
+                    ),
+                })
+            })
+        };
         let context_windows = if context_windows.len() > 1 {
             context_windows.into_keys().collect::<Vec<_>>()
         } else {
@@ -429,7 +465,8 @@ pub fn local_inventory_with_catalog(
             snapshot: catalog,
         };
         let context_tokens = selected_window
-            .map(|window| configured_limit(&window.context_tokens))
+            .as_ref()
+            .map(|window| window.context_tokens.clone())
             .or_else(|| {
                 inventory_limit(
                     resolution,
@@ -441,28 +478,6 @@ pub fn local_inventory_with_catalog(
                     fallback(
                         cli_bookkeeping.map(|(context, _, _)| context),
                         catalog_limits.map(|limits| limits.context_tokens),
-                    ),
-                )
-            });
-        let max_input_tokens = selected_window
-            .and_then(|window| window.max_input_tokens.as_ref())
-            .or_else(|| {
-                active_pair
-                    .then_some(resolution.config.model_limits.max_input_tokens.as_ref())
-                    .flatten()
-            })
-            .map(configured_limit)
-            .or_else(|| {
-                inventory_limit(
-                    resolution,
-                    &identity,
-                    "max_input_tokens",
-                    explicit.and_then(|section| section.max_input_tokens),
-                    trusted.map(|record| record.max_input_tokens),
-                    trusted.map(|record| (record.catalog, record.revision)),
-                    fallback(
-                        cli_bookkeeping.map(|(_, input, _)| input),
-                        catalog_limits.map(|limits| limits.max_input_tokens),
                     ),
                 )
             });
@@ -484,6 +499,40 @@ pub fn local_inventory_with_catalog(
                     ),
                 )
             });
+        let max_input_tokens = match &selected_window {
+            // A window that leaves its input limit out gets the one the
+            // runtime derives: its context minus the model's output ceiling.
+            Some(window) => window.max_input_tokens.clone().or_else(|| {
+                let output = max_output_tokens.as_ref()?;
+                let value = window
+                    .context_tokens
+                    .value
+                    .checked_sub(output.value)
+                    .filter(|input| *input > 0)?;
+                Some(InventoryLimit {
+                    value,
+                    origin: window.context_tokens.origin.clone(),
+                })
+            }),
+            None => active_pair
+                .then_some(resolution.config.model_limits.max_input_tokens.as_ref())
+                .flatten()
+                .map(configured_limit)
+                .or_else(|| {
+                    inventory_limit(
+                        resolution,
+                        &identity,
+                        "max_input_tokens",
+                        explicit.and_then(|section| section.max_input_tokens),
+                        trusted.map(|record| record.max_input_tokens),
+                        trusted.map(|record| (record.catalog, record.revision)),
+                        fallback(
+                            cli_bookkeeping.map(|(_, input, _)| input),
+                            catalog_limits.map(|limits| limits.max_input_tokens),
+                        ),
+                    )
+                }),
+        };
         // A trusted model's built-in request default is model-specific. While
         // inventory enumerates another candidate, derive that candidate's own
         // trusted default instead of carrying the active model's value across.
@@ -721,6 +770,13 @@ fn provider_is_selectable(section: &ProviderSection, available: &BTreeSet<&str>)
                 KIND_OPENAI_COMPATIBLE | crate::model::KIND_GEMINI_INTERACTIONS
             )
     })
+}
+
+/// The named context window a candidate is previewed through.
+struct PreviewWindow {
+    context_tokens: InventoryLimit,
+    /// Absent when the window leaves its input limit to the runtime.
+    max_input_tokens: Option<InventoryLimit>,
 }
 
 struct CatalogLimit<'a> {

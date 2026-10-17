@@ -162,3 +162,93 @@ credential = "env:OPENAI_API_KEY"
         .expect("profile model is listed");
     assert_eq!(model.context_windows, ["1m", "272k"]);
 }
+
+/// Two models configured only with named windows: the active one leaves its
+/// input limit to the runtime, and the other is not active at all.
+const WINDOWS_ONLY: &str = r#"
+default_profile = "wide"
+
+[profiles.wide]
+provider = "local"
+model = "window-model"
+
+[providers.local]
+kind = "fake"
+
+[models."local/window-model"]
+default_context_window = "128k"
+max_output_tokens = 8192
+
+[models."local/window-model".context_windows."128k"]
+context_tokens = 128000
+
+[models."local/window-model".context_windows."1m"]
+context_tokens = 1000000
+
+[models."local/other-window-model"]
+default_context_window = "272k"
+max_output_tokens = 8192
+
+[models."local/other-window-model".context_windows."272k"]
+context_tokens = 272000
+max_input_tokens = 264000
+
+[models."local/other-window-model".context_windows."872k"]
+context_tokens = 872000
+max_input_tokens = 864000
+"#;
+
+#[test]
+fn windows_only_models_are_listed_with_the_limits_the_runtime_applies() {
+    let fixture = Fixture::new();
+    fixture.write_project(WINDOWS_ONLY);
+    let resolution = resolve(&fixture.request()).expect("windows-only models resolve");
+    let inventory = local_inventory(&resolution, &["fake"]).expect("local inventory");
+
+    let active = inventory
+        .models
+        .iter()
+        .find(|entry| entry.id() == "local/window-model")
+        .expect("the active windows-only model is listed");
+    assert!(active.active);
+    assert!(active.selectable, "{:?}", active.disabled_reason);
+    assert_eq!(active.context_windows, ["128k", "1m"]);
+    assert_eq!(
+        active.context_tokens.as_ref().map(|limit| limit.value),
+        Some(128_000)
+    );
+    // The runtime derives an absent window input limit as the window's
+    // context minus the model's output ceiling.
+    assert_eq!(
+        active.max_input_tokens.as_ref().map(|limit| limit.value),
+        Some(128_000 - 8_192)
+    );
+    let input_origin = &active
+        .max_input_tokens
+        .as_ref()
+        .expect("an input limit")
+        .origin;
+    assert!(
+        matches!(input_origin, ModelLimitOrigin::Configured(source)
+            if source.key.ends_with("context_windows.128k.context_tokens")),
+        "{input_origin:?}"
+    );
+
+    let inactive = inventory
+        .models
+        .iter()
+        .find(|entry| entry.id() == "local/other-window-model")
+        .expect("an inactive windows-only model is listed");
+    assert!(!inactive.active);
+    assert!(inactive.selectable, "{:?}", inactive.disabled_reason);
+    assert_eq!(inactive.context_windows, ["272k", "872k"]);
+    assert_eq!(
+        inactive.context_tokens.as_ref().map(|limit| limit.value),
+        Some(272_000)
+    );
+    assert_eq!(
+        inactive.max_input_tokens.as_ref().map(|limit| limit.value),
+        Some(264_000)
+    );
+    assert_eq!(inventory.providers[0].model_count, 2);
+}
