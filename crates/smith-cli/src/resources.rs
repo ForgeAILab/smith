@@ -783,15 +783,14 @@ fn context_window_entries(
     context_windows: &[String],
     context_window: Option<&str>,
 ) -> Vec<ResourceEntry> {
+    // A window's name already reads as its size, so the row is only the name;
+    // the selected row says what choosing it does.
     context_windows
         .iter()
         .map(|name| {
-            ResourceEntry::new(
-                name.clone(),
-                name.clone(),
-                "select this model context window",
-            )
-            .active(context_window == Some(name.as_str()))
+            ResourceEntry::new(name.clone(), name.clone(), format!("same as /context {name}"))
+                .description("")
+                .active(context_window == Some(name.as_str()))
         })
         .collect()
 }

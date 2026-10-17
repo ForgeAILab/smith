@@ -38,7 +38,8 @@ fn bare_context_draws_the_window_picker_above_the_composer() {
         context_windows: ["128k", "1m", "32k"]
             .into_iter()
             .map(|name| {
-                ResourceEntry::new(name, name, "select this model context window")
+                ResourceEntry::new(name, name, format!("same as /context {name}"))
+                    .description("")
                     .active(name == "128k")
             })
             .collect(),
@@ -60,6 +61,7 @@ fn bare_context_draws_the_window_picker_above_the_composer() {
         rows[title + 1].starts_with("❯ 128k") && rows[title + 1].ends_with("✓ current"),
         "{screen}"
     );
+    assert_eq!(rows[title + 2].trim(), "same as /context 128k", "{screen}");
     let composer = rows
         .iter()
         .position(|row| row.starts_with("> "))

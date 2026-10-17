@@ -58,7 +58,8 @@
             context_windows: windows
                 .iter()
                 .map(|name| {
-                    ResourceEntry::new(*name, *name, "select this model context window")
+                    ResourceEntry::new(*name, *name, format!("same as /context {name}"))
+                        .description("")
                         .active(*name == current)
                 })
                 .collect(),
