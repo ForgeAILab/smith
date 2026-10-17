@@ -192,9 +192,7 @@ fn standalone_area(area: Rect, content_rows: usize, footer: ScreenFooter) -> Rec
         rows => rows + 1,
     };
     let needed = content_rows.saturating_add(2 + controls);
-    let height = u16::try_from(needed)
-        .unwrap_or(u16::MAX)
-        .min(area.height);
+    let height = u16::try_from(needed).unwrap_or(u16::MAX).min(area.height);
     Rect::new(area.x, area.bottom() - height, area.width, height)
 }
 

@@ -757,7 +757,9 @@ fn model_picker_lists_models_configured_only_with_named_windows() {
     assert_eq!(active.disabled_reason, None);
     assert_eq!(active.description, "local · 128k context");
     assert!(
-        active.detail.starts_with("128k context · 119.8k input · 8.1k output ceiling"),
+        active
+            .detail
+            .starts_with("128k context · 119.8k input · 8.1k output ceiling"),
         "{}",
         active.detail
     );

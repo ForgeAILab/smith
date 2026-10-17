@@ -788,9 +788,13 @@ fn context_window_entries(
     context_windows
         .iter()
         .map(|name| {
-            ResourceEntry::new(name.clone(), name.clone(), format!("same as /context {name}"))
-                .description("")
-                .active(context_window == Some(name.as_str()))
+            ResourceEntry::new(
+                name.clone(),
+                name.clone(),
+                format!("same as /context {name}"),
+            )
+            .description("")
+            .active(context_window == Some(name.as_str()))
         })
         .collect()
 }
@@ -1345,16 +1349,14 @@ kind = "fake"
 
     #[test]
     fn setup_default_rows_list_agents_as_the_model_picker_does() {
-        let provider = |name: &str, active: bool, adapter_available: bool| {
-            ProviderInventoryEntry {
-                name: name.into(),
-                kind: Some("fake".into()),
-                adapter_available,
-                selectable: adapter_available,
-                model_count: 1,
-                active,
-                source: None,
-            }
+        let provider = |name: &str, active: bool, adapter_available: bool| ProviderInventoryEntry {
+            name: name.into(),
+            kind: Some("fake".into()),
+            adapter_available,
+            selectable: adapter_available,
+            model_count: 1,
+            active,
+            source: None,
         };
         let agent_pair = ModelInventoryEntry {
             provider: "google".into(),
@@ -1378,7 +1380,10 @@ kind = "fake"
         };
         let inventory = smith_config::inventory::SelectionInventory {
             models: vec![agent_pair],
-            providers: vec![provider("google", true, true), provider("zeta", false, true)],
+            providers: vec![
+                provider("google", true, true),
+                provider("zeta", false, true),
+            ],
             ..Default::default()
         };
         let claude_only = |program: &str| program == "claude";
@@ -1410,7 +1415,10 @@ kind = "fake"
         // An unusable current provider hands the agent rows to the first
         // usable one; with none, setup cannot write an agent default at all.
         let mut fallback = inventory.clone();
-        fallback.providers = vec![provider("google", true, false), provider("zeta", false, true)];
+        fallback.providers = vec![
+            provider("google", true, false),
+            provider("zeta", false, true),
+        ];
         assert!(
             super::default_model_entries(&fallback, claude_only)
                 .iter()
