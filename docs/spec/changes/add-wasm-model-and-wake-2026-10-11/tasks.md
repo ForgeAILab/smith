@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-11T21:09:05Z
-updated_at: 2026-10-16T23:30:00Z
-completed_at:
+updated_at: 2026-10-17T06:42:09Z
+completed_at: 2026-10-17T06:42:09Z
 ---
 
 ## 1. Interface
@@ -37,11 +37,11 @@ completed_at:
 ## 4. Examples and docs
 
 - [x] 4.1 Relay example delivers with a watcher.
-- [ ] 4.2 `second-opinion` example using `complete` and `session_history`.
-- [ ] 4.3 `docs/wasm-modules.md`, CI build lines, end-to-end tests with the
+- [x] 4.2 `second-opinion` example using `complete` and `session_history`.
+- [x] 4.3 `docs/wasm-modules.md`, CI build lines, end-to-end tests with the
   fake provider.
 
 ## 5. Gate
 
-- [ ] 5.1 fmt, clippy, targeted crate tests with `--no-fail-fast`, feature-free
+- [x] 5.1 fmt, clippy, targeted crate tests with `--no-fail-fast`, feature-free
   build. The full workspace gate runs separately.
