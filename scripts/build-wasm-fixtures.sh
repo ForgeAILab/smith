@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export TMPDIR="${TMPDIR:-/private/tmp/smith-fixture-tmp}"
+export TMPDIR="${TMPDIR:-/tmp/smith-symlink-tmp}"
 mkdir -p "$TMPDIR"
 export CARGO_HOME="${CARGO_HOME:-$PWD/target/wasm-gate/cargo-home}"
-export CARGO_TARGET_DIR="$PWD/target"
+export CARGO_TARGET_DIR="$PWD/target/wasm-fixtures"
 manifest=crates/smith-wasm-host/tests/guests/Cargo.toml
 fixtures=crates/smith-wasm-host/tests/fixtures
 # Rebuild legacy fixtures with frozen 0.1 sources, and current fixtures with 0.2.
