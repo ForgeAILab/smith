@@ -17,6 +17,22 @@ use crate::status::Activity;
 
 use super::state::*;
 
+/// Keys that put a newline in a draft instead of submitting it.
+///
+/// Ctrl+J is the raw line feed, which every terminal sends and reports the
+/// same way, so it is the newline key that always works. Shift+Enter and
+/// Alt+Enter need a terminal that tells them apart from Enter: one with the
+/// kitty keyboard protocol on, or one that sends Option as Meta.
+fn inserts_newline(key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Enter => key
+            .modifiers
+            .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT),
+        KeyCode::Char('j') => key.modifiers == KeyModifiers::CONTROL,
+        _ => false,
+    }
+}
+
 /// What the host loop must do after a mouse event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseOutcome {
@@ -608,6 +624,13 @@ impl App {
                 }
                 None
             }
+            // A newline key edits a slash draft as it edits any other draft;
+            // only a plain Enter runs the command.
+            KeyCode::Enter if inserts_newline(key) => {
+                let action = self.on_composer_key(key);
+                self.refresh_palette_after_edit();
+                action
+            }
             KeyCode::Enter => {
                 if self.composer.text().starts_with("//") {
                     self.overlay = None;
@@ -713,9 +736,7 @@ impl App {
             return None;
         }
         match (key.code, key.modifiers) {
-            (KeyCode::Enter, m)
-                if m.contains(KeyModifiers::SHIFT) || m.contains(KeyModifiers::ALT) =>
-            {
+            _ if inserts_newline(key) => {
                 self.composer.insert('\n');
                 None
             }

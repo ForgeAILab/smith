@@ -102,6 +102,8 @@
   Esc                 Interrupt or close
   Shift+Enter or      Insert a newline
   Alt+Enter
+  Ctrl+J              Insert a newline in
+                      any terminal
   \ then Enter        Replace the backslash
                       with a newline
   Up / Down           Move between draft
@@ -149,8 +151,6 @@
                       literal !
   //                  Send text with a
                       leading slash
-
-
 
 
 

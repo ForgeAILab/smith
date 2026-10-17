@@ -145,12 +145,21 @@ pub(super) fn draw_composer(frame: &mut Frame<'_>, area: Rect, app: &App, theme:
         area.width,
         area.height.saturating_sub(2),
     );
-    let (rows, cursor) = composer_content(app, theme, input_area.width);
+    let (mut rows, cursor) = composer_content(app, theme, input_area.width);
+    // A draft taller than the composer scrolls just far enough to keep the
+    // cursor row in view, so typing past the last row stays visible.
+    let offset = cursor.map_or(0, |(_, row)| {
+        (row + 1).saturating_sub(usize::from(input_area.height))
+    });
+    rows.drain(..offset.min(rows.len()));
 
     frame.render_widget(Paragraph::new(rows), input_area);
 
     if app.overlay.is_none() || matches!(app.overlay, Some(Overlay::Palette { .. })) {
-        let (column, row) = cursor.unwrap_or((MARKER_WIDTH, 0));
+        // Saturating: a composer squeezed to no rows scrolls past the cursor.
+        let (column, row) = cursor.map_or((MARKER_WIDTH, 0), |(column, row)| {
+            (column, row.saturating_sub(offset))
+        });
         let x = input_area.x + u16::try_from(column).unwrap_or(0);
         let y = input_area.y + u16::try_from(row).unwrap_or(0);
         if x < input_area.right() && y < input_area.bottom() {
@@ -790,6 +799,9 @@ fn composer_hint(app: &App, width: u16) -> String {
     }
     if app.composer.is_empty() {
         "? for shortcuts".to_owned()
+    } else if app.overlay.is_none() {
+        // The one newline key every terminal reports; `?` lists the others.
+        "ctrl+j for newline".to_owned()
     } else {
         String::new()
     }

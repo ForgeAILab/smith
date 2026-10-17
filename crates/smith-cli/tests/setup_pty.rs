@@ -762,6 +762,67 @@ expect {
     );
     assert!(screen.contains("local/example-model"), "{screen}");
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
+    // `expect` never answers the keyboard-protocol query, so this terminal
+    // counts as legacy-only and gets neither a push nor a pop.
+    assert!(
+        screen.contains("\x1b[?u"),
+        "the query was not sent: {screen}"
+    );
+    assert!(!screen.contains("\x1b[>1u"), "{screen}");
+    assert!(!screen.contains("\x1b[<1u"), "{screen}");
+}
+
+#[test]
+fn a_kitty_protocol_terminal_gets_disambiguation_popped_before_the_shell_returns() {
+    let fixture = Fixture::new();
+    fixture.configure_fake();
+    // Answer the keyboard query (flags 0) and then device attributes, as a
+    // kitty-protocol terminal does. Shift+Enter then arrives as `CSI 13;2 u`,
+    // and Esc as `CSI 27 u`.
+    let interaction = r#"
+expect {
+    -exact "\033\[?u" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "\033\[?0u\033\[?62;22c"
+expect {
+    -exact "Ask Smith to do anything" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "kept\033\[13;2usecond\033\[27u/quit\r"
+expect {
+    -exact "TERMINAL_RESTORED" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+"#;
+    let Some(output) = fixture.run_expect("--no-color --no-motion", interaction) else {
+        return;
+    };
+    let screen = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "screen: {screen}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
+    let entered = screen
+        .find("\x1b[?1049h")
+        .expect("alternate screen entered");
+    let pushed = screen.find("\x1b[>1u").expect("disambiguation pushed");
+    let popped = screen.find("\x1b[<1u").expect("disambiguation popped");
+    let left = screen.rfind("\x1b[?1049l").expect("alternate screen left");
+    assert!(
+        entered < pushed && pushed < popped && popped < left,
+        "{screen}"
+    );
+    assert_eq!(screen.matches("\x1b[>1u").count(), 1, "{screen}");
+    assert_eq!(screen.matches("\x1b[<1u").count(), 1, "{screen}");
+    // Shift+Enter edited the draft instead of sending it, and Esc cleared
+    // it: the session had no user message, so there is nothing to resume.
+    assert!(!screen.contains("resume with smith --resume"), "{screen}");
 }
 
 #[test]

@@ -340,6 +340,7 @@ fn informational_help_uses_registry_order_and_an_aligned_plain_word_key_table() 
         ("Esc", "Interrupt or close"),
         ("? on an empty draft", "Show shortcuts"),
         ("Shift+Enter or Alt+Enter", "Insert a newline"),
+        ("Ctrl+J", "Insert a newline in any terminal"),
         ("\\ then Enter", "Replace the backslash with a newline"),
         (
             "Up / Down",

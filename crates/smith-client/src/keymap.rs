@@ -340,6 +340,16 @@ pub const KEY_BINDINGS: &[KeyBinding] = &[
         cases: &[
             BindingCase::key(AnyComposer, Key::Enter, Shift, InsertNewline),
             BindingCase::key(AnyComposer, Key::Enter, Alt, InsertNewline),
+            BindingCase::key(SlashDraft, Key::Enter, Shift, InsertNewline),
+            BindingCase::key(SlashDraft, Key::Enter, Alt, InsertNewline),
+        ],
+    },
+    KeyBinding {
+        label: "Ctrl+J",
+        description: "Insert a newline in any terminal",
+        cases: &[
+            BindingCase::key(AnyComposer, Key::Char('j'), Control, InsertNewline),
+            BindingCase::key(SlashDraft, Key::Char('j'), Control, InsertNewline),
         ],
     },
     KeyBinding {

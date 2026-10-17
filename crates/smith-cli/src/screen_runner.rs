@@ -66,8 +66,9 @@ pub(crate) type TerminalEvents =
 
 /// Constructs readers in one place; interactive callers retain theirs across
 /// host rebuilds and lend it to embedded screens instead of restarting input.
+/// Every screen and the session read keys with the same legacy aliases.
 pub(crate) fn terminal_events() -> Box<TerminalEvents> {
-    Box::new(EventStream::new())
+    Box::new(EventStream::new().map(|event| event.map(crate::terminal::legacy_key_aliases)))
 }
 
 /// Keeps a single event reader and terminal guard alive across a chain of screens.

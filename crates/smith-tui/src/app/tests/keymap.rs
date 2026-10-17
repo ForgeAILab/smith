@@ -37,9 +37,22 @@ mod keymap {
         KeyEvent::new(code, modifiers)
     }
 
-    fn terminal_inputs(input: KeyInput) -> Vec<TerminalInput> {
+    /// How a chord arrives once Smith pushes kitty disambiguation: a `CSI u`
+    /// report that carries lock state beside the modifiers (crossterm keeps
+    /// Caps Lock and Num Lock out of `modifiers`). Typed text stays legacy.
+    fn disambiguated_chord(chord: KeyChord) -> KeyEvent {
+        let legacy = terminal_chord(chord);
+        KeyEvent::new_with_kind_and_state(
+            legacy.code,
+            legacy.modifiers,
+            KeyEventKind::Press,
+            crossterm::event::KeyEventState::CAPS_LOCK | crossterm::event::KeyEventState::NUM_LOCK,
+        )
+    }
+
+    fn encoded_inputs(input: KeyInput, encode: fn(KeyChord) -> KeyEvent) -> Vec<TerminalInput> {
         match input {
-            KeyInput::Chord(chord) => vec![TerminalInput::Key(terminal_chord(chord))],
+            KeyInput::Chord(chord) => vec![TerminalInput::Key(encode(chord))],
             KeyInput::Text(text) => text
                 .chars()
                 .map(|character| TerminalInput::Key(key(KeyCode::Char(character))))
@@ -52,9 +65,10 @@ mod keymap {
                 0,
                 0,
             ))],
-            KeyInput::Sequence(inputs) => {
-                inputs.iter().copied().flat_map(terminal_inputs).collect()
-            }
+            KeyInput::Sequence(inputs) => inputs
+                .iter()
+                .flat_map(|input| encoded_inputs(*input, encode))
+                .collect(),
         }
     }
 
@@ -446,6 +460,15 @@ mod keymap {
 
     #[tokio::test]
     async fn every_binding_matches_current_key_handling() {
+        check_every_binding(terminal_chord).await;
+    }
+
+    #[tokio::test]
+    async fn every_binding_survives_keyboard_disambiguation() {
+        check_every_binding(disambiguated_chord).await;
+    }
+
+    async fn check_every_binding(encode: fn(KeyChord) -> KeyEvent) {
         for binding in KEY_BINDINGS {
             assert!(!binding.cases.is_empty(), "{} has no cases", binding.label);
             for case in binding.cases {
@@ -470,7 +493,7 @@ mod keymap {
                 for &working in working_states {
                     let Fixture { mut app, approval } = fixture(case.context, working).await;
                     let before = Before::capture(&app);
-                    let events = terminal_inputs(case.input);
+                    let events = encoded_inputs(case.input, encode);
                     assert!(!events.is_empty(), "{} has no input", binding.label);
                     let mut action = None;
                     for event in events {
@@ -612,6 +635,20 @@ mod keymap {
             PausedOutput,
             FollowNewest,
         );
+
+        // A following, idle draft names the newline key every terminal sends.
+        app = fixture(AnyComposer, false).await.app;
+        app.follow_newest();
+        for width in [44, 80, 160] {
+            footer_binding(
+                &mut app,
+                width,
+                "ctrl+j for newline",
+                KeyChord::new(NamedKey::Char('j'), Modifier::Control),
+                AnyComposer,
+                KeyEffect::InsertNewline,
+            );
+        }
 
         // End retains its draft meaning when this same hint appears with text.
         app = fixture(AnyComposer, false).await.app;

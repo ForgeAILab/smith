@@ -137,6 +137,71 @@ fn cursor_stays_inside_the_rules_after_line_and_draft_navigation() {
 }
 
 #[test]
+fn a_tall_draft_scrolls_to_keep_the_cursor_row_visible() {
+    use ratatui::backend::Backend as _;
+    let lines = (1..=12)
+        .map(|line| format!("row-{line:02}"))
+        .collect::<Vec<_>>();
+    let mut app = App::new("model", "project");
+    app.composer.replace(lines.join("\n"));
+    for up in 0..=lines.len() {
+        if up > 0 {
+            app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(80, 32)).expect("a test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app, Theme::new().without_color()))
+            .expect("a frame");
+        let screen = screen_text(terminal.backend().buffer());
+        let rows = screen.lines().collect::<Vec<_>>();
+        let top = rows
+            .iter()
+            .position(|row| row.starts_with('─'))
+            .expect("composer top rule");
+        let bottom = top + 9;
+        assert!(rows[bottom].starts_with('─'), "eight draft rows:\n{screen}");
+        let position = terminal
+            .backend_mut()
+            .get_cursor_position()
+            .expect("a cursor");
+        let (line, _) = app.composer.cursor_position();
+        let y = usize::from(position.y);
+        assert!(top < y && y < bottom, "cursor outside the composer:\n{screen}");
+        assert!(
+            rows[y].contains(&lines[line]),
+            "cursor row {y} does not show {}:\n{screen}",
+            lines[line]
+        );
+        // Up at the first line would recall history; there is none, and the
+        // draft must survive every press.
+        assert_eq!(app.composer.text(), lines.join("\n"));
+    }
+    assert_eq!(app.composer.cursor_position().0, 0);
+}
+
+#[test]
+fn an_idle_draft_names_the_universal_newline_key() {
+    let mut app = App::new("model", "project");
+    let screen = render(&app, 80, 16, Theme::new().without_color());
+    assert!(screen.contains("? for shortcuts"), "{screen}");
+    assert!(!screen.contains("for newline"), "{screen}");
+
+    app.composer.replace("draft");
+    let screen = render(&app, 80, 16, Theme::new().without_color());
+    assert!(screen.contains("ctrl+j for newline"), "{screen}");
+    let screen = render(&app, 44, 16, Theme::new().without_color());
+    assert!(screen.contains("ctrl+j for newline"), "{screen}");
+
+    // A slash draft belongs to the palette, which has its own controls.
+    let mut app = App::new("model", "project");
+    for character in "/sta".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+    }
+    let screen = render(&app, 80, 24, Theme::new().without_color());
+    assert!(!screen.contains("for newline"), "{screen}");
+}
+
+#[test]
 fn a_conversation_renders_its_transcript_composer_and_footer() {
     let app = conversation();
     let screen = render(&app, 74, 16, Theme::new());

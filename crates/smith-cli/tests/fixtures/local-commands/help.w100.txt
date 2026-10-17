@@ -72,6 +72,7 @@
   Ctrl+O                    Expand or fold detail
   Esc                       Interrupt or close
   Shift+Enter or Alt+Enter  Insert a newline
+  Ctrl+J                    Insert a newline in any terminal
   \ then Enter              Replace the backslash with a newline
   Up / Down                 Move between draft lines; browse history and delegated agents from the
                             first or last line
@@ -94,7 +95,6 @@
   @                         Complete files and agents; @@ sends a literal @
   !                         Run a local shell command; !! sends a literal !
   //                        Send text with a leading slash
-
 
 
 

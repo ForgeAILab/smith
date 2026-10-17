@@ -318,10 +318,14 @@ The composer sits between two dim rules, uses a `>` prompt, and shows
 placeholder text when empty. A leading `!` switches the prompt to `!` and
 the left hint to `bash mode`. `@` and `/` open their pickers. Up and Down move
 between lines of a multi-line draft; they reach history only from the first or
-last line. `Shift+Enter` and `\` then Enter insert a newline.
+last line. `Ctrl+J` inserts a newline in every terminal; `Shift+Enter`,
+`Alt+Enter`, and `\` then Enter do too, the first two where the terminal
+reports them. A draft taller than the composer's eight rows scrolls to keep the
+cursor row in view.
 
 The hint row is below the lower rule. On the left it reads `? for shortcuts`
-when idle and empty, and names the busy keys while a turn runs. On the right
+when idle and empty, `ctrl+j for newline` when idle with a draft, and names
+the busy keys while a turn runs. On the right
 it shows model, profile, and approval mode. Hints are the last thing dropped
 when the terminal is narrow. `?` on an empty draft opens a shortcuts panel in
 the anchored pane; any key closes it. The panel is not a transcript entry and
@@ -361,10 +365,18 @@ nothing to do with a hovering pointer.
 
 Bracketed paste remains enabled independently of pointer handling.
 
+Where the terminal answers the kitty keyboard-protocol query (Ghostty and
+cmux, kitty, and others with the protocol on), Smith pushes disambiguation only,
+after it enters the alternate screen, so Shift+Enter and Alt+Enter arrive as
+themselves. It pops the flags before it leaves the screen, exactly once, on
+every exit path, including panic and the exit backstop. Release and repeat
+events stay off. Ctrl+[, Ctrl+I, and Ctrl+M keep their legacy meanings of Esc,
+Tab, and Enter.
+
 | Key | Action |
 | --- | --- |
 | `Enter` | Send while idle; steer an eligible serving provider turn while busy |
-| `Shift+Enter` / `Alt+Enter` / `\` then `Enter` | Newline in the composer |
+| `Ctrl+J` / `Shift+Enter` / `Alt+Enter` / `\` then `Enter` | Newline in the composer and the command palette |
 | `Esc` | Leave the child inspector for the root timeline; otherwise interrupt the running turn, with uncommitted steers resubmitting only eventual discards after cancellation; if idle, clear the composer |
 | `Ctrl+C` | Add a non-blank composer draft to bounded local history and clear it; replace the identity footer with `press Ctrl+C again to exit` for the 1s double-press window; a second press exits from any state |
 | `Ctrl+P` | Open command completion using the shared command registry |

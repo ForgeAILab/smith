@@ -409,11 +409,15 @@
 
     #[test]
     fn newline_keys_edit_the_draft_without_submitting_or_recording_history() {
-        for modifiers in [KeyModifiers::SHIFT, KeyModifiers::ALT] {
+        for newline in [
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT),
+            ctrl('j'),
+        ] {
             let mut app = app();
             app.composer.replace("café tail");
             app.composer.move_to_position(0, 4);
-            assert_eq!(app.on_key(KeyEvent::new(KeyCode::Enter, modifiers)), None);
+            assert_eq!(app.on_key(newline), None, "{newline:?}");
             assert_eq!(app.composer.text(), "café\n tail");
             assert_eq!(app.composer.cursor_position(), (1, 0));
             assert!(!app.composer.recall_previous());
@@ -432,6 +436,164 @@
         app.composer.replace("!printf hello\\");
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
         assert_eq!(app.composer.text(), "!printf hello\n");
+    }
+
+    #[test]
+    fn every_newline_key_builds_one_multi_line_submission() {
+        let mut app = app();
+        type_text(&mut app, "first");
+        app.on_key(ctrl('j'));
+        type_text(&mut app, "second");
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        type_text(&mut app, "third");
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        type_text(&mut app, "fourth\\");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        type_text(&mut app, "  indented");
+        assert_eq!(
+            app.composer.text(),
+            "first\nsecond\nthird\nfourth\n  indented"
+        );
+
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
+        assert_eq!(
+            submission.input_without_files(),
+            UserInput::text("first\nsecond\nthird\nfourth\n  indented")
+        );
+        assert!(app.composer.is_empty());
+        // History recalls the whole draft, newlines included.
+        assert!(app.composer.recall_previous());
+        assert_eq!(
+            app.composer.text(),
+            "first\nsecond\nthird\nfourth\n  indented"
+        );
+    }
+
+    #[test]
+    fn newline_keys_in_the_command_palette_edit_instead_of_running() {
+        for newline in [
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT),
+            ctrl('j'),
+        ] {
+            let mut app = app();
+            type_text(&mut app, "/status");
+            assert!(matches!(app.overlay, Some(Overlay::Palette { .. })));
+            assert_eq!(app.on_key(newline), None, "{newline:?}");
+            assert_eq!(app.composer.text(), "/status\n", "{newline:?}");
+            assert!(
+                matches!(app.overlay, Some(Overlay::Palette { error: None, .. })),
+                "{newline:?}: {:?}",
+                app.overlay
+            );
+        }
+    }
+
+    #[test]
+    fn multi_line_paste_keeps_its_newlines_through_submission() {
+        let mut app = app();
+        app.on_paste("one\ntwo");
+        type_text(&mut app, " three");
+        app.on_key(ctrl('j'));
+        type_text(&mut app, "four");
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
+        assert_eq!(
+            submission.input_without_files(),
+            UserInput::text("one\ntwo three\nfour")
+        );
+
+        // A paste long enough to collapse expands with its newlines intact.
+        app = self::app();
+        app.on_paste("a\r\nb\nc");
+        app.on_key(ctrl('j'));
+        type_text(&mut app, "d");
+        assert_eq!(app.composer.text(), "[Pasted text #1 +3 lines]\nd");
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
+        assert_eq!(
+            submission.input_without_files(),
+            UserInput::text("a\nb\nc\nd")
+        );
+    }
+
+    /// What crossterm reports for keys once Smith pushes kitty disambiguation:
+    /// `CSI u` reports that carry lock state outside `modifiers`.
+    fn disambiguated(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new_with_kind_and_state(
+            code,
+            modifiers,
+            KeyEventKind::Press,
+            crossterm::event::KeyEventState::CAPS_LOCK,
+        )
+    }
+
+    #[test]
+    fn disambiguated_reports_reach_the_legacy_bindings() {
+        // Esc (CSI 27 u) clears an idle draft.
+        let mut app = app();
+        type_text(&mut app, "draft");
+        assert_eq!(
+            app.on_key(disambiguated(KeyCode::Esc, KeyModifiers::NONE)),
+            None
+        );
+        assert!(app.composer.is_empty());
+
+        // Ctrl+C (CSI 99;5 u) stashes, and a second press exits.
+        type_text(&mut app, "stash me");
+        assert_eq!(
+            app.on_key(disambiguated(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            None
+        );
+        assert!(app.composer.is_empty());
+        assert_eq!(
+            app.on_key(disambiguated(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(Action::Quit)
+        );
+
+        // Ctrl+D has no binding with or without the protocol.
+        app = self::app();
+        type_text(&mut app, "keep");
+        assert_eq!(
+            app.on_key(disambiguated(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+            None
+        );
+        assert_eq!(app.composer.text(), "keep");
+
+        // Alt+B / Alt+F (CSI 98;3 u, CSI 102;3 u) move by word; Ctrl+A/E/W/U/K edit.
+        app.composer.replace("one two");
+        app.on_key(disambiguated(KeyCode::Char('b'), KeyModifiers::ALT));
+        assert_eq!(app.composer.cursor(), 4);
+        app.on_key(disambiguated(KeyCode::Char('f'), KeyModifiers::ALT));
+        assert_eq!(app.composer.cursor(), 7);
+        app.on_key(disambiguated(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(app.composer.cursor(), 0);
+        app.on_key(disambiguated(KeyCode::Char('e'), KeyModifiers::CONTROL));
+        app.on_key(disambiguated(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        assert_eq!(app.composer.text(), "one ");
+        app.on_key(disambiguated(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert!(app.composer.is_empty());
+
+        // Shift+Tab (CSI 9;2 u) is BackTab with SHIFT, as `CSI Z` was, and
+        // Tab stays legacy.
+        let mut app = agent_first_app();
+        assert!(matches!(
+            app.on_key(disambiguated(KeyCode::BackTab, KeyModifiers::SHIFT)),
+            Some(Action::Reconfigure(_))
+        ));
+        assert!(matches!(
+            app.on_key(key(KeyCode::Tab)),
+            Some(Action::Reconfigure(_))
+        ));
+
+        // Ctrl+P (CSI 112;5 u) opens the palette; Ctrl+J (CSI 106;5 u) is a newline.
+        let mut app = self::app();
+        type_text(&mut app, "multi");
+        app.on_key(disambiguated(KeyCode::Char('j'), KeyModifiers::CONTROL));
+        assert_eq!(app.composer.text(), "multi\n");
+        app.on_key(disambiguated(KeyCode::Enter, KeyModifiers::SHIFT));
+        assert_eq!(app.composer.text(), "multi\n\n");
+        app.composer.clear();
+        app.on_key(disambiguated(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert!(matches!(app.overlay, Some(Overlay::Palette { .. })));
     }
 
     #[test]
