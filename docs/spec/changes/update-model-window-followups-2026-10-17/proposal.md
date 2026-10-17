@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-17T06:23:25Z
-updated_at: 2026-10-17T06:23:25Z
+updated_at: 2026-10-17T06:56:42Z
 ---
 
 ## Why
@@ -37,7 +37,8 @@ updated_at: 2026-10-17T06:23:25Z
   one named window, it also opens `Choose context window` above the composer,
   the same compact pane as `/model`. The pane opens on the current window,
   marked `✓ current`, and Enter switches to the chosen window exactly as
-  `/context NAME` does. With one window or none, or during a turn, only the
+  `/context NAME` does. Each row is the window's name; the selected row
+  reads `same as /context NAME`. With one window or none, or during a turn, only the
   report appears, as today (a turn is refused a window switch anyway).
   `/context NAME` and `/context default` are unchanged, and so is the
   headless and machine `/context` command.
