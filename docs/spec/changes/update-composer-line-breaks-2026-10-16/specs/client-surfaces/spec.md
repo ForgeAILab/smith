@@ -8,8 +8,9 @@ terminal reports them. Typing `\` and then Enter SHALL replace the backslash
 with a newline. In the command palette, Ctrl+J, Shift+Enter and Alt+Enter
 SHALL also insert a newline and MUST NOT run a command. Submitting a
 multi-line draft MUST send its newlines intact. While an idle draft is
-non-empty and no overlay is open, the hint row SHALL name a newline key. The
-shortcuts panel and `/help` SHALL list every newline key. When a draft is
+non-empty and no overlay is open, the hint row SHALL name a newline key.
+`/help` SHALL list every newline key, as SHALL the shortcuts panel wherever
+the terminal leaves it room for its rows. When a draft is
 taller than the composer, the composer SHALL scroll so that the cursor row
 stays visible.
 
