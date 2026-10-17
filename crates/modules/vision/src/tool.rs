@@ -2,16 +2,11 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
-use agent_runtime_core::cancel::{CancelReason, Cancellation};
+use agent_runtime::agent::one_shot::{OneShotError, OneShotExecutor, OneShotRequest, run_one_shot};
 use agent_runtime_core::content::{ContentPart, Message};
 use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::ids::{AttemptId, RequestId, SessionId};
-use agent_runtime_core::provider::{
-    FinishReason, ProviderAttemptPurpose, ProviderCallContext, ProviderRequest,
-    ProviderStreamEvent, ToolChoice,
-};
 use agent_runtime_core::tool::{
     InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolCallDisplay, ToolEffects,
     ToolOutcome, ToolSpec,
@@ -19,7 +14,6 @@ use agent_runtime_core::tool::{
 use agent_runtime_core::usage::{Provenance, UsageDelta, UsageRecord, UsageSource};
 use async_trait::async_trait;
 use base64::Engine as _;
-use futures_util::StreamExt;
 use serde_json::{Value, json};
 use smith_host::ProjectWorkspace;
 use smith_module::{SessionHistory, VisionBinding, VisionUsageRecorder};
@@ -219,12 +213,6 @@ impl ViewImageTool {
             },
             ContentPart::text(arguments["question"].as_str().expect("validated question")),
         ];
-        let mut request = ProviderRequest::new(
-            self.binding.model.clone(),
-            vec![Message::system(INSTRUCTION), user],
-        );
-        request.tool_choice = ToolChoice::None;
-        request.max_output_tokens = Some(self.binding.output_token_cap);
         let request_id = RequestId::new(format!("vision-{}-{}", ctx.request, ctx.call_id));
         let attempt_id = AttemptId::new(format!("vision-{}-{}", ctx.request, ctx.call_id));
         let mut usage = RecordedUsage {
@@ -240,70 +228,42 @@ impl ViewImageTool {
                 ..Provenance::default()
             },
         };
-        let cancel = CancelOnDrop(ctx.cancel.child());
-        let context = ProviderCallContext {
-            session: ctx.session.clone(),
+        let mut request = OneShotRequest::new(
+            INSTRUCTION,
+            vec![user],
+            ctx.session.clone(),
             request_id,
             attempt_id,
-            cache_identity: None,
-            purpose: ProviderAttemptPurpose::Ordinary,
-            cancel: cancel.0.clone(),
-            deadline: ctx.deadline,
+        );
+        request.max_output_tokens = Some(self.binding.output_token_cap);
+        request.output_char_limit = Some(ctx.output_limit);
+        request.cancel = ctx.cancel.clone();
+        request.deadline = ctx.deadline;
+        request.clock = ctx.clock.clone();
+        let executor = OneShotExecutor::Provider {
+            provider: self.binding.provider.clone(),
+            model: self.binding.model.clone(),
         };
-        let call = async {
-            let mut stream = self.binding.provider.stream(request, context).await?;
-            let mut answer = String::new();
-            let mut remaining = ctx.output_limit;
-            let mut has_text = false;
-            let mut finish = None;
-            while let Some(event) = stream.next().await {
-                match event {
-                    ProviderStreamEvent::TextDelta { text } => {
-                        has_text |= text.chars().any(|ch| !ch.is_whitespace());
-                        for ch in text.chars().take(remaining) {
-                            answer.push(ch);
-                            remaining -= 1;
-                        }
-                    }
-                    ProviderStreamEvent::Usage { delta } => usage.delta.merge(&delta),
-                    ProviderStreamEvent::Error { error } => return Err(error.into()),
-                    ProviderStreamEvent::Finish { reason } => finish = Some(reason),
-                    ProviderStreamEvent::ToolCallDelta { .. } => {
-                        return Err(RuntimeError::tool("vision model attempted a tool call"));
-                    }
-                    _ => {}
+        let answer = run_one_shot(&executor, request, &mut usage.delta)
+            .await
+            .map(|answer| answer.text)
+            .map_err(|error| match error {
+                OneShotError::Cancelled if ctx.cancel.is_cancelled() => {
+                    RuntimeError::tool("vision call cancelled")
                 }
-            }
-            if !matches!(finish, Some(FinishReason::Stop | FinishReason::Length)) {
-                return Err(RuntimeError::tool("vision model did not finish normally"));
-            }
-            if !has_text {
-                return Err(RuntimeError::tool("vision model returned an empty answer"));
-            }
-            Ok(answer)
-        };
-        let deadline = async {
-            match ctx.deadline.remaining_millis(ctx.clock.as_ref()) {
-                Some(millis) => tokio::time::sleep(Duration::from_millis(millis)).await,
-                None => std::future::pending::<()>().await,
-            }
-        };
-        let answer = tokio::select! {
-            biased;
-            _ = ctx.cancel.cancelled() => Err(RuntimeError::tool("vision call cancelled")),
-            _ = deadline => { cancel.0.cancel(CancelReason::Timeout); Err(RuntimeError::tool("vision call timed out")) },
-            result = call => result,
-        };
+                OneShotError::TimedOut => RuntimeError::tool("vision call timed out"),
+                OneShotError::ToolCall => RuntimeError::tool("vision model attempted a tool call"),
+                OneShotError::Empty => RuntimeError::tool("vision model returned an empty answer"),
+                OneShotError::Cancelled
+                | OneShotError::Filtered
+                | OneShotError::Unfinished
+                | OneShotError::UnsupportedInput(_) => {
+                    RuntimeError::tool("vision model did not finish normally")
+                }
+                OneShotError::Failed(error) => error,
+            });
         usage.provenance.failed = answer.is_err();
         answer
-    }
-}
-
-struct CancelOnDrop(Cancellation);
-impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        self.0
-            .cancel(CancelReason::Host("vision call ended".into()));
     }
 }
 

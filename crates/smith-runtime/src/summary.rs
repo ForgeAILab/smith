@@ -7,8 +7,10 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
 
+use agent_runtime::agent::one_shot::{
+    OneShotError, OneShotExecutor, OneShotFinish, OneShotRequest, run_one_shot,
+};
 use agent_runtime::context::Sensitivity;
 use agent_runtime::harness::{
     SEMANTIC_SUMMARY_IDLE_COMPACTION_PURPOSE, SEMANTIC_SUMMARY_PURPOSE, SemanticSummaryPolicy,
@@ -16,18 +18,12 @@ use agent_runtime::harness::{
 };
 use agent_runtime::registry::RegistryRevision;
 use agent_runtime_core::artifact::ArtifactRetention;
-use agent_runtime_core::cancel::{CancelReason, Cancellation};
 use agent_runtime_core::clock::{Clock, Deadline};
-use agent_runtime_core::content::Message;
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::ids::{AttemptId, RequestId, SessionId};
-use agent_runtime_core::provider::{
-    FinishReason, ModelId, Provider, ProviderAttemptPurpose, ProviderCallContext, ProviderRequest,
-    ProviderStreamEvent, ToolChoice,
-};
+use agent_runtime_core::provider::{ModelId, Provider, ProviderAttemptPurpose};
 use agent_runtime_core::usage::UsageDelta;
 use async_trait::async_trait;
-use futures_util::StreamExt;
 
 /// Smith's semantic-summary policy revision.
 pub const SMITH_SEMANTIC_SUMMARY_POLICY_REVISION: &str = "smith-semantic-summary-policy-1";
@@ -43,32 +39,6 @@ Summarize the supplied completed conversation turns for future task continuity. 
 Preserve decisions, constraints, file/symbol names, tool evidence, unresolved work, \
 and user preferences. Do not invent results, permissions, or facts. Do not issue \
 tool calls. Return only the concise semantic summary.";
-
-struct SummaryCallCancellation {
-    cancel: Cancellation,
-    armed: bool,
-}
-
-impl SummaryCallCancellation {
-    fn new(cancel: Cancellation) -> Self {
-        Self {
-            cancel,
-            armed: true,
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for SummaryCallCancellation {
-    fn drop(&mut self) {
-        if self.armed {
-            self.cancel.cancel(CancelReason::Shutdown);
-        }
-    }
-}
 
 /// Smith-selected semantic summary composition.
 #[derive(Clone)]
@@ -280,90 +250,64 @@ impl SummaryModel for SmithProviderSummaryModel {
                 ));
             }
         };
-        let mut messages = Vec::with_capacity(request.messages.len() + 1);
-        messages.push(Message::system(format!(
+        let instructions = format!(
             "<summary-purpose id=\"{}\" max_chars=\"{}\">\n{}\n</summary-purpose>",
             request.purpose, request.max_output_chars, SUMMARY_INSTRUCTION
-        )));
-        messages.extend(request.messages.iter().cloned());
-        let mut provider_request = ProviderRequest::new(self.model.clone(), messages);
-        provider_request.tool_choice = ToolChoice::None;
-        provider_request.max_output_tokens = Some(self.max_output_tokens);
-
-        let cancel = Cancellation::new();
-        // Runtime cancels idle-compaction by dropping this summary future.
-        // Propagate that drop into the provider context instead of relying on
-        // transport-drop behavior alone.
-        let mut cancel_on_drop = SummaryCallCancellation::new(cancel.clone());
-        let context = ProviderCallContext {
-            // Summary work is separately attributed and must not share the
-            // main conversation's cache partition: its prefix is a different
-            // prompt entirely.
-            session: SessionId::new(format!("summary-{}", request.idempotency_key)),
-            request_id: RequestId::new(format!("summary-{}", request.idempotency_key)),
-            attempt_id: AttemptId::new(format!("summary-{}", request.idempotency_key)),
-            cache_identity: None,
-            purpose: attempt_purpose,
-            cancel: cancel.clone(),
-            deadline: Deadline::after(self.clock.as_ref(), self.timeout_ms),
+        );
+        // Summary work has its own identities and no main-conversation cache partition.
+        let mut call = OneShotRequest::new(
+            instructions,
+            request.messages.to_vec(),
+            SessionId::new(format!("summary-{}", request.idempotency_key)),
+            RequestId::new(format!("summary-{}", request.idempotency_key)),
+            AttemptId::new(format!("summary-{}", request.idempotency_key)),
+        );
+        call.purpose = attempt_purpose;
+        call.max_output_tokens = Some(self.max_output_tokens);
+        call.output_char_limit = Some(request.max_output_chars.saturating_add(1));
+        call.deadline = Deadline::after(self.clock.as_ref(), self.timeout_ms);
+        call.clock = self.clock.clone();
+        let executor = OneShotExecutor::Provider {
+            provider: self.provider.clone(),
+            model: self.model.clone(),
         };
-        let call = async {
-            let mut stream = self.provider.stream(provider_request, context).await?;
-            let mut text = String::new();
-            let mut usage = UsageDelta::new();
-            let mut finish = None;
-            while let Some(event) = stream.next().await {
-                match event {
-                    ProviderStreamEvent::TextDelta { text: delta } => {
-                        text.push_str(&delta);
-                        if text.chars().count() > request.max_output_chars {
-                            return Err(RuntimeError::limit(
-                                "semantic summary exceeded its character limit",
-                            ));
-                        }
+        let mut usage = UsageDelta::new();
+        let answer =
+            run_one_shot(&executor, call, &mut usage)
+                .await
+                .map_err(|error| match error {
+                    OneShotError::Failed(error) => error,
+                    OneShotError::TimedOut => {
+                        RuntimeError::new(ErrorKind::Timeout, "semantic summary model timed out")
                     }
-                    ProviderStreamEvent::Usage { delta } => usage.merge(&delta),
-                    ProviderStreamEvent::Finish { reason } => {
-                        finish = Some(reason);
-                        break;
-                    }
-                    ProviderStreamEvent::Error { error } => return Err(error.into()),
-                    ProviderStreamEvent::ToolCallDelta { .. } => {
-                        return Err(RuntimeError::new(
-                            ErrorKind::Provider,
-                            "semantic summary model attempted a tool call",
-                        ));
-                    }
-                    ProviderStreamEvent::ReasoningDelta { .. }
-                    | ProviderStreamEvent::HostedSearch { .. }
-                    | ProviderStreamEvent::CacheObservation { .. }
-                    | ProviderStreamEvent::RateLimit { .. }
-                    | ProviderStreamEvent::Downgrade { .. }
-                    | ProviderStreamEvent::VendorMetadata { .. } => {}
-                }
-            }
-            if finish != Some(FinishReason::Stop) {
-                return Err(RuntimeError::new(
-                    ErrorKind::Provider,
-                    "semantic summary model did not finish normally",
-                ));
-            }
-            Ok(SummaryModelResponse { text, usage })
-        };
-        match tokio::time::timeout(Duration::from_millis(self.timeout_ms), call).await {
-            Ok(result) => {
-                cancel_on_drop.disarm();
-                result
-            }
-            Err(_) => {
-                cancel.cancel(CancelReason::Timeout);
-                cancel_on_drop.disarm();
-                Err(RuntimeError::new(
-                    ErrorKind::Timeout,
-                    "semantic summary model timed out",
-                ))
-            }
+                    OneShotError::ToolCall => RuntimeError::new(
+                        ErrorKind::Provider,
+                        "semantic summary model attempted a tool call",
+                    ),
+                    OneShotError::Cancelled
+                    | OneShotError::Filtered
+                    | OneShotError::Empty
+                    | OneShotError::Unfinished
+                    | OneShotError::UnsupportedInput(_) => RuntimeError::new(
+                        ErrorKind::Provider,
+                        "semantic summary model did not finish normally",
+                    ),
+                })?;
+        if answer.text.chars().count() > request.max_output_chars {
+            return Err(RuntimeError::limit(
+                "semantic summary exceeded its character limit",
+            ));
         }
+        if answer.finish != OneShotFinish::Stopped {
+            return Err(RuntimeError::new(
+                ErrorKind::Provider,
+                "semantic summary model did not finish normally",
+            ));
+        }
+        Ok(SummaryModelResponse {
+            text: answer.text,
+            usage,
+        })
     }
 }
 
@@ -371,7 +315,10 @@ impl SummaryModel for SmithProviderSummaryModel {
 mod tests {
     use agent_runtime::provider::fake::{FakeProvider, ScriptedStream};
     use agent_runtime_core::clock::SystemClock;
-    use agent_runtime_core::provider::{Capabilities, ProviderStreamEvent};
+    use agent_runtime_core::content::Message;
+    use agent_runtime_core::provider::{
+        Capabilities, FinishReason, ProviderStreamEvent, ToolChoice,
+    };
     use agent_runtime_core::usage::CounterKind;
 
     use super::*;
@@ -476,6 +423,116 @@ mod tests {
                 .joined_text()
                 .contains(SEMANTIC_SUMMARY_IDLE_COMPACTION_PURPOSE)
         );
+    }
+
+    #[tokio::test]
+    async fn summary_rejects_overflow_truncation_and_tool_calls() {
+        for (text, finish, expected) in [
+            (
+                "éééé",
+                FinishReason::Stop,
+                "semantic summary exceeded its character limit",
+            ),
+            (
+                "éé",
+                FinishReason::Length,
+                "semantic summary model did not finish normally",
+            ),
+            (
+                "éé",
+                FinishReason::ToolCalls,
+                "semantic summary model attempted a tool call",
+            ),
+        ] {
+            let provider = Arc::new(FakeProvider::new(
+                "model",
+                Capabilities::basic_streaming(),
+                vec![ScriptedStream::new(vec![
+                    ProviderStreamEvent::TextDelta { text: text.into() },
+                    ProviderStreamEvent::Finish { reason: finish },
+                ])],
+            ));
+            let model = SmithProviderSummaryModel::new(
+                provider,
+                "fake",
+                ModelId::new("model"),
+                Arc::new(SystemClock),
+                128,
+                1_000,
+            )
+            .unwrap();
+            let error = model
+                .summarize(&SummaryModelRequest {
+                    messages: Arc::from(vec![Message::user("old request")]),
+                    purpose: SEMANTIC_SUMMARY_PURPOSE.into(),
+                    idempotency_key: "bounded".into(),
+                    max_output_chars: 3,
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.message, expected);
+        }
+    }
+
+    #[derive(Debug)]
+    struct PendingSummaryProvider {
+        cancel: std::sync::Mutex<Option<agent_runtime_core::cancel::Cancellation>>,
+    }
+
+    #[async_trait]
+    impl Provider for PendingSummaryProvider {
+        fn describe(&self) -> Vec<agent_runtime_core::provider::ModelDescriptor> {
+            FakeProvider::text_reply("unused").describe()
+        }
+
+        fn capabilities(&self, _: &ModelId) -> Option<Capabilities> {
+            Some(Capabilities::basic_streaming())
+        }
+
+        async fn stream(
+            &self,
+            _: agent_runtime_core::provider::ProviderRequest,
+            context: agent_runtime_core::provider::ProviderCallContext,
+        ) -> Result<
+            agent_runtime_core::provider::ProviderStream,
+            agent_runtime_core::provider::ProviderError,
+        > {
+            *self.cancel.lock().unwrap() = Some(context.cancel);
+            Ok(Box::pin(futures_util::stream::pending()))
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_summary_cancels_the_provider_child() {
+        let provider = Arc::new(PendingSummaryProvider {
+            cancel: Default::default(),
+        });
+        let model = SmithProviderSummaryModel::new(
+            provider.clone(),
+            "fake",
+            ModelId::new("fake"),
+            Arc::new(SystemClock),
+            128,
+            1_000,
+        )
+        .unwrap();
+        let request = SummaryModelRequest {
+            messages: Arc::from(vec![Message::user("old request")]),
+            purpose: SEMANTIC_SUMMARY_PURPOSE.into(),
+            idempotency_key: "drop".into(),
+            max_output_chars: 256,
+        };
+        let mut future = model.summarize(&request);
+        assert!(futures_util::poll!(&mut future).is_pending());
+        let cancel = provider
+            .cancel
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("provider started");
+        assert!(!cancel.is_cancelled());
+        drop(future);
+        assert!(cancel.is_cancelled());
     }
 
     #[test]

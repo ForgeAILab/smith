@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::time::Duration;
 
 use agent_runtime::agent::external::{
-    ExternalAgentBackend, ExternalAgentEvent, ExternalToolDispatch, ExternalTurnRequest,
+    ExternalAgentBackend, ExternalAgentEvent, ExternalTurnRequest,
 };
 use agent_runtime_core::cancel::{CancelReason, Cancellation};
 use agent_runtime_core::content::UserInput;
@@ -114,15 +114,11 @@ async fn stop_launcher(drop_stream: bool) {
     let cancel = Cancellation::new();
     let mut stream = launcher
         .backend()
-        .run_turn(ExternalTurnRequest {
-            input: UserInput::text("hello"),
-            resume: None,
-            turn: TurnId::new("launcher-turn"),
-            cancel: cancel.clone(),
-            capabilities: Default::default(),
-            bridge: None,
-            tools: ExternalToolDispatch::disabled(),
-        })
+        .run_turn(ExternalTurnRequest::new(
+            UserInput::text("hello"),
+            TurnId::new("launcher-turn"),
+            cancel.clone(),
+        ))
         .await
         .expect("a running launcher");
     loop {
@@ -174,15 +170,11 @@ async fn launcher_events(script: &str, kind: CliAgentKind) -> Vec<ExternalAgentE
         let launcher = Launcher::with_script(script);
         let stream = launcher
             .backend_for(kind)
-            .run_turn(ExternalTurnRequest {
-                input: UserInput::text("hello"),
-                resume: None,
-                turn: TurnId::new("stderr-turn"),
-                cancel: Cancellation::new(),
-                capabilities: Default::default(),
-                bridge: None,
-                tools: ExternalToolDispatch::disabled(),
-            })
+            .run_turn(ExternalTurnRequest::new(
+                UserInput::text("hello"),
+                TurnId::new("stderr-turn"),
+                Cancellation::new(),
+            ))
             .await
             .expect("a running stderr launcher");
         stream.collect().await
@@ -291,7 +283,7 @@ async fn an_exit_with_only_stderr_control_characters_has_no_reason_suffix() {
     );
 }
 
-async fn disabled_bridge_argv(kind: CliAgentKind) {
+async fn disabled_bridge_argv(kind: CliAgentKind, instructions: Option<&str>) {
     tokio::time::timeout(Duration::from_secs(10), async {
         let launcher = Launcher::with_script(
             r#"#!/bin/sh
@@ -313,19 +305,17 @@ printf '%s\n' "$TERMINAL"
             .settings
             .env
             .insert("TERMINAL".into(), terminal.into());
-        let expected = backend.argv("hello", None).expect("not-bridged argv");
-        let stream = backend
-            .run_turn(ExternalTurnRequest {
-                input: UserInput::text("hello"),
-                resume: None,
-                turn: TurnId::new("disabled-bridge-turn"),
-                cancel: Cancellation::new(),
-                capabilities: Default::default(),
-                bridge: None,
-                tools: ExternalToolDispatch::disabled(),
-            })
-            .await
-            .expect("recording launcher");
+        let mut request = ExternalTurnRequest::new(
+            UserInput::text("hello"),
+            TurnId::new("disabled-bridge-turn"),
+            Cancellation::new(),
+        );
+        request.instructions = instructions.map(str::to_owned);
+        backend.settings.instructions = instructions.map(|_| "configured".to_owned());
+        let expected = backend
+            .argv("hello", None, instructions)
+            .expect("not-bridged argv");
+        let stream = backend.run_turn(request).await.expect("recording launcher");
         let events: Vec<_> = stream.collect().await;
         assert!(
             events
@@ -333,7 +323,7 @@ printf '%s\n' "$TERMINAL"
                 .any(|event| matches!(event, ExternalAgentEvent::Completed))
         );
         let argv = std::fs::read_to_string(recorded).expect("recorded argv");
-        assert_eq!(argv.lines().collect::<Vec<_>>(), expected);
+        assert_eq!(argv, format!("{}\n", expected.join("\n")));
         assert!(
             !argv.contains("mcp"),
             "an empty bridge must not declare an endpoint: {argv}"
@@ -345,12 +335,19 @@ printf '%s\n' "$TERMINAL"
 
 #[tokio::test]
 async fn claude_disabled_bridge_preserves_the_launchers_exact_argv() {
-    disabled_bridge_argv(CliAgentKind::ClaudeCode).await;
+    disabled_bridge_argv(CliAgentKind::ClaudeCode, None).await;
 }
 
 #[tokio::test]
 async fn codex_disabled_bridge_preserves_the_launchers_exact_argv() {
-    disabled_bridge_argv(CliAgentKind::Codex).await;
+    disabled_bridge_argv(CliAgentKind::Codex, None).await;
+}
+
+#[tokio::test]
+async fn turn_request_instructions_reach_both_cli_launchers() {
+    for kind in [CliAgentKind::ClaudeCode, CliAgentKind::Codex] {
+        disabled_bridge_argv(kind, Some("turn instructions")).await;
+    }
 }
 
 /// Inspect the real run_turn spawn request, substituting only the OS spawn.
@@ -405,7 +402,7 @@ async fn run_turn_wraps_unchanged_argv_and_retains_stdin_until_stream_drop() {
             ];
             backend.spawn_override = Some(inspect_supervised_spawn);
             let prompt = "prompt with --flags\nand 'quotes'";
-            let cli_args = backend.argv(prompt, None).unwrap();
+            let cli_args = backend.argv(prompt, None, None).unwrap();
             let expected = [
                 "harness-supervise".to_owned(),
                 "--".to_owned(),
@@ -427,15 +424,11 @@ async fn run_turn_wraps_unchanged_argv_and_retains_stdin_until_stream_drop() {
                 .env
                 .insert("SMITH_TEST_OVERLAY".into(), "unchanged overlay".into());
             let mut stream = backend
-                .run_turn(ExternalTurnRequest {
-                    input: UserInput::text(prompt),
-                    resume: None,
-                    turn: TurnId::new("supervised-turn"),
-                    cancel: Cancellation::new(),
-                    capabilities: Default::default(),
-                    bridge: None,
-                    tools: ExternalToolDispatch::disabled(),
-                })
+                .run_turn(ExternalTurnRequest::new(
+                    UserInput::text(prompt),
+                    TurnId::new("supervised-turn"),
+                    Cancellation::new(),
+                ))
                 .await
                 .expect("supervised stream");
             let pids = launcher.pids().unwrap();
@@ -466,15 +459,11 @@ async fn missing_smith_path_spawns_directly_and_warns_once() {
         let mut events = Vec::new();
         for turn in ["first", "second"] {
             let stream = backend
-                .run_turn(ExternalTurnRequest {
-                    input: UserInput::text("hello"),
-                    resume: None,
-                    turn: TurnId::new(turn),
-                    cancel: Cancellation::new(),
-                    capabilities: Default::default(),
-                    bridge: None,
-                    tools: ExternalToolDispatch::disabled(),
-                })
+                .run_turn(ExternalTurnRequest::new(
+                    UserInput::text("hello"),
+                    TurnId::new(turn),
+                    Cancellation::new(),
+                ))
                 .await
                 .unwrap();
             events.extend(stream.collect::<Vec<_>>().await);
@@ -568,7 +557,7 @@ async fn missing_smith_executable_skips_endpoint_even_with_authorized_tools() {
         // Binding here would fail. A host without Smith must not even try,
         // despite a non-empty authorized bridge view.
         backend.endpoint_base_override = Some(launcher.directory.path().join("missing-base"));
-        let expected = backend.argv("hello", None).unwrap();
+        let expected = backend.argv("hello", None, None).unwrap();
         let (runtime, provider) = endpoint_probe_runtime(backend);
         let session = runtime.start_session(StartSession::new()).await.unwrap();
         session.run(UserInput::text("hello")).await.unwrap();

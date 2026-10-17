@@ -2,11 +2,9 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
 
-use agent_runtime::agent::external::{
-    BackendToolObservations, ExternalAgentEvent, ExternalToolDispatch, ExternalTurnRequest,
-};
+use agent_runtime::agent::external::BackendToolObservations;
+use agent_runtime::agent::one_shot::{OneShotError, OneShotExecutor, OneShotRequest, run_one_shot};
 use agent_runtime::context::{CharRatioSizer, ContextBudget, ContextPolicy, RequestSizer};
 use agent_runtime::harness::{
     ComponentDescriptor, ToolViewContext, ToolViewPatch, ToolViewResolver, TurnCommitHook,
@@ -14,22 +12,17 @@ use agent_runtime::harness::{
 };
 use agent_runtime::registry::RegistryRevision;
 use agent_runtime::runtime::SessionHandle;
-use agent_runtime_core::cancel::{CancelReason, Cancellation};
 use agent_runtime_core::catalog::ResolvedModelProfile;
-use agent_runtime_core::content::{Message, Role, UserInput};
+use agent_runtime_core::content::{Message, Role};
 use agent_runtime_core::error::RuntimeError;
-use agent_runtime_core::ids::{AttemptId, RequestId, SessionId, TurnId};
-use agent_runtime_core::provider::{
-    FinishReason, ModelId, Provider, ProviderAttemptPurpose, ProviderCallContext, ProviderRequest,
-    ProviderStreamEvent, ToolChoice,
-};
+use agent_runtime_core::ids::{AttemptId, RequestId, SessionId};
+use agent_runtime_core::provider::{ModelId, Provider};
 use agent_runtime_core::store::{SessionSnapshot, SessionStore};
 use agent_runtime_core::tool::{
     InvocationContext, PreparedToolCall, Tool, ToolEffects, ToolOutcome, ToolSpec,
 };
 use agent_runtime_core::usage::{Provenance, UsageDelta, UsageRecord, UsageSource};
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use smith_config::output_budget::OutputBudget;
 
 use crate::cli_agent::{CliAgentPlan, TurnExecution};
@@ -154,15 +147,6 @@ impl Drop for AdvisorUsage<'_> {
     }
 }
 
-struct CancelAdvisorOnDrop(Cancellation);
-
-impl Drop for CancelAdvisorOnDrop {
-    fn drop(&mut self) {
-        self.0
-            .cancel(CancelReason::Host("advisor call ended".to_owned()));
-    }
-}
-
 impl AdvisorRoute {
     fn system_prompt(&self) -> String {
         match &self.instructions {
@@ -258,150 +242,50 @@ impl AdvisorRoute {
             Ok(transcript) => transcript,
             Err(error) => return usage.finish(Err(error), ctx.output_limit),
         };
-        // Child cancellation propagates interrupts but never cancels the main
-        // turn when only this review times out. Dropping invoke also stops it.
-        let cancel = CancelAdvisorOnDrop(ctx.cancel.child());
-        let call = async {
-            match &self.execution {
-                AdvisorExecution::MissingProgram { model, program } => {
+        let executor = match &self.execution {
+            AdvisorExecution::MissingProgram { model, program } => {
+                return usage.finish(
                     Err(RuntimeError::tool(format!(
                         "advisor model `{model}` requires `{program}`, but `{program}` is not on PATH"
-                    )))
-                }
-                AdvisorExecution::InstalledAgent(plan) => {
-                    let backend = plan.backend_with_instructions(
-                        std::path::PathBuf::from(ctx.workspace.root()),
-                        false,
-                        Some(system.joined_text()),
-                    );
-                    let mut stream = backend
-                        .run_turn(ExternalTurnRequest {
-                            input: UserInput::text(transcript),
-                            resume: None,
-                            turn: TurnId::new(format!("advisor-{}-{}", ctx.request, ctx.call_id)),
-                            cancel: cancel.0.clone(),
-                            capabilities: Arc::default(),
-                            bridge: None,
-                            tools: ExternalToolDispatch::disabled(),
-                        })
-                        .await?;
-                    let mut answer = String::new();
-                    let mut remaining_chars = ctx.output_limit;
-                    let mut has_text = false;
-                    while let Some(event) = stream.next().await {
-                        match event {
-                            ExternalAgentEvent::Text { text } => {
-                                has_text |=
-                                    text.chars().any(|character| !character.is_whitespace());
-                                for character in text.chars().take(remaining_chars) {
-                                    answer.push(character);
-                                    remaining_chars -= 1;
-                                }
-                            }
-                            ExternalAgentEvent::Usage { usage: delta } => usage.delta.merge(&delta),
-                            ExternalAgentEvent::Completed => {
-                                return if has_text {
-                                    Ok(answer)
-                                } else {
-                                    Err(RuntimeError::tool("advisor returned an empty answer"))
-                                };
-                            }
-                            ExternalAgentEvent::Failed { message } => {
-                                return Err(RuntimeError::tool(message));
-                            }
-                            ExternalAgentEvent::SessionStarted { .. }
-                            | ExternalAgentEvent::Reasoning { .. }
-                            | ExternalAgentEvent::ToolInvoked { .. }
-                            | ExternalAgentEvent::ToolCompleted { .. }
-                            | ExternalAgentEvent::Diagnostic { .. } => {}
-                        }
-                    }
-                    Err(RuntimeError::tool("advisor did not finish normally"))
-                }
-                AdvisorExecution::Provider(provider) => {
-                    let mut request = ProviderRequest::new(
-                        self.model.clone(),
-                        vec![system, Message::user(transcript)],
-                    );
-                    request.tool_choice = ToolChoice::None;
-                    request.max_output_tokens = Some(self.output_budget.request_tokens);
-                    request.reasoning = self.reasoning.request_config();
-
-                    let context = ProviderCallContext {
-                        session: ctx.session.clone(),
-                        request_id,
-                        attempt_id,
-                        cache_identity: None,
-                        purpose: ProviderAttemptPurpose::Ordinary,
-                        cancel: cancel.0.clone(),
-                        deadline: ctx.deadline,
-                    };
-                    let mut stream = provider.stream(request, context).await?;
-                    let mut answer = String::new();
-                    let mut remaining_chars = ctx.output_limit;
-                    let mut has_text = false;
-                    let mut finish = None;
-                    while let Some(event) = stream.next().await {
-                        match event {
-                            ProviderStreamEvent::TextDelta { text } => {
-                                has_text |=
-                                    text.chars().any(|character| !character.is_whitespace());
-                                for character in text.chars().take(remaining_chars) {
-                                    answer.push(character);
-                                    remaining_chars -= 1;
-                                }
-                            }
-                            ProviderStreamEvent::Usage { delta } => usage.delta.merge(&delta),
-                            ProviderStreamEvent::Error { error } => return Err(error.into()),
-                            ProviderStreamEvent::Finish { reason } => finish = Some(reason),
-                            ProviderStreamEvent::ToolCallDelta { .. } => {
-                                return Err(RuntimeError::tool("advisor attempted a tool call"));
-                            }
-                            ProviderStreamEvent::ReasoningDelta { .. }
-                            | ProviderStreamEvent::HostedSearch { .. }
-                            | ProviderStreamEvent::CacheObservation { .. }
-                            | ProviderStreamEvent::RateLimit { .. }
-                            | ProviderStreamEvent::Downgrade { .. }
-                            | ProviderStreamEvent::VendorMetadata { .. } => {}
-                        }
-                    }
-                    match finish {
-                        Some(FinishReason::Stop | FinishReason::Length) => {}
-                        Some(FinishReason::Cancelled) => {
-                            return Err(RuntimeError::tool("advisor cancelled"));
-                        }
-                        Some(FinishReason::ToolCalls) => {
-                            return Err(RuntimeError::tool("advisor attempted a tool call"));
-                        }
-                        Some(FinishReason::ContentFilter) => {
-                            return Err(RuntimeError::tool("advisor response was filtered"));
-                        }
-                        Some(FinishReason::Error) | None => {
-                            return Err(RuntimeError::tool("advisor did not finish normally"));
-                        }
-                    }
-                    if !has_text {
-                        return Err(RuntimeError::tool("advisor returned an empty answer"));
-                    }
-                    Ok(answer)
-                }
+                    ))),
+                    ctx.output_limit,
+                );
             }
+            AdvisorExecution::InstalledAgent(plan) => OneShotExecutor::External(
+                plan.backend(std::path::PathBuf::from(ctx.workspace.root()), false),
+            ),
+            AdvisorExecution::Provider(provider) => OneShotExecutor::Provider {
+                provider: provider.clone(),
+                model: self.model.clone(),
+            },
         };
-        let deadline = async {
-            match ctx.deadline.remaining_millis(ctx.clock.as_ref()) {
-                Some(millis) => tokio::time::sleep(Duration::from_millis(millis)).await,
-                None => std::future::pending::<()>().await,
-            }
-        };
-        let answer = tokio::select! {
-            biased;
-            _ = ctx.cancel.cancelled() => Err(RuntimeError::tool("advisor cancelled")),
-            _ = deadline => {
-                cancel.0.cancel(CancelReason::Timeout);
-                Err(RuntimeError::tool("advisor timed out"))
-            }
-            result = call => result,
-        };
+        let mut request = OneShotRequest::new(
+            system.joined_text(),
+            vec![Message::user(transcript)],
+            ctx.session.clone(),
+            request_id,
+            attempt_id,
+        );
+        request.max_output_tokens = Some(self.output_budget.request_tokens);
+        request.reasoning = self.reasoning.request_config();
+        request.output_char_limit = Some(ctx.output_limit);
+        request.cancel = ctx.cancel.clone();
+        request.deadline = ctx.deadline;
+        request.clock = ctx.clock.clone();
+        let answer = run_one_shot(&executor, request, &mut usage.delta)
+            .await
+            .map(|answer| answer.text)
+            .map_err(|error| match error {
+                OneShotError::Cancelled => RuntimeError::tool("advisor cancelled"),
+                OneShotError::TimedOut => RuntimeError::tool("advisor timed out"),
+                OneShotError::ToolCall => RuntimeError::tool("advisor attempted a tool call"),
+                OneShotError::Filtered => RuntimeError::tool("advisor response was filtered"),
+                OneShotError::Empty => RuntimeError::tool("advisor returned an empty answer"),
+                OneShotError::Unfinished | OneShotError::UnsupportedInput(_) => {
+                    RuntimeError::tool("advisor did not finish normally")
+                }
+                OneShotError::Failed(error) => error,
+            });
         usage.finish(answer, ctx.output_limit)
     }
 }
@@ -594,20 +478,26 @@ impl Tool for AdvisorTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     use agent_runtime::provider::fake::tool_call_fragments;
     use agent_runtime::provider::fake::{FakeProvider, ScriptedStream, usage_event};
     use agent_runtime::registry::RegistryRevision;
     use agent_runtime::runtime::{RuntimeBuilder, StartSession};
+    use agent_runtime_core::cancel::{CancelReason, Cancellation};
     use agent_runtime_core::clock::{Deadline, SystemClock};
     use agent_runtime_core::content::{ContentPart, UserInput};
     use agent_runtime_core::content::{ToolCall, ToolResultBlock};
     use agent_runtime_core::event::RuntimeEvent;
     use agent_runtime_core::ids::{SessionId, ToolCallId};
-    use agent_runtime_core::provider::{Capabilities, ProviderError, ProviderErrorKind};
+    use agent_runtime_core::provider::{
+        Capabilities, FinishReason, ProviderError, ProviderErrorKind, ProviderRequest,
+        ProviderStreamEvent, ToolChoice,
+    };
     use agent_runtime_core::usage::CounterKind;
     use agent_runtime_testkit::MemoryWorkspace;
     use agent_runtime_testkit::scenarios::{fake_model_profile, stop_events};
+    use futures_util::StreamExt;
     use smith_config::output_budget::resolve_output_budget;
 
     fn context() -> InvocationContext {

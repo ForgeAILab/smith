@@ -51,7 +51,15 @@ impl CliAgentBackend {
         &self,
         prompt: &str,
         resume: Option<&str>,
+        instructions: Option<&str>,
     ) -> Result<Vec<String>, RuntimeError> {
+        let instructions = match (self.settings.instructions.as_deref(), instructions) {
+            (Some(settings), Some(request)) => Some(format!("{settings}\n\n{request}")),
+            (Some(instructions), None) | (None, Some(instructions)) => {
+                Some(instructions.to_owned())
+            }
+            (None, None) => None,
+        };
         let bridge = self
             .settings
             .bridge
@@ -102,7 +110,7 @@ impl CliAgentBackend {
                     args.push("--model".to_owned());
                     args.push(model.clone());
                 }
-                if let Some(instructions) = &self.settings.instructions {
+                if let Some(instructions) = &instructions {
                     args.push("--append-system-prompt".to_owned());
                     args.push(instructions.clone());
                 }
@@ -162,7 +170,7 @@ impl CliAgentBackend {
                 }
                 // Codex has no append-system-prompt flag. Keep instructions
                 // ahead of the turn input rather than silently dropping them.
-                args.push(match &self.settings.instructions {
+                args.push(match &instructions {
                     Some(instructions) => format!("{instructions}\n\n{prompt}"),
                     None => prompt.to_owned(),
                 });
@@ -276,7 +284,7 @@ impl ExternalAgentBackend for CliAgentBackend {
             .as_ref()
             .and_then(|endpoint| self.bridge_invocation(endpoint.socket_path()));
         let invocation = Self::new(self.kind, settings);
-        let args = invocation.argv(&prompt, resume.as_deref())?;
+        let args = invocation.argv(&prompt, resume.as_deref(), request.instructions.as_deref())?;
 
         if self.settings.relay_executable.is_none()
             && !self
@@ -835,9 +843,47 @@ mod tests {
     }
 
     #[test]
+    fn turn_instructions_follow_settings_in_each_cli_transport() {
+        for kind in [CliAgentKind::ClaudeCode, CliAgentKind::Codex] {
+            for (configured, turn, expected) in [
+                (None, None, None),
+                (Some("configured"), None, Some("configured")),
+                (None, Some("turn"), Some("turn")),
+                (Some("configured"), Some("turn"), Some("configured\n\nturn")),
+            ] {
+                let mut settings = settings(false);
+                settings.instructions = configured.map(str::to_owned);
+                let backend = CliAgentBackend::new(kind, settings);
+                for resume in [None, Some("session-1")] {
+                    let args = backend.argv("hello", resume, turn).unwrap();
+                    match kind {
+                        CliAgentKind::ClaudeCode => {
+                            let instructions = args
+                                .windows(2)
+                                .find(|pair| pair[0] == "--append-system-prompt")
+                                .map(|pair| pair[1].as_str());
+                            assert_eq!(instructions, expected);
+                            assert_eq!(&args[..2], ["-p", "hello"]);
+                        }
+                        CliAgentKind::Codex => {
+                            let prompt = expected.map_or_else(
+                                || "hello".to_owned(),
+                                |instructions| format!("{instructions}\n\nhello"),
+                            );
+                            assert_eq!(args.last(), Some(&prompt));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn claude_without_its_own_tools_pre_allows_nothing() {
         let backend = CliAgentBackend::new(CliAgentKind::ClaudeCode, settings(false));
-        let args = backend.argv("hello", None).expect("valid invocation paths");
+        let args = backend
+            .argv("hello", None, None)
+            .expect("valid invocation paths");
         let allow = args.iter().position(|arg| arg == "--allowedTools");
         assert_eq!(args[allow.expect("an explicit allow-list") + 1], "");
         assert!(!args.iter().any(|arg| arg == "--permission-mode"));
@@ -847,7 +893,7 @@ mod tests {
     fn codex_runs_read_only_without_its_own_tools_and_unsandboxed_with_them() {
         let read_only = CliAgentBackend::new(CliAgentKind::Codex, settings(false));
         let args = read_only
-            .argv("hello", None)
+            .argv("hello", None, None)
             .expect("valid invocation paths");
         let sandbox = args.iter().position(|arg| arg == "--sandbox");
         assert_eq!(args[sandbox.expect("a sandbox mode") + 1], "read-only");
@@ -855,7 +901,7 @@ mod tests {
 
         let own_tools = CliAgentBackend::new(CliAgentKind::Codex, settings(true));
         let args = own_tools
-            .argv("hello", None)
+            .argv("hello", None, None)
             .expect("valid invocation paths");
         assert!(
             args.iter()
@@ -869,7 +915,9 @@ mod tests {
         let mut settings = settings(true);
         settings.args = vec!["--permission-mode".into(), "acceptEdits".into()];
         let backend = CliAgentBackend::new(CliAgentKind::ClaudeCode, settings);
-        let args = backend.argv("hello", None).expect("valid invocation paths");
+        let args = backend
+            .argv("hello", None, None)
+            .expect("valid invocation paths");
         let modes = args
             .iter()
             .enumerate()
@@ -884,14 +932,14 @@ mod tests {
     fn resuming_continues_each_cli_in_its_own_dialect() {
         let claude = CliAgentBackend::new(CliAgentKind::ClaudeCode, settings(false));
         let args = claude
-            .argv("next", Some("session-1"))
+            .argv("next", Some("session-1"), None)
             .expect("valid invocation paths");
         let resume = args.iter().position(|arg| arg == "--resume");
         assert_eq!(args[resume.expect("a resume flag") + 1], "session-1");
 
         let codex = CliAgentBackend::new(CliAgentKind::Codex, settings(false));
         let args = codex
-            .argv("next", Some("thread-1"))
+            .argv("next", Some("thread-1"), None)
             .expect("valid invocation paths");
         assert_eq!(args[0], "exec");
         let resume = args.iter().position(|arg| arg == "resume").unwrap();
@@ -925,9 +973,11 @@ mod tests {
                 ..settings(false)
             },
         );
-        let fresh = backend.argv("hello", None).expect("valid invocation paths");
+        let fresh = backend
+            .argv("hello", None, None)
+            .expect("valid invocation paths");
         let resumed = backend
-            .argv("next", Some("thread-1"))
+            .argv("next", Some("thread-1"), None)
             .expect("valid invocation paths");
         let resume = resumed.iter().position(|arg| arg == "resume").unwrap();
         assert_eq!(&resumed[..resume], &fresh[..fresh.len() - 1]);
@@ -963,7 +1013,7 @@ mod tests {
         settings.bridge = bridged.then(bridge);
         let backend = CliAgentBackend::new(CliAgentKind::ClaudeCode, settings);
         let args = backend
-            .argv("hello", resumed.then_some("session-1"))
+            .argv("hello", resumed.then_some("session-1"), None)
             .expect("valid invocation paths");
         let mut expected = match (own_tools, bridged) {
             (false, false) => vec![
@@ -1067,7 +1117,7 @@ mod tests {
         settings.bridge = bridged.then(bridge);
         let backend = CliAgentBackend::new(CliAgentKind::Codex, settings);
         let args = backend
-            .argv("hello", resumed.then_some("thread-1"))
+            .argv("hello", resumed.then_some("thread-1"), None)
             .expect("valid invocation paths");
         let mut expected = if own_tools {
             vec![
@@ -1318,7 +1368,7 @@ mod tests {
                     ..settings(false)
                 },
             );
-            let args = backend.argv("hello", None).expect("UTF-8 paths");
+            let args = backend.argv("hello", None, None).expect("UTF-8 paths");
             match kind {
                 CliAgentKind::ClaudeCode => {
                     let config = args.iter().position(|arg| arg == "--mcp-config").unwrap();
@@ -1412,7 +1462,7 @@ mod tests {
                 );
                 let expected = format!("CLI bridge path is not valid UTF-8: {path:?}");
                 let error = backend
-                    .argv("hello", None)
+                    .argv("hello", None, None)
                     .expect_err("invalid bridge path");
                 assert_eq!(error.kind, ErrorKind::Config);
                 assert_eq!(error.message, expected);

@@ -16,19 +16,10 @@ impl CliAgentPlan {
         cwd: PathBuf,
         allow_own_tools: bool,
     ) -> std::sync::Arc<dyn ExternalAgentBackend> {
-        self.backend_with_instructions(cwd, allow_own_tools, None)
-    }
-
-    /// Carries reviewer instructions through the same harness as ordinary turns.
-    pub(crate) fn backend_with_instructions(
-        &self,
-        cwd: PathBuf,
-        allow_own_tools: bool,
-        instructions: Option<String>,
-    ) -> std::sync::Arc<dyn ExternalAgentBackend> {
-        let mut settings = self.settings(cwd, allow_own_tools);
-        settings.instructions = instructions;
-        std::sync::Arc::new(CliAgentBackend::new(self.kind, settings))
+        std::sync::Arc::new(CliAgentBackend::new(
+            self.kind,
+            self.settings(cwd, allow_own_tools),
+        ))
     }
 
     fn settings(&self, cwd: PathBuf, allow_own_tools: bool) -> CliAgentSettings {
@@ -207,7 +198,9 @@ mod tests {
                     ..settings(false)
                 },
             );
-            let args = backend.argv("hello", None).expect("valid invocation paths");
+            let args = backend
+                .argv("hello", None, None)
+                .expect("valid invocation paths");
             args.iter().any(|arg| arg == "--permission-mode")
         };
 
@@ -243,7 +236,7 @@ mod tests {
                     .bridge_invocation(Path::new("/tmp/turn.sock"))
                     .is_none()
             );
-            let args = backend.argv("hello", None).unwrap();
+            let args = backend.argv("hello", None, None).unwrap();
             let expected = match kind {
                 CliAgentKind::ClaudeCode => vec![
                     "-p",
@@ -285,7 +278,7 @@ mod tests {
         for kind in [CliAgentKind::ClaudeCode, CliAgentKind::Codex] {
             let mut backend = backend_from_plan(kind, Some(smith));
             backend.settings.bridge = backend.bridge_invocation(Path::new("/tmp/turn.sock"));
-            let args = backend.argv("hello", None).unwrap();
+            let args = backend.argv("hello", None, None).unwrap();
             match kind {
                 CliAgentKind::ClaudeCode => {
                     let config = args
