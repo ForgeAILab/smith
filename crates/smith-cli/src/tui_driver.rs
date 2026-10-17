@@ -585,7 +585,14 @@ impl<'a> TuiLoop<'a> {
         // reducer the root's are and can never interleave mid-fold.
         let (child_tx, child_rx) =
             tokio::sync::mpsc::unbounded_channel::<(ChildId, EventEnvelope)>();
-        let mcp_changes = mcp.as_ref().map(|context| context.supervisor().subscribe());
+        // Marked changed so the first loop pass renders the current MCP
+        // footer: a rebind starts from a fresh status, and a server that
+        // failed before this point would otherwise vanish from it.
+        let mcp_changes = mcp.as_ref().map(|context| {
+            let mut changes = context.supervisor().subscribe();
+            changes.mark_changed();
+            changes
+        });
         // What the runtime was composed with. A rebuild is worth its cost only
         // when a server has actually contributed something new since.
         let composed_remote_tools = mcp
