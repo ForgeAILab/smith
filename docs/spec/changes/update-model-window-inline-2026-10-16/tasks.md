@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-17T00:11:27Z
-updated_at: 2026-10-17T00:11:27Z
-completed_at:
+updated_at: 2026-10-17T00:48:48Z
+completed_at: 2026-10-17T00:48:48Z
 ---
 
 ## 1. Capture
@@ -40,4 +40,4 @@ completed_at:
 ## 4. Verification
 - [x] 4.1 Capture the same windows after the change
       (`docs/qa/model-window-2026-10-16/after-*.txt`).
-- [ ] 4.2 Focused tests, clippy, fmt, and the full gate.
+- [x] 4.2 Focused tests, clippy, fmt, and the full gate.
