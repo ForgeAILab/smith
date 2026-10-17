@@ -1,3 +1,23 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   Smith setup · Welcome · choose how to connect a model
   Nothing is sent to a provider until setup finishes.
 ❯ 1. Quick start with GLM
@@ -10,23 +30,3 @@
   7. Connect Google Gemini
 
   ↑↓ or 1–7 choose · enter confirm · esc cancel
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

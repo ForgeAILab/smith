@@ -113,8 +113,9 @@ impl ScreenFooter {
 
 /// Reserves the title, a blank row, and a content-sized footer before body rendering.
 ///
-/// The body reaches the bottom only when it overflows; short screens have no
-/// filler between their content and controls. Hosts can scroll the returned area.
+/// The screen sits at the bottom of the terminal and fills it only when it
+/// overflows; short screens have no filler between their content and
+/// controls. Hosts can scroll the returned area.
 pub fn draw_inline_surface(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -127,6 +128,9 @@ pub fn draw_inline_surface(
 }
 
 /// Session hosts omit the local footer because controls live below their composer.
+///
+/// With a footer the screen is standalone, so it sits at the bottom of the
+/// terminal as the default-model choice does; see [`standalone_area`].
 pub fn draw_inline_screen(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -136,15 +140,21 @@ pub fn draw_inline_screen(
     theme: Theme,
 ) -> Rect {
     frame.render_widget(Clear, area);
+    let area = match footer {
+        Some(footer) => standalone_area(area, content_rows, footer),
+        None => area,
+    };
     let footer_lines = footer
         .map(|footer| footer.rows(area.width))
         .unwrap_or_default();
     let footer_rows = u16::try_from(footer_lines.len())
         .unwrap_or(u16::MAX)
         .min(area.height.saturating_sub(1));
+    // A blank row separates the content from controls; with no controls the
+    // content may reach the last row.
     let height = u16::try_from(content_rows).unwrap_or(u16::MAX).min(
         area.height
-            .saturating_sub(if footer.is_some() { 3 + footer_rows } else { 2 }),
+            .saturating_sub(if footer_rows > 0 { 3 + footer_rows } else { 2 }),
     );
     let body = Rect::new(area.x, area.y.saturating_add(2), area.width, height);
     frame.render_widget(
@@ -169,6 +179,23 @@ pub fn draw_inline_screen(
         Rect::new(area.x, footer_y, area.width, footer_rows),
     );
     body
+}
+
+/// The rows a screen shown before a session exists occupies: the bottom of the
+/// terminal, sized to its title, a blank row, its content, a blank row, and its
+/// controls, so the last controls row is the terminal's last row.
+///
+/// Content taller than the terminal keeps the whole area and scrolls in it.
+fn standalone_area(area: Rect, content_rows: usize, footer: ScreenFooter) -> Rect {
+    let controls = match footer.rows(area.width).len() {
+        0 => 0,
+        rows => rows + 1,
+    };
+    let needed = content_rows.saturating_add(2 + controls);
+    let height = u16::try_from(needed)
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    Rect::new(area.x, area.bottom() - height, area.width, height)
 }
 
 /// Draws the same unframed list before a session exists.
@@ -276,14 +303,16 @@ pub(crate) fn draw_picker_context(
         usize::MAX
     };
     let all = entry_view_capped(picker, usize::MAX, area.width, theme, false, entry_cap);
-    let mut body = draw_inline_screen(
-        frame,
-        area,
-        title,
-        (prefix.len() + all.lines.len()).saturating_sub(usize::from(note.is_some())),
-        (!embedded).then(|| picker.footer()),
-        theme,
-    );
+    let content_rows = (prefix.len() + all.lines.len()).saturating_sub(usize::from(note.is_some()));
+    let footer = (!embedded).then(|| picker.footer());
+    // The heading is drawn over the screen's title row, so it needs the same
+    // bottom-anchored area the shared layout uses.
+    frame.render_widget(Clear, area);
+    let area = match footer {
+        Some(footer) => standalone_area(area, content_rows, footer),
+        None => area,
+    };
+    let mut body = draw_inline_screen(frame, area, title, content_rows, footer, theme);
     // The intro occupies the title's usual blank row so it precedes choices
     // even when it wraps; other picker screens keep their existing spacing.
     if note.is_some() && area.height > 1 {

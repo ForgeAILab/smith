@@ -1,3 +1,4 @@
+
   Connect ChatGPT · experimental
 
   Sign in to ChatGPT in your browser.
@@ -13,4 +14,3 @@
   Waiting for ChatGPT…
 
   esc cancel
-

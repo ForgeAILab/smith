@@ -1,3 +1,12 @@
+
+
+
+
+
+
+
+
+
   Resume session · type to filter
 
 ❯ What does lib.rs…       2 min ago · 1…
@@ -5,12 +14,3 @@
   Reply with the single…  4 min ago · 1…
 
   enter confirm · esc cancel · ↑↓ choose
-
-
-
-
-
-
-
-
-

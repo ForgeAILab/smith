@@ -177,10 +177,19 @@ fn standalone_title_and_footer_are_unframed_and_content_sized() {
     for (width, height) in [(44, 16), (100, 32)] {
         let screen = render_picker(&picker, width, height);
         let rows = screen.lines().collect::<Vec<_>>();
-        assert!(rows[0].starts_with("  Choose a method"), "{screen}");
-        assert!(rows[1].trim().is_empty());
-        assert!(rows[2].starts_with("❯ 1. First method"));
-        assert!(rows[3].starts_with("     selected detail"));
+        assert_eq!(rows.len(), usize::from(height), "{screen}");
+        // Before a session the list sits at the bottom of the terminal.
+        let title = rows
+            .iter()
+            .position(|row| row.starts_with("  Choose a method"))
+            .expect("title row");
+        assert!(
+            rows[..title].iter().all(|row| row.trim().is_empty()),
+            "{screen}"
+        );
+        assert!(rows[title + 1].trim().is_empty());
+        assert!(rows[title + 2].starts_with("❯ 1. First method"));
+        assert!(rows[title + 3].starts_with("     selected detail"));
         for glyph in ['┌', '┐', '└', '┘', '│', '╭', '╮', '╰', '╯'] {
             assert!(!screen.contains(glyph), "{screen}");
         }
@@ -188,10 +197,18 @@ fn standalone_title_and_footer_are_unframed_and_content_sized() {
             .iter()
             .position(|row| row.contains("enter confirm"))
             .expect("footer");
-        assert_eq!(footer, 5, "one blank row separates the content and footer");
+        assert_eq!(
+            footer,
+            title + 5,
+            "one blank row separates the content and footer"
+        );
         assert!(rows[footer].starts_with("  "));
         assert!(rows[footer..].join("\n").contains("esc cancel"));
         assert!(rows[footer..].join("\n").contains("↑↓ or 1–1 choose"));
+        assert!(
+            !rows.last().expect("last row").trim().is_empty(),
+            "the controls end on the last row:\n{screen}"
+        );
     }
 }
 

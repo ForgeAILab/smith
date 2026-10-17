@@ -1,3 +1,10 @@
+
+
+
+
+
+
+
   Connect ChatGPT · already connected
 
 ❯ 1. Add another account
@@ -7,10 +14,3 @@
 
   enter confirm · esc cancel
   ↑↓ or 1–2 choose
-
-
-
-
-
-
-

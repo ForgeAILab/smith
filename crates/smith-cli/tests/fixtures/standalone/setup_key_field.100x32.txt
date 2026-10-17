@@ -1,3 +1,28 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   Smith setup · API key
 
   Stored only in the platform credential service
@@ -5,28 +30,3 @@
 › •••••••
 
   enter continue · esc back
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

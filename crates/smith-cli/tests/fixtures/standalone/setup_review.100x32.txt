@@ -1,3 +1,24 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   Smith setup · Review · nothing is written until you confirm
 
   Provider     zai · https://api.z.ai/api/coding/paas/v4
@@ -9,24 +30,3 @@
   Writes       /tmp/smith-home/.smith/config.toml, then checks the configuration
 
   enter confirm · esc back
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

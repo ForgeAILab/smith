@@ -1,3 +1,28 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   Connect ChatGPT · already connected
 
 ❯ 1. Add another account
@@ -5,28 +30,3 @@
   2. Replace the stored login
 
   ↑↓ or 1–2 choose · enter confirm · esc cancel
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

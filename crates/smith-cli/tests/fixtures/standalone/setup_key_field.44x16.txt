@@ -1,3 +1,11 @@
+
+
+
+
+
+
+
+
   Smith setup · API key
 
   Stored only in the platform credential
@@ -6,11 +14,3 @@
 › •••••••
 
   enter continue · esc back
-
-
-
-
-
-
-
-

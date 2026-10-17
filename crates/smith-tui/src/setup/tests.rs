@@ -207,6 +207,18 @@ fn setup_screen(buffer: &ratatui::buffer::Buffer) -> String {
         .join("\n")
 }
 
+/// The screen's rows from its title down: a standalone step sits at the
+/// bottom of the terminal, so the rows above its title are blank.
+fn rows_from_title(rendered: &str) -> (usize, Vec<&str>) {
+    let rows = rendered.lines().collect::<Vec<_>>();
+    let title = rows
+        .iter()
+        .position(|row| !row.trim().is_empty())
+        .expect("a title row");
+    assert!(rows[title].starts_with("  "), "{rendered}");
+    (title, rows[title..].to_vec())
+}
+
 fn setup_body_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
     let mut rows = setup_screen(buffer)
         .lines()

@@ -1,6 +1,6 @@
 //! Recordings of the production standalone terminal screens.
 //!
-//! Keep the complete terminal height to reveal top-left placement and unused rows.
+//! Keep the complete terminal height to reveal bottom placement and unused rows.
 
 use std::path::PathBuf;
 

@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn setup_steps_start_at_the_left_gutter_without_a_frame() {
+fn setup_steps_sit_at_the_bottom_at_the_left_gutter_without_a_frame() {
     let action = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
     let mut authentication = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
     choose(&mut authentication, "glm");
@@ -12,15 +12,20 @@ fn setup_steps_start_at_the_left_gutter_without_a_frame() {
     for app in [action, authentication, field, review, busy] {
         for (width, height) in [(44, 16), (80, 24), (100, 32)] {
             let rendered = render_setup(&app, width, height);
+            let rows = rendered.lines().collect::<Vec<_>>();
             assert_eq!(rendered.matches("Smith setup").count(), 1, "{rendered}");
+            // Like the default-model choice: blank above the title, and the
+            // controls on the last row.
+            let title = rows
+                .iter()
+                .position(|row| !row.trim().is_empty())
+                .expect("title row");
+            assert!(rows[title].starts_with("  Smith setup"), "{rendered}");
             assert!(
-                rendered
-                    .lines()
-                    .next()
-                    .expect("title row")
-                    .starts_with("  Smith setup"),
+                !rows.last().expect("controls row").trim().is_empty(),
                 "{rendered}"
             );
+            assert!(rows[rows.len() - 1].starts_with("  "), "{rendered}");
             for frame_glyph in ['┌', '┐', '└', '┘', '│'] {
                 assert!(!rendered.contains(frame_glyph), "{rendered}");
             }
@@ -317,11 +322,22 @@ fn embedded_review_scrolls_inside_the_session_pane() {
 }
 
 #[test]
+fn a_review_taller_than_the_terminal_keeps_the_whole_screen() {
+    let app = glm_environment_review();
+    let rendered = render_setup(&app, 44, 16);
+    let rows = rendered.lines().collect::<Vec<_>>();
+    assert!(rows[0].starts_with("  Smith setup · Review"), "{rendered}");
+    assert!(rows[2].starts_with("  Provider"), "{rendered}");
+    let last = rows.last().expect("controls row");
+    assert!(last.contains("PgDn review · 1/"), "{rendered}");
+}
+
+#[test]
 fn setup_welcome_and_intro_precede_the_list_at_every_width() {
     let app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
     for width in [20, 44, 100] {
         let rendered = render_setup(&app, width, 24);
-        let rows = rendered.lines().collect::<Vec<_>>();
+        let (title, rows) = rows_from_title(&rendered);
         assert!(rows[0].starts_with("  Smith setup"), "{rendered}");
         assert!(rows[1].starts_with("  Nothing"), "{rendered}");
         let choice = rows
@@ -337,8 +353,9 @@ fn setup_welcome_and_intro_precede_the_list_at_every_width() {
         assert!(!rendered.contains("Shift+Tab"), "{rendered}");
         assert!(!rendered.contains("no agent session"), "{rendered}");
         let plain = render_setup_buffer(&app, width, 24, Theme::new().without_color());
+        let intro_row = u16::try_from(title + 1).expect("a terminal row");
         assert!(
-            plain[(2, 1)]
+            plain[(2, intro_row)]
                 .modifier
                 .contains(ratatui::style::Modifier::DIM)
         );
@@ -360,7 +377,7 @@ fn credential_methods_name_the_provider_and_field_help_starts_at_the_gutter() {
     assert!(!rendered.contains("<provider>"), "{rendered}");
     choose(&mut app, "keychain");
     let rendered = render_setup(&app, 44, 16);
-    let rows = rendered.lines().collect::<Vec<_>>();
+    let (_, rows) = rows_from_title(&rendered);
     assert!(rows[2].starts_with("  Stored"), "{rendered}");
     assert!(rows[3].starts_with("  "), "{rendered}");
     assert!(
@@ -463,7 +480,7 @@ fn setup_review_values_hang_indent_and_wrap_words_at_44_and_80_columns() {
     let value_column = 15;
     for width in [44, 80] {
         let rendered = render_setup(&app, width, 64);
-        let rows = rendered.lines().collect::<Vec<_>>();
+        let (_, rows) = rows_from_title(&rendered);
         assert!(!rendered.contains("Review your choices"), "{rendered}");
         assert!(rows[2].starts_with("  Provider"), "{rendered}");
         let starts = labels

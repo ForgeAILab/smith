@@ -1,3 +1,4 @@
+
   Smith setup · Welcome · choose how to…
   Nothing is sent to a provider until setup
   finishes.
@@ -13,4 +14,3 @@
 
   enter confirm · esc cancel
   ↑↓ or 1–7 choose
-

@@ -582,12 +582,21 @@ mod tests {
                 .map(|y| (0..44).map(|x| buffer[(x, y)].symbol()).collect::<String>())
                 .collect::<Vec<_>>()
                 .join("\n");
+            // Before a session the screen sits at the bottom of the terminal.
             assert!(
                 screen
                     .lines()
-                    .next()
+                    .find(|row| !row.trim().is_empty())
                     .expect("heading")
                     .starts_with("  Connect ChatGPT · experimental"),
+                "{screen}"
+            );
+            assert!(
+                screen
+                    .lines()
+                    .last()
+                    .expect("controls row")
+                    .contains("cancel"),
                 "{screen}"
             );
             for text in [
