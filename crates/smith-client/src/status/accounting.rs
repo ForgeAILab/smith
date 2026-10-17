@@ -102,6 +102,10 @@ pub struct SessionUsage {
     pub synthetic_by_purpose: BTreeMap<ProviderAttemptPurpose, BTreeMap<CounterKind, u64>>,
     /// Reviewer provider counters, disjoint from ordinary root and child work.
     pub advisor_totals: BTreeMap<CounterKind, u64>,
+    /// Module provider counters and frozen serving bindings, keyed by module id.
+    pub module_usage: BTreeMap<String, Vec<BindingUsage>>,
+    /// Module work observed on child streams, separate from root reconciliation.
+    pub delegated_module_usage: BTreeMap<String, Vec<BindingUsage>>,
     /// Independently resolved advisor rates; absence leaves its spend unpriced.
     pub advisor_price: Option<PriceReference>,
     /// Vision provider counters, disjoint from ordinary root and child work.
@@ -141,6 +145,13 @@ impl SessionUsage {
                 self.vision_price
                     .as_ref()
                     .filter(|_| !self.vision_totals.is_empty())
+                    .or_else(|| {
+                        self.module_usage
+                            .values()
+                            .chain(self.delegated_module_usage.values())
+                            .flatten()
+                            .find_map(|binding| binding.price.as_ref())
+                    })
             });
         }
         let retained = self
@@ -150,6 +161,13 @@ impl SessionUsage {
         active
             .filter(|_| retained.is_some())
             .or(retained)
+            .or_else(|| {
+                self.module_usage
+                    .values()
+                    .chain(self.delegated_module_usage.values())
+                    .flatten()
+                    .find_map(|binding| binding.price.as_ref())
+            })
             .or_else(|| {
                 self.advisor_price
                     .as_ref()
@@ -170,6 +188,8 @@ impl SessionUsage {
             && self.synthetic_totals.is_empty()
             && self.advisor_totals.is_empty()
             && self.vision_totals.is_empty()
+            && self.module_usage.is_empty()
+            && self.delegated_module_usage.is_empty()
             && self.delegated_totals.is_empty()
             && self.cache_miss_count == 0
             && self.cache_rebilled_tokens == 0
@@ -195,6 +215,13 @@ impl SessionUsage {
             + token_total(&self.synthetic_totals)
             + token_total(&self.advisor_totals)
             + token_total(&self.vision_totals)
+            + self
+                .module_usage
+                .values()
+                .chain(self.delegated_module_usage.values())
+                .flatten()
+                .map(|binding| token_total(&binding.totals))
+                .sum::<u64>()
     }
 
     /// Replaces the synthetic bucket from Runtime's final canonical usage
@@ -248,6 +275,77 @@ impl SessionUsage {
         }
     }
 
+    /// Aggregates each module's separately attributed counters across bindings.
+    pub fn module_totals(&self) -> BTreeMap<String, BTreeMap<CounterKind, u64>> {
+        let mut modules = BTreeMap::<String, BTreeMap<CounterKind, u64>>::new();
+        for (module, bindings) in self.module_usage.iter().chain(&self.delegated_module_usage) {
+            for binding in bindings {
+                for (kind, value) in &binding.totals {
+                    *modules
+                        .entry(module.clone())
+                        .or_default()
+                        .entry(*kind)
+                        .or_default() += value;
+                }
+            }
+        }
+        modules
+    }
+
+    /// Reconciles module records without borrowing the last model's rates for
+    /// recovered usage whose serving binding is unknown, as for advisor usage.
+    pub fn reconcile_module_records(&mut self, records: &[UsageRecord]) {
+        let mut expected = BTreeMap::<String, BTreeMap<CounterKind, u64>>::new();
+        for record in records {
+            if let Some(module) = record
+                .provenance
+                .purpose
+                .as_deref()
+                .and_then(|purpose| purpose.strip_prefix(MODULE_USAGE_PREFIX))
+                && !record.delta.is_empty()
+            {
+                self.reported = true;
+                for (kind, value) in record.delta.iter() {
+                    *expected
+                        .entry(module.into())
+                        .or_default()
+                        .entry(kind)
+                        .or_default() += value;
+                }
+            }
+        }
+        let mut root = self.clone();
+        root.delegated_module_usage.clear();
+        let existing = root.module_totals();
+        self.module_usage
+            .retain(|module, _| expected.contains_key(module));
+        for (module, totals) in expected {
+            if existing.get(&module) == Some(&totals) {
+                continue;
+            }
+            let previous = existing.get(&module);
+            let can_retain = previous.is_some_and(|previous| {
+                previous
+                    .iter()
+                    .all(|(kind, value)| totals.get(kind).copied().unwrap_or(0) >= *value)
+            });
+            let mut binding = BindingUsage::new(None, "earlier models", None);
+            if can_retain {
+                let previous = previous.expect("checked previous counters");
+                for (kind, value) in totals {
+                    let missing = value.saturating_sub(previous.get(&kind).copied().unwrap_or(0));
+                    if missing > 0 {
+                        binding.totals.insert(kind, missing);
+                    }
+                }
+                self.module_usage.entry(module).or_default().push(binding);
+            } else {
+                binding.totals = totals;
+                self.module_usage.insert(module, vec![binding]);
+            }
+        }
+    }
+
     /// A human-facing summary, or `None` when nothing was observed.
     ///
     /// An unreported session is marked as estimated rather than shown as a
@@ -286,15 +384,23 @@ impl SessionUsage {
             && self.synthetic_totals.is_empty()
             && self.advisor_totals.is_empty()
             && self.vision_totals.is_empty()
+            && self.module_usage.is_empty()
+            && self.delegated_module_usage.is_empty()
         {
             return Some(root_line);
         }
 
+        let module_totals = self.module_totals();
+        let module_sum = module_totals
+            .values()
+            .fold(BTreeMap::new(), |total, counters| {
+                merge_counter_totals(&total, counters)
+            });
         let merged = merge_counter_totals(
             &merge_counter_totals(&self.totals, &self.delegated_totals),
             &merge_counter_totals(
                 &merge_counter_totals(&self.synthetic_totals, &self.advisor_totals),
-                &self.vision_totals,
+                &merge_counter_totals(&self.vision_totals, &module_sum),
             ),
         );
         let mut merged_line = format!(
@@ -337,6 +443,12 @@ impl SessionUsage {
             lines.push(format!(
                 "  vision: {}",
                 render_counter_parts(&self.vision_totals, mark).join(" · ")
+            ));
+        }
+        for (module, totals) in module_totals {
+            lines.push(format!(
+                "  module {module}: {}",
+                render_counter_parts(&totals, mark).join(" · ")
             ));
         }
         Some(lines.join("\n"))
@@ -543,6 +655,15 @@ impl PriceReference {
                 None => sources.push_str(" · vision price unknown"),
             }
         }
+        for (module, bindings) in usage
+            .module_usage
+            .iter()
+            .chain(&usage.delegated_module_usage)
+        {
+            for binding in bindings {
+                sources.push_str(&format!(" · module {module} {}", binding.name()));
+            }
+        }
         sources
     }
 }
@@ -685,6 +806,27 @@ impl SessionCost {
                 );
             } else if *tokens > 0 {
                 all_priced = false;
+            }
+        }
+        for binding in usage
+            .module_usage
+            .values()
+            .chain(usage.delegated_module_usage.values())
+            .flatten()
+        {
+            all_reported &= binding.reported;
+            for (kind, tokens) in &binding.totals {
+                if let Some(price) = &binding.price {
+                    accumulate_price(
+                        *kind,
+                        *tokens,
+                        &price.table,
+                        &mut micro_usd,
+                        &mut all_priced,
+                    );
+                } else if *tokens > 0 {
+                    all_priced = false;
+                }
             }
         }
         // A later provider report cannot upgrade an earlier bucket's

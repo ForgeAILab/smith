@@ -158,6 +158,31 @@ fn restore_logged_bindings(
     }
     restored.bindings = bindings;
     status.retain_usage_bindings(&restored);
+    let mut module_usage = BTreeMap::new();
+    for (module, entries) in &logged.module_usage {
+        let mut bindings = Vec::new();
+        for entry in entries {
+            let mut binding = BindingUsage::new(entry.provider.clone(), &entry.model, None);
+            for (label, value) in &entry.totals {
+                let Some(kind) = kinds.iter().find(|kind| counter_label(**kind) == label) else {
+                    return;
+                };
+                binding.totals.insert(*kind, *value);
+            }
+            binding.price = binding
+                .provider
+                .as_deref()
+                .and_then(|provider| price_for(provider, &binding.model));
+            binding.reported = logged.reported;
+            bindings.push(binding);
+        }
+        module_usage.insert(module.clone(), bindings);
+    }
+    let expected_modules = restored.module_totals();
+    restored.module_usage = module_usage;
+    if restored.module_totals() == expected_modules {
+        status.retain_usage_bindings(&restored);
+    }
 }
 
 /// Resolves the active model's catalog price, using **exactly** the binding
@@ -193,6 +218,9 @@ pub(super) fn resolve_catalog_price(
     catalog_provider: Option<&str>,
     catalog: &smith_config::catalog::CatalogSnapshot,
 ) -> Option<smith_client::status::PriceReference> {
+    if model.starts_with("cli/") {
+        return None;
+    }
     let cost = catalog_provider
         .and_then(|provider| catalog.provider(provider))
         .and_then(|provider| provider.models.get(model))

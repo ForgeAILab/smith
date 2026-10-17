@@ -59,6 +59,7 @@ fn context() -> ModuleContext {
         transport: Arc::new(ReplayTransport::single(Vec::new())),
         web: None,
         http: None,
+        model: None,
         image_binding: None,
         main_model_accepts_images: false,
         vision: Some(VisionBinding {

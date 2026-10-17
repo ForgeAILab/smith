@@ -629,3 +629,87 @@ async fn endpoint_bind_failure_fails_turn_before_cli_start() {
     .await
     .expect("endpoint failure test deadline");
 }
+
+#[tokio::test]
+async fn module_model_uses_the_installed_agent_with_role_preserving_input() {
+    use agent_runtime::provider::fake::FakeProvider;
+    use agent_runtime_core::clock::{Deadline, SystemClock};
+    use agent_runtime_core::content::Role;
+    use agent_runtime_core::ids::{RequestId, SessionId, ToolCallId};
+    use agent_runtime_core::provider::ModelId;
+    use agent_runtime_core::tool::InvocationContext;
+    use agent_runtime_core::usage::CounterKind;
+    use agent_runtime_testkit::workspace::MemoryWorkspace;
+    use smith_module::{ModuleModel, ModuleModelInvocation, ModuleModelRequest};
+    use std::sync::Arc;
+    let launcher = Launcher::with_script(
+        r#"#!/bin/sh
+printf '%s\n' "$@" > "$ARGV_FILE"
+printf '%s\n' '{"type":"item.completed","item":{"id":"answer","type":"agent_message","text":"external module answer"}}' '{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":3}}'
+"#,
+    );
+    let recorded = launcher.directory.path().join("module-argv");
+    let plan = super::CliAgentPlan {
+        kind: CliAgentKind::Codex,
+        executable: launcher.directory.path().join("launcher"),
+        model: "test".into(),
+        args: vec![],
+        env: [("ARGV_FILE".into(), recorded.display().to_string())].into(),
+        allow_own_tools: true,
+        relay_executable: None,
+    };
+    let provider = Arc::new(FakeProvider::text_reply("must not use provider"));
+    let service = crate::module_model::ModuleModelService::new(
+        super::TurnExecution::InstalledAgent(plan),
+        provider.clone(),
+        ModelId::new("cli/codex/test"),
+        32000,
+    );
+    let response = service
+        .complete(
+            ModuleModelRequest {
+                system: Some("module instructions".into()),
+                messages: vec![
+                    (Role::User, "question".into()),
+                    (Role::Assistant, "prior answer".into()),
+                    (Role::User, "follow up".into()),
+                ],
+                max_output_tokens: 32,
+            },
+            ModuleModelInvocation {
+                module_id: "review/module".into(),
+                sequence: 1,
+                deadline: Deadline::after(&SystemClock, 5000),
+                context: InvocationContext {
+                    session: SessionId::new("module-session"),
+                    turn: Some(TurnId::new("turn")),
+                    request: RequestId::new("request"),
+                    call_id: ToolCallId::new("call"),
+                    workspace: Arc::new(MemoryWorkspace::new(
+                        launcher.directory.path().display().to_string(),
+                    )),
+                    clock: Arc::new(SystemClock),
+                    cancel: Cancellation::new(),
+                    deadline: Deadline::after(&SystemClock, 1),
+                    output_limit: 10000,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.text, "external module answer");
+    assert_eq!(response.usage.get(CounterKind::InputUncached), 12);
+    assert_eq!(response.usage.get(CounterKind::Output), 3);
+    assert!(provider.requests().is_empty());
+    let argv = std::fs::read_to_string(recorded).unwrap();
+    assert!(
+        argv.contains("module instructions")
+            && argv.contains("prior answer")
+            && argv.contains("follow up")
+    );
+    assert!(argv.contains("assistant") && argv.contains("--sandbox\nread-only"));
+    assert!(
+        !argv.contains("--dangerously-bypass-approvals-and-sandbox")
+            && !argv.contains("mcp_servers")
+    );
+}

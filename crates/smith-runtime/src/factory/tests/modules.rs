@@ -757,6 +757,7 @@ async fn wasm_and_native_modules_share_registry_and_record_distinct_tiers() {
         include_bytes!("../../../../smith-wasm-host/tests/fixtures/tools.wasm"),
         smith_wasm_host::WasmModuleConfig {
             plugin_name: "fixture-plugin".into(),
+            module_id: "test/module".into(),
             requested_capabilities: vec![smith_wasm_host::CapabilityGrant {
                 capability: smith_module::ModuleCapability::WorkspaceWrite,
                 roots: vec!["workspace".into()],
@@ -898,6 +899,7 @@ async fn wasm_faults_leave_runtime_sessions_running() {
             include_bytes!("../../../../smith-wasm-host/tests/fixtures/tools.wasm"),
             smith_wasm_host::WasmModuleConfig {
                 plugin_name: "faults".into(),
+                module_id: "test/module".into(),
                 requested_capabilities: vec![],
                 granted_capabilities: vec![],
                 host_state_dir: workspace.path().join("host"),
@@ -1000,6 +1002,7 @@ async fn plugin_wasm_tools_reach_inheriting_children_and_keep_ordinary_approval(
         include_bytes!("../../../../smith-wasm-host/tests/fixtures/tools.wasm"),
         smith_wasm_host::WasmModuleConfig {
             plugin_name: "child-plugin".into(),
+            module_id: "test/module".into(),
             requested_capabilities: vec![grant.clone()],
             granted_capabilities: vec![grant],
             host_state_dir: workspace.path().join("host"),
@@ -1109,6 +1112,7 @@ async fn a_child_rebuild_omits_disabled_wasm_schemas_without_disabling_siblings(
         include_bytes!("../../../../smith-wasm-host/tests/fixtures/tools.wasm"),
         smith_wasm_host::WasmModuleConfig {
             plugin_name: "view".into(),
+            module_id: "test/module".into(),
             requested_capabilities: vec![],
             granted_capabilities: vec![],
             host_state_dir: workspace.path().join("host"),

@@ -541,9 +541,11 @@ fn mount(
                         "protected/duplicate watcher id".into(),
                     ));
                 }
-                if config.granted_capabilities.iter().any(|grant| {
-                    grant.capability == ModuleCapability::SessionNotify
-                }) {
+                if config
+                    .granted_capabilities
+                    .iter()
+                    .any(|grant| grant.capability == ModuleCapability::SessionNotify)
+                {
                     watchers.push(id);
                 } else {
                     session.health.contribution_diagnostic(

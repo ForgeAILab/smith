@@ -77,6 +77,9 @@ pub struct SessionUsageRecord {
     /// Advisor provider counters, separately attributed from root turns.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub advisor_totals: std::collections::BTreeMap<String, u64>,
+    /// Module counters with their serving bindings, keyed by installed module id.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub module_usage: std::collections::BTreeMap<String, Vec<BindingUsageRecord>>,
     /// Context compactions observed.
     pub compactions: u32,
     /// Tokens those compactions reclaimed.
@@ -120,6 +123,8 @@ struct SessionUsageRecordWire {
         std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>>,
     #[serde(default)]
     advisor_totals: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    module_usage: std::collections::BTreeMap<String, Vec<BindingUsageRecord>>,
     compactions: u32,
     reclaimed_tokens: u64,
     #[serde(default)]
@@ -148,6 +153,7 @@ impl<'de> Deserialize<'de> for SessionUsageRecord {
             synthetic_totals: wire.synthetic_totals,
             synthetic_by_purpose: wire.synthetic_by_purpose,
             advisor_totals: wire.advisor_totals,
+            module_usage: wire.module_usage,
             compactions: wire.compactions,
             reclaimed_tokens: wire.reclaimed_tokens,
             delegated_totals: wire.delegated_totals,
@@ -211,6 +217,7 @@ impl SessionUsageRecord {
                 .iter()
                 .map(|(kind, value)| (counter_label(*kind).to_owned(), *value))
                 .collect(),
+            module_usage: std::collections::BTreeMap::new(),
             compactions: usage.compactions,
             reclaimed_tokens: usage.reclaimed_tokens,
             delegated_totals: usage
@@ -223,6 +230,27 @@ impl SessionUsageRecord {
             cache_rebilled_tokens: (usage.cache_rebilled_tokens > 0)
                 .then_some(usage.cache_rebilled_tokens),
         };
+        for (module, bindings) in usage
+            .module_usage
+            .iter()
+            .chain(&usage.delegated_module_usage)
+        {
+            for binding in bindings {
+                record
+                    .module_usage
+                    .entry(module.clone())
+                    .or_default()
+                    .push(BindingUsageRecord {
+                        provider: binding.provider.clone(),
+                        model: binding.model.clone(),
+                        totals: binding
+                            .totals
+                            .iter()
+                            .map(|(kind, value)| (counter_label(*kind).into(), *value))
+                            .collect(),
+                    });
+            }
+        }
         for binding in &usage.bindings {
             if binding.totals.is_empty() {
                 continue;
@@ -485,6 +513,8 @@ mod tests {
             delegated_totals,
             delegated_contributors: 4,
             advisor_totals: Default::default(),
+            module_usage: Default::default(),
+            delegated_module_usage: Default::default(),
             advisor_price: None,
             vision_totals: Default::default(),
             vision_price: None,
@@ -524,6 +554,8 @@ mod tests {
             delegated_totals,
             delegated_contributors: 1,
             advisor_totals: Default::default(),
+            module_usage: Default::default(),
+            delegated_module_usage: Default::default(),
             advisor_price: None,
             vision_totals: Default::default(),
             vision_price: None,

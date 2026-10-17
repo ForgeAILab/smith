@@ -23,6 +23,7 @@ fn context() -> ModuleContext {
         posture: ModulePosture::ReadWrite,
         transport: Arc::new(ReplayTransport::single(Vec::new())),
         http: None,
+        model: None,
         image_binding: None,
         vision: None,
         web: None,

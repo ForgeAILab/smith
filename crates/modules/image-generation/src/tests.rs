@@ -36,6 +36,7 @@ fn context() -> ModuleContext {
         transport: Arc::new(ReplayTransport::single(Vec::new())),
         vision: None,
         main_model_accepts_images: false,
+        model: None,
         image_binding: Some(ImageBinding {
             endpoint: "https://api.openai.com/v1".into(),
             target: ProviderCredentialTarget::new("openai").unwrap(),

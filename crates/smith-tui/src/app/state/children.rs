@@ -395,7 +395,34 @@ impl App {
             // actually reported, so a dormant recovered child (no stream,
             // no call here) contributes nothing.
             RuntimeEvent::Usage { record } => {
-                if let Some(purpose) = record.provenance.attempt_purpose
+                if let Some(module) = record.provenance.purpose.as_deref().and_then(|purpose| {
+                    purpose.strip_prefix(smith_runtime::module_model::MODULE_USAGE_PREFIX)
+                }) {
+                    let mut binding = self
+                        .child_usage_bindings
+                        .get(child)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            smith_client::status::BindingUsage::new(
+                                None,
+                                format!("child {child}"),
+                                None,
+                            )
+                        });
+                    binding.totals.clear();
+                    binding.synthetic_by_purpose.clear();
+                    binding.record(&record.delta, true);
+                    let bindings = self.child_module_usage.entry(module.into()).or_default();
+                    if let Some(existing) = bindings.iter_mut().find(|existing| {
+                        existing.provider == binding.provider
+                            && existing.model == binding.model
+                            && existing.price == binding.price
+                    }) {
+                        existing.record(&record.delta, true);
+                    } else {
+                        bindings.push(binding);
+                    }
+                } else if let Some(purpose) = record.provenance.attempt_purpose
                     && purpose.is_synthetic_cache()
                 {
                     self.status.record_synthetic_usage(purpose, &record.delta);
@@ -461,6 +488,7 @@ impl App {
     pub fn session_usage(&self) -> SessionUsage {
         let mut usage = self.status.session_usage();
         usage.delegated_totals = self.delegated_usage.clone();
+        usage.delegated_module_usage = self.child_module_usage.clone();
         usage.delegated_contributors =
             u32::try_from(self.delegated_contributors.len()).unwrap_or(u32::MAX);
         usage.bindings.extend(
@@ -577,6 +605,48 @@ mod usage_binding_tests {
             },
         );
         app.apply_child(child, &envelope);
+    }
+
+    #[test]
+    fn child_module_usage_keeps_module_attribution_and_child_rates() {
+        let mut app = App::new("root", "project");
+        let root_price = price("root-provider", "root", 1_000_000);
+        let child_price = price("child-provider", "reviewer", 2_000_000);
+        app.status.set_price(Some(root_price.clone()));
+        app.set_child_usage_binding(
+            "child",
+            Some(BindingUsage::new(
+                Some("child-provider".into()),
+                "reviewer",
+                Some(child_price),
+            )),
+        );
+        let record = UsageRecord {
+            source: UsageSource::SemanticSummary,
+            provenance: Provenance {
+                purpose: Some("module:review/module".into()),
+                ..Provenance::default()
+            },
+            delta: UsageDelta::new().with(CounterKind::InputUncached, 10),
+        };
+        let event = EventEnvelope::new(
+            1,
+            agent_runtime_core::ids::EventId::new("usage"),
+            agent_runtime_core::ids::SessionId::new("child"),
+            None,
+            agent_runtime_core::clock::Timestamp::ZERO,
+            RuntimeEvent::Usage { record },
+        );
+        app.apply_child("child", &event);
+        let mut usage = app.session_usage();
+        usage.reconcile_module_records(&[]);
+        assert_eq!(
+            usage.module_totals()["review/module"][&CounterKind::InputUncached],
+            10
+        );
+        assert_eq!(usage.merged_total_tokens(), 10);
+        assert!(usage.delegated_totals.is_empty());
+        assert_eq!(SessionCost::compute(&usage, &root_price).micro_usd, 20);
     }
 
     #[test]

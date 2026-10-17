@@ -657,12 +657,16 @@ impl host::Host for Broker {
                     self.limits.model_max_calls_per_turn,
                 )
                 .ok_or_else(|| w::HostError::LimitReached("model calls per turn limit".into()))?;
+            let timeout = self.limits.model_deadline.min(Duration::from_secs(120));
             let attribution = smith_module::ModuleModelInvocation {
                 module_id: self.module_id.clone(),
+                deadline: agent_runtime_core::clock::Deadline::after(
+                    invocation.clock.as_ref(),
+                    timeout.as_millis() as u64,
+                ),
                 context: invocation,
                 sequence,
             };
-            let timeout = self.limits.model_deadline.min(Duration::from_secs(120));
             // The epoch callback consults this extended deadline before it can trap
             // on re-entry into guest code. Host time is not guest execution time.
             let result = runtime.block_on(async move {

@@ -60,10 +60,13 @@ impl TuiLoop<'_> {
                     ) {
                         self.app.push_notice(notice.kind, notice.text);
                     }
-                    if turn_completed && self.host.runtime().advisor_route().is_some() {
+                    if turn_completed {
                         self.app
                             .status
                             .reconcile_advisor_records(self.host.snapshot().usage.records());
+                        self.app
+                            .status
+                            .reconcile_module_records(self.host.snapshot().usage.records());
                     }
                     if turn_completed && self.host.runtime().vision_route().is_some() {
                         self.app

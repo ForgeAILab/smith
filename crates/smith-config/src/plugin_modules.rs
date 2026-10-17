@@ -28,6 +28,14 @@ pub struct PluginModuleSection {
     pub plugin_data_write: Option<bool>,
     /// False withholds current-session history.
     pub session_history: Option<bool>,
+    /// False withholds calls to the session model.
+    pub model: Option<bool>,
+    /// False withholds session notifications.
+    pub session_notify: Option<bool>,
+    /// Output ceiling per model call; may only lower the default of 4096.
+    pub model_max_output_tokens: Option<u32>,
+    /// Model calls per turn; may only lower the default of 4.
+    pub model_max_calls_per_turn: Option<u32>,
 }
 /// Module id to restriction map in `[plugins.<name>.modules.<id>]`.
 pub type PluginModuleRestrictions = BTreeMap<String, PluginModuleSection>;

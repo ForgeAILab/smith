@@ -223,6 +223,7 @@ const PUBLIC_RUNTIME_MODULES: &[&str] = &[
     "mcp",
     "memory",
     "model_catalog",
+    "module_model",
     "pool",
     "pool_state",
     "probe",

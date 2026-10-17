@@ -313,8 +313,27 @@ pub(super) struct UsageOutput {
     /// attempts. It remains excluded from `current_turn`.
     #[serde(default, skip_serializing_if = "SyntheticUsageOutput::is_empty")]
     pub(super) synthetic_cache: SyntheticUsageOutput,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(super) modules: std::collections::BTreeMap<String, UsageDelta>,
     pub(super) current_turn_provenance: UsageProvenance,
     pub(super) session_provenance: UsageProvenance,
+}
+
+pub(super) fn module_usage_output(
+    records: &[UsageRecord],
+) -> std::collections::BTreeMap<String, UsageDelta> {
+    let mut modules = std::collections::BTreeMap::<String, UsageDelta>::new();
+    for record in records {
+        if let Some(module) = record.provenance.purpose.as_deref().and_then(|purpose| {
+            purpose.strip_prefix(smith_runtime::module_model::MODULE_USAGE_PREFIX)
+        }) {
+            modules
+                .entry(module.into())
+                .or_default()
+                .merge(&record.delta);
+        }
+    }
+    modules
 }
 
 #[derive(Debug, Default, Serialize)]

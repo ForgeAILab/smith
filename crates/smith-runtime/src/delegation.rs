@@ -391,6 +391,13 @@ impl ChildRuntimeFactory for SmithChildFactory {
             smith_module::ModulePosture::ReadOnly
         };
         module_context.is_child_session = true;
+        let module_model = Arc::new(crate::module_model::ModuleModelService::new(
+            route.execution.clone(),
+            route.provider.clone(),
+            route.model.clone(),
+            route.model_profile.limits.max_input_tokens,
+        ));
+        module_context.model = Some(module_model.clone());
         module_context.workspace_root = Some(std::path::PathBuf::from(workspace.root()));
         let mut modules = route.modules.clone();
         if let Some(plugins) = &route.plugins {
@@ -600,7 +607,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 .tool_output_processor(Arc::new(route.tool_output_context.offloader(store)?));
         }
         if let Some(store) = self.session_store.clone() {
-            builder = builder.session_store(store);
+            builder = builder.session_store(module_model.accounting_store(store));
         }
         if let Some(store) = self.checkpoint_store.clone() {
             builder = builder.checkpoint_store(store);
@@ -616,7 +623,8 @@ impl ChildRuntimeFactory for SmithChildFactory {
         for skill in skills {
             builder = builder.ability(skill);
         }
-        let mut builder = crate::factory::modules::apply(builder, &module_plan);
+        let mut builder =
+            crate::factory::modules::apply(builder, &module_plan).turn_commit_hook(module_model);
         if let Some(filter) =
             crate::factory::modules::sandbox_health_filter(&modules, &module_plan, true)
         {

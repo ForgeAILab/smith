@@ -55,6 +55,7 @@ pub async fn module_report(
         prepared.profile.profile.limits.max_input_tokens,
         request.semantic_summary.is_some(),
         Arc::new(crate::session_history::LiveSessionHistory::default()),
+        None,
     )?
     .report)
 }
@@ -67,6 +68,7 @@ pub(super) fn prepare(
     max_input_tokens: u32,
     semantic_summary_enabled: bool,
     session_history: Arc<crate::session_history::LiveSessionHistory>,
+    model: Option<Arc<dyn smith_module::ModuleModel>>,
 ) -> Result<MountPlan, FactoryError> {
     let mut composition = request.modules.clone();
     if let Some(profile) = request
@@ -84,7 +86,7 @@ pub(super) fn prepare(
     if composition.compiled.is_empty() && composition.known.is_empty() {
         return Ok(MountPlan::default());
     }
-    let context = context(
+    let mut context = context(
         request,
         web.settings.clone(),
         image_binding,
@@ -93,6 +95,7 @@ pub(super) fn prepare(
         semantic_summary_enabled,
         session_history,
     )?;
+    context.model = model;
     let mut plan = mount_modules(&composition, &context);
     report_web_diagnostic(&mut plan, web.diagnostic.as_deref());
     apply_sandbox_authority(&mut plan);
@@ -205,6 +208,7 @@ pub(super) fn context(
         },
         transport: transport.clone(),
         http: Some(transport),
+        model: None,
         image_binding,
         vision,
         web: Some(web),
@@ -299,6 +303,9 @@ fn module_spec(module: &MountedModule) -> Result<ModuleSpec, FactoryError> {
             ModuleContribution::Command(command) => Contribution::Command {
                 name: command.name.clone(),
             },
+            ModuleContribution::Watcher { name, .. } => {
+                Contribution::Watcher { name: name.clone() }
+            }
             ModuleContribution::StatusItem { name, .. } => {
                 Contribution::StatusItem { name: name.clone() }
             }
@@ -375,7 +382,8 @@ pub(crate) fn apply(mut builder: RuntimeBuilder, plan: &MountPlan) -> RuntimeBui
             ModuleContribution::Observer { observer, .. } => builder.observer(observer.clone()),
             ModuleContribution::Tool(_)
             | ModuleContribution::Command(_)
-            | ModuleContribution::StatusItem { .. } => builder,
+            | ModuleContribution::StatusItem { .. }
+            | ModuleContribution::Watcher { .. } => builder,
         };
     }
     builder

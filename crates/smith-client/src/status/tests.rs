@@ -1115,3 +1115,83 @@ fn switching_without_new_counters_keeps_the_previous_bill_exact() {
     assert_eq!(SessionCost::compute(&usage, price).label, CostLabel::Exact);
     assert_eq!(price.render_sources(&usage), "openai/gpt-5.3");
 }
+
+#[test]
+fn module_usage_is_attributed_priced_and_retained_across_model_switches() {
+    use agent_runtime_core::usage::{Provenance, UsageSource};
+    let mut status = Status::new("worker", "/repo");
+    let price = PriceReference {
+        provider: "local".into(),
+        model: "worker".into(),
+        table: PriceTable {
+            input: Some(1_000_000),
+            output: Some(2_000_000),
+            cache_read: None,
+            cache_write: None,
+        },
+    };
+    status.set_price(Some(price.clone()));
+    let record = UsageRecord {
+        source: UsageSource::SemanticSummary,
+        provenance: Provenance {
+            purpose: Some("module:review/module".into()),
+            ..Provenance::default()
+        },
+        delta: UsageDelta::new()
+            .with(CounterKind::InputUncached, 50)
+            .with(CounterKind::Output, 10),
+    };
+    status.record_usage_record(&record);
+    let mut turn = TurnUsage::default();
+    turn.record(&record);
+    assert_eq!(turn.output, TokenCount::UNKNOWN);
+    status.switch_model(Some("other".into()), "other-model");
+    status.set_price(None);
+    status.reconcile_module_records(std::slice::from_ref(&record));
+    let usage = status.session_usage();
+    assert!(usage.totals.is_empty());
+    assert_eq!(usage.merged_total_tokens(), 60);
+    assert_eq!(
+        usage.module_totals()["review/module"][&CounterKind::Output],
+        10
+    );
+    assert!(usage.render().unwrap().contains("module review/module"));
+    let cost = SessionCost::compute(&usage, &price);
+    assert_eq!(cost.micro_usd, 70);
+    assert_eq!(cost.label, CostLabel::Exact);
+    let log = crate::usage_log::SessionUsageRecord::new("s", None, "other-model", "build", &usage);
+    let json = serde_json::to_string(&log).unwrap();
+    let restored: crate::usage_log::SessionUsageRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.module_usage["review/module"][0].model, "worker");
+    assert_eq!(
+        restored.module_usage["review/module"][0].totals["output"],
+        10
+    );
+}
+
+#[test]
+fn module_cli_usage_is_unpriced_and_hosted_search_is_not_a_token() {
+    let mut status = Status::new("cli/codex/test", "project");
+    status.switch_model(Some("unrelated-profile-provider".into()), "cli/codex/test");
+    let reference = priced(1_000_000, 2_000_000, 0, 0);
+    status.set_price(Some(reference.clone()));
+    let record = UsageRecord {
+        source: UsageSource::SemanticSummary,
+        provenance: agent_runtime_core::usage::Provenance {
+            purpose: Some("module:review/module".into()),
+            ..Default::default()
+        },
+        delta: UsageDelta::new()
+            .with(CounterKind::InputUncached, 12)
+            .with(CounterKind::Output, 3)
+            .with(CounterKind::WebSearchRequests, 2),
+    };
+    status.record_usage_record(&record);
+    let usage = status.session_usage();
+    let binding = &usage.module_usage["review/module"][0];
+    assert!(binding.price.is_none() && binding.provider.is_none());
+    assert_eq!(usage.merged_total_tokens(), 15);
+    let cost = SessionCost::compute(&usage, &reference);
+    assert_eq!(cost.micro_usd, 0);
+    assert_eq!(cost.label, CostLabel::Estimated);
+}

@@ -3,13 +3,21 @@
 ### Requirement: Sandboxed modules can call the session's model
 
 Smith SHALL offer a sandboxed module a host function that performs one
-bounded, non-streaming, tool-free request on the session's current provider
-and model, only when the module's manifest requested the model capability
+bounded, non-streaming, tool-free request on the session's current model
+route, including an installed agent when selected, only when the module's manifest requested the model capability
 and the user granted it. The module MUST NOT receive a credential, choose a
 provider, or exceed the per-call output limit and the per-turn call limit.
 The function MUST be available only while the module is handling a tool
 call. A refused request MUST return a typed error to the module and MUST NOT
 count towards disabling it.
+
+Smith SHALL use the shared one-shot executor. Provider routes SHALL receive
+the requested output-token ceiling; installed-agent routes use the CLI's own
+generation limits and SHALL receive the role-labelled conversation rendered
+as one user input. Both routes remain subject to the host deadline, call-count
+and ABI payload limits. A truncated successful answer SHALL return finish
+reason `length`; filtered, empty, tool-calling or unfinished answers SHALL
+return a recoverable error. Installed-agent usage SHALL remain unpriced.
 
 #### Scenario: Granted module asks the model
 

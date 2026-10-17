@@ -332,6 +332,7 @@ async fn run_inner(
             current_turn: fold.turn_usage,
             session: session_usage,
             synthetic_cache,
+            modules: super::output::module_usage_output(snapshot.usage.records()),
         },
         lifecycle: fold.lifecycle,
         goal: final_goal,
@@ -491,6 +492,7 @@ pub(super) async fn write_restored_interaction_required(
             current_turn_provenance: UsageProvenance::Unknown,
             session: session_usage,
             synthetic_cache,
+            modules: super::output::module_usage_output(snapshot.usage.records()),
         },
         lifecycle: LifecycleOutput {
             activation: activation_output(session),
@@ -577,6 +579,7 @@ pub(super) async fn write_submission_failure(
             current_turn_provenance: UsageProvenance::Unknown,
             session: session_usage,
             synthetic_cache,
+            modules: super::output::module_usage_output(snapshot.usage.records()),
         },
         lifecycle: LifecycleOutput {
             activation: activation_output(session),

@@ -274,6 +274,7 @@ fn guest_workspaces_are_excluded_and_cli_host_has_one_feature_owner() {
     for path in [
         "crates/smith-wasm-host/tests/guests",
         "examples/wasm-module-hello",
+        "examples/wasm-module-relay",
     ] {
         assert!(
             excluded.iter().any(|entry| entry.as_str() == Some(path)),

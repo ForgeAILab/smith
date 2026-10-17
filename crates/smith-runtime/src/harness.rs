@@ -146,6 +146,8 @@ pub enum Contribution {
         phase: ComponentPhase,
         component: String,
     },
+    /// Recorded watcher declaration; scheduling is not part of composition.
+    Watcher { name: String },
     /// Bounded declarative status data.
     StatusItem { name: String },
     /// Bounded declarative panel data.
@@ -168,6 +170,7 @@ impl Contribution {
             Self::Observer { name } => ("observer", name),
             Self::Panel { name } => ("panel", name),
             Self::StatusItem { name } => ("status_item", name),
+            Self::Watcher { name } => ("watcher", name),
             Self::Pipeline { phase, component } => (
                 match phase {
                     ComponentPhase::History => "pipeline/history",
@@ -192,6 +195,7 @@ impl Contribution {
             | Self::Observer { .. }
             | Self::Panel { .. }
             | Self::Pipeline { .. }
+            | Self::Watcher { .. }
             | Self::StatusItem { .. }
             | Self::NativeLibrary { .. } => CapabilitySet::new(),
         }

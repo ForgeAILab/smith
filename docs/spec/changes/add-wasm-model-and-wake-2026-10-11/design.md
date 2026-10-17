@@ -30,6 +30,12 @@ a user prompt and are handed to the model at a safe boundary.
   streaming, no reasoning controls. The request goes to the session's
   current provider and model through the same route construction the
   advisor uses, so credentials, rotation and transport stay host-owned.
+  The shared one-shot path also supports the session's installed-agent route:
+  message roles are rendered into one user input, tools are withheld, and CLI
+  usage is unpriced. CLI generation limits are owned by the installed agent;
+  the requested output-token ceiling is enforced by provider routes. Both
+  routes retain host deadlines, call counts and ABI payload bounds. Truncated
+  answers return `length`; filtered, empty and unfinished answers are errors.
 - **Capability `model`.** A boolean manifest key. Sending text to the
   provider the session already uses does not also require `data_egress`;
   the install review says the module can send data to the active model

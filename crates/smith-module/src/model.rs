@@ -69,6 +69,8 @@ pub struct ModuleModelInvocation {
     pub context: agent_runtime_core::tool::InvocationContext,
     /// One-based call number within this module's turn.
     pub sequence: u32,
+    /// Separate host-owned model deadline, independent of guest execution.
+    pub deadline: agent_runtime_core::clock::Deadline,
 }
 
 /// Host-owned session model route, without guest-visible provider credentials.

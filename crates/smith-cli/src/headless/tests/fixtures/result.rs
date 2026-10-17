@@ -14,6 +14,7 @@ pub(super) fn fixture_result() -> ResultEnvelope {
             current_turn: UsageDelta::new(),
             session: UsageDelta::new(),
             synthetic_cache: SyntheticUsageOutput::default(),
+            modules: Default::default(),
             current_turn_provenance: UsageProvenance::Unknown,
             session_provenance: UsageProvenance::Unknown,
         },

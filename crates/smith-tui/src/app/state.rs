@@ -862,6 +862,8 @@ pub struct App {
     pub(super) delegated_usage: BTreeMap<CounterKind, u64>,
     /// Child identities and frozen prices resolved by the host at spawn.
     pub(super) child_usage_bindings: BTreeMap<String, smith_client::status::BindingUsage>,
+    /// Model side requests observed on child streams, attributed to the module.
+    pub(super) child_module_usage: BTreeMap<String, Vec<smith_client::status::BindingUsage>>,
     /// Children that reported at least one delegated-usage record on their
     /// own live stream, each counted once regardless of how many records it
     /// sent.

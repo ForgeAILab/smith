@@ -27,6 +27,8 @@ pub(crate) fn narrow(
         (&mut grants.plugin_data_read, restriction.plugin_data_read),
         (&mut grants.plugin_data_write, restriction.plugin_data_write),
         (&mut grants.session_history, restriction.session_history),
+        (&mut grants.model, restriction.model),
+        (&mut grants.session_notify, restriction.session_notify),
     ] {
         if rule == Some(false) {
             *value = false;

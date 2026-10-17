@@ -730,6 +730,7 @@ pub struct SmithRuntime {
     advisor: Option<Arc<AdvisorTool>>,
     vision_accounting: Arc<crate::vision::VisionAccounting>,
     vision: Option<crate::vision::VisionRoute>,
+    module_model: Arc<crate::module_model::ModuleModelService>,
     goal_component: Option<Arc<GoalComponent>>,
     background_services: Option<BackgroundServices>,
     harness_identity: HarnessIdentity,
@@ -768,7 +769,7 @@ impl SmithRuntime {
             .and_then(|vision| vision.price.as_ref())
     }
 
-    /// Canonical session state plus reported advisor and vision usage awaiting a commit
+    /// Canonical session state plus reported advisor, vision and module usage awaiting a commit
     /// hook, including interruptions that bypass Runtime's terminal hooks.
     pub fn accounted_snapshot(
         &self,
@@ -779,6 +780,7 @@ impl SmithRuntime {
             advisor.account_snapshot(&mut snapshot);
         }
         self.vision_accounting.account_snapshot(&mut snapshot);
+        self.module_model.account_snapshot(&mut snapshot);
         snapshot
     }
 

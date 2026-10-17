@@ -231,6 +231,16 @@ pub(crate) fn plugin_composition(
                     if entry.status != crate::plugins::PluginStatus::On {
                         return Err(format!("plugin is {:?}", entry.status));
                     }
+                    // Every module is recorded at install, so a missing record
+                    // means the id scheme changed underneath it. Running it
+                    // ungranted would look like the user withheld everything.
+                    if smith_plugin::lookup_module(&entry.installed.module_grants, &component.id)
+                        .is_none()
+                    {
+                        return Err(
+                            "installed under an older module id; install the plugin again".into(),
+                        );
+                    }
                     let smith_plugin::InstalledState::Unchanged(current) =
                         crate::plugins::open_store(user_root)
                             .load(&entry.installed.name)
@@ -264,6 +274,7 @@ pub(crate) fn plugin_composition(
                         bytes,
                         smith_wasm_host::WasmModuleConfig {
                             plugin_name: entry.installed.name.clone(),
+                            module_id: component.id.clone(),
                             requested_capabilities: host_grants(&component.capabilities),
                             granted_capabilities: host_grants(&granted),
                             host_state_dir: user_root.into(),
@@ -271,7 +282,17 @@ pub(crate) fn plugin_composition(
                                 .data_directory(&entry.installed.name)
                                 .map_err(|error| error.to_string())?,
                             cache_dir: user_root.join(smith_wasm_host::COMPONENT_CACHE_DIRECTORY),
-                            limits: smith_wasm_host::WasmLimits::default(),
+                            limits: smith_wasm_host::WasmLimits {
+                                model_max_output_tokens: restriction
+                                    .and_then(|rule| rule.model_max_output_tokens)
+                                    .unwrap_or(4096)
+                                    .min(4096),
+                                model_max_calls_per_turn: restriction
+                                    .and_then(|rule| rule.model_max_calls_per_turn)
+                                    .unwrap_or(4)
+                                    .min(4),
+                                ..smith_wasm_host::WasmLimits::default()
+                            },
                             session_health: health.clone(),
                             reserved_tool_names: smith_tools::all()
                                 .iter()
@@ -399,6 +420,8 @@ fn capability_categories(
         (caps.plugin_data_write, C::HostWrite),
         (!caps.network.is_empty(), C::Network),
         (!caps.data_egress.is_empty(), C::DataEgress),
+        (caps.model, C::Model),
+        (caps.session_notify, C::SessionNotify),
     ]
     .into_iter()
     .filter_map(|(enabled, capability)| enabled.then_some(capability))
@@ -420,6 +443,19 @@ fn host_grants(caps: &smith_plugin::ModuleCapabilities) -> Vec<smith_wasm_host::
             grants.push(smith_wasm_host::CapabilityGrant {
                 capability,
                 roots: vec![root.into()],
+                hosts: vec![],
+                allow_http: false,
+            });
+        }
+    }
+    for (enabled, capability) in [
+        (caps.model, C::Model),
+        (caps.session_notify, C::SessionNotify),
+    ] {
+        if enabled {
+            grants.push(smith_wasm_host::CapabilityGrant {
+                capability,
+                roots: vec![],
                 hosts: vec![],
                 allow_http: false,
             });

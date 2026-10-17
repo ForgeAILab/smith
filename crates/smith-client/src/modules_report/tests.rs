@@ -6,6 +6,37 @@ use smith_module::{ModuleDescriptor, ModuleReport};
 use super::{ModuleBlockReason, ModuleOrigin, ModuleState, module_report, render_plain};
 
 #[test]
+fn non_fatal_watcher_diagnostics_remain_visible_on_a_mounted_module() {
+    let health = std::sync::Arc::new(smith_module::ModuleHealth::default());
+    health.contribution_diagnostic(
+        "watch",
+        "watcher refused: session_notify capability was not granted",
+    );
+    let reports = [ModuleReport {
+        health: Some(health),
+        descriptor: ModuleDescriptor {
+            id: "plugin/module".into(),
+            description: "Fixture".into(),
+            default_enabled: true,
+            compiled_in: true,
+            origin: ModuleOrigin::Sandboxed {
+                plugin: "plugin".into(),
+                requested_capabilities: [smith_module::ModuleCapability::SessionNotify].into_iter().collect(),
+                granted_capabilities: Default::default(),
+                capability_details: vec![],
+                withheld_capabilities: vec!["notify the live session and start turns".into()],
+            },
+        },
+        state: ModuleState::Mounted,
+    }];
+    let report = module_report(&reports, &BTreeMap::new());
+    assert_eq!(report.rows[0].state, ModuleState::Mounted);
+    let text = render_plain(&report);
+    assert!(text.contains("watcher refused: session_notify capability was not granted"));
+    assert!(text.contains("withheld by the user"));
+}
+
+#[test]
 fn every_mount_outcome_keeps_the_deciding_key_layer_and_origin() {
     let cases = [
         (ModuleState::Mounted, "mounted"),

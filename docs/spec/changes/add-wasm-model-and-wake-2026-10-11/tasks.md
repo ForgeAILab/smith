@@ -14,16 +14,16 @@ completed_at:
 
 ## 2. Model calls
 
-- [ ] 2.0 Build `complete` on the agent-runtime one-shot call API once the
+- [x] 2.0 Build `complete` on the agent-runtime one-shot call API once the
   runtime release that adds it is pinned.
 
-- [ ] 2.1 A model service on `ModuleContext`, built from the session's
+- [x] 2.1 A model service on `ModuleContext`, built from the session's
   provider route, with no credential exposed to the module.
-- [ ] 2.2 `model` capability: manifest key, install and update review text,
+- [x] 2.2 `model` capability: manifest key, install and update review text,
   listings, user narrowing.
-- [ ] 2.3 Per-call and per-turn bounds, the separate deadline, and the
+- [x] 2.3 Per-call and per-turn bounds, the separate deadline, and the
   phases in which `complete` is refused.
-- [ ] 2.4 Usage attribution to the module id on every usage surface.
+- [x] 2.4 Usage attribution to the module id on every usage surface.
 
 ## 3. Watchers
 

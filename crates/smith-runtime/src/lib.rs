@@ -39,6 +39,7 @@ pub mod journal;
 pub mod mcp;
 pub mod memory;
 pub mod model_catalog;
+pub mod module_model;
 pub mod pool;
 pub mod pool_state;
 mod private_storage;

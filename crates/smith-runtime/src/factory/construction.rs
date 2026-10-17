@@ -259,6 +259,12 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
             .unwrap_or(false),
     )
     .await;
+    let module_model = Arc::new(crate::module_model::ModuleModelService::new(
+        crate::cli_agent::turn_execution(&request.config, request.smith_executable.as_deref()),
+        provider.clone(),
+        model.clone(),
+        profile.profile.limits.max_input_tokens,
+    ));
     let module_plan = modules::prepare(
         &request,
         &web,
@@ -267,6 +273,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         profile.profile.limits.max_input_tokens,
         semantic_summary.is_some(),
         session_history.clone(),
+        Some(module_model.clone()),
     )?;
     crate::harness::record_mounted_modules(
         &mut harness_identity,
@@ -476,6 +483,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     if let Some(identity) = cache_endpoint_identity.as_ref() {
         builder = builder.cache_endpoint_identity(identity.clone());
     }
+    builder = builder.turn_commit_hook(module_model.clone());
     if let Some(advisor) = &capabilities.advisor {
         builder = builder
             .tool_view_resolver(advisor.clone())
@@ -524,7 +532,8 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
             || store.clone(),
             |advisor| advisor.accounting_store(store.clone()),
         );
-        builder = builder.session_store(vision_accounting.store(store));
+        builder =
+            builder.session_store(module_model.accounting_store(vision_accounting.store(store)));
     }
     if let Some(store) = durability.root_store.clone() {
         builder = builder.checkpoint_store(store);
@@ -633,6 +642,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         advisor: capabilities.advisor,
         vision_accounting,
         vision,
+        module_model,
         goal_component: capabilities.goal,
         background_services: request.background_services,
         harness_identity,

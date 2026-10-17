@@ -29,6 +29,12 @@ pub struct ModuleCapabilities {
     /// Read recent history in the current session.
     #[serde(default)]
     pub session_history: bool,
+    /// Send data to the active model provider, without receiving credentials.
+    #[serde(default)]
+    pub model: bool,
+    /// Notify the live session.
+    #[serde(default)]
+    pub session_notify: bool,
 }
 impl ModuleCapabilities {
     /// Plain words for every requested capability, in deterministic order.
@@ -52,6 +58,11 @@ impl ModuleCapabilities {
                 "write plugin data and key-value storage",
             ),
             (self.session_history, "read recent session history"),
+            (self.model, "send data to the active model provider"),
+            (
+                self.session_notify,
+                "notify the live session and start turns",
+            ),
         ] {
             if enabled {
                 labels.push(label.into());

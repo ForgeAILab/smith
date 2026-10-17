@@ -37,7 +37,15 @@ pub fn module_report(
         .iter()
         .map(|report| ModuleRow {
             id: report.descriptor.id.clone(),
-            description: report.descriptor.description.clone(),
+            description: {
+                let mut description = report.descriptor.description.clone();
+                if let Some(health) = &report.health {
+                    for diagnostic in health.contribution_diagnostics() {
+                        description.push_str(&format!("\n  {diagnostic}"));
+                    }
+                }
+                description
+            },
             state: report.current_state(),
             source: switches.get(&report.descriptor.id).map_or_else(
                 || Source::built_in(format!("modules.{}.enabled", report.descriptor.id)),

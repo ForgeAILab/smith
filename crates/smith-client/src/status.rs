@@ -24,6 +24,7 @@ use agent_runtime_core::provider::ProviderAttemptPurpose;
 use agent_runtime_core::usage::{CounterKind, UsageDelta, UsageRecord, UsageSource};
 use smith_runtime::advisor::ADVISOR_USAGE_PURPOSE;
 use smith_runtime::client::{EstimationConfidence, SmithEvent as EventEnvelope};
+use smith_runtime::module_model::MODULE_USAGE_PREFIX;
 
 use crate::format::{compact_tokens, format_usd, plural};
 
@@ -152,6 +153,11 @@ impl TurnUsage {
             .provenance
             .attempt_purpose
             .is_some_and(|purpose| purpose.is_synthetic_cache())
+            || record
+                .provenance
+                .purpose
+                .as_deref()
+                .is_some_and(|purpose| purpose.starts_with(MODULE_USAGE_PREFIX))
         {
             return;
         }
@@ -378,6 +384,7 @@ pub struct Status {
     synthetic_totals: BTreeMap<CounterKind, u64>,
     /// Synthetic counters keyed by Runtime's typed attempt purpose.
     synthetic_by_purpose: BTreeMap<ProviderAttemptPurpose, BTreeMap<CounterKind, u64>>,
+    module_usage: BTreeMap<String, Vec<BindingUsage>>,
     advisor_totals: BTreeMap<CounterKind, u64>,
     advisor_price: Option<PriceReference>,
     vision_totals: BTreeMap<CounterKind, u64>,
@@ -416,6 +423,7 @@ impl Status {
             active_binding: None,
             synthetic_totals: BTreeMap::new(),
             synthetic_by_purpose: BTreeMap::new(),
+            module_usage: BTreeMap::new(),
             advisor_totals: BTreeMap::new(),
             advisor_price: None,
             vision_totals: BTreeMap::new(),
@@ -507,6 +515,36 @@ impl Status {
     /// Routes one canonical Runtime usage record without allowing synthetic
     /// cache work to masquerade as a root/user turn.
     pub fn record_usage_record(&mut self, record: &UsageRecord) {
+        if let Some(module) = record
+            .provenance
+            .purpose
+            .as_deref()
+            .and_then(|purpose| purpose.strip_prefix(MODULE_USAGE_PREFIX))
+        {
+            self.usage_reported |= !record.delta.is_empty();
+            let bindings = self.module_usage.entry(module.into()).or_default();
+            let provider = self
+                .provider
+                .clone()
+                .or_else(|| self.price.as_ref().map(|price| price.provider.clone()));
+            let price = if self.model.starts_with("cli/") {
+                None
+            } else {
+                self.price.clone()
+            };
+            let binding = if let Some(index) = bindings.iter().position(|binding| {
+                binding.provider == provider
+                    && binding.model == self.model
+                    && binding.price == price
+            }) {
+                &mut bindings[index]
+            } else {
+                bindings.push(BindingUsage::new(provider, &self.model, price));
+                bindings.last_mut().expect("inserted module binding")
+            };
+            binding.record(&record.delta, true);
+            return;
+        }
         let separate_totals = match record.provenance.purpose.as_deref() {
             Some(ADVISOR_USAGE_PURPOSE) => Some(&mut self.advisor_totals),
             Some(VISION_USAGE_PURPOSE) => Some(&mut self.vision_totals),
@@ -551,6 +589,14 @@ impl Status {
         let mut usage = self.session_usage();
         usage.reconcile_vision_records(records);
         self.vision_totals = usage.vision_totals;
+        self.usage_reported = usage.reported;
+    }
+
+    /// Recovers module side-request counters after a terminal event.
+    pub fn reconcile_module_records(&mut self, records: &[UsageRecord]) {
+        let mut usage = self.session_usage();
+        usage.reconcile_module_records(records);
+        self.module_usage = usage.module_usage;
         self.usage_reported = usage.reported;
     }
 
@@ -606,6 +652,8 @@ impl Status {
             turns: self.turns,
             reported: self.usage_reported,
             totals: self.totals.clone(),
+            module_usage: self.module_usage.clone(),
+            delegated_module_usage: BTreeMap::new(),
             advisor_totals: self.advisor_totals.clone(),
             advisor_price: self.advisor_price.clone(),
             vision_totals: self.vision_totals.clone(),
@@ -624,6 +672,11 @@ impl Status {
     /// Keeps live binding attribution across host rebuilds only when the
     /// durable root rollup agrees, avoiding duplicate or invented usage.
     pub fn retain_usage_bindings(&mut self, previous: &SessionUsage) {
+        let mut root = previous.clone();
+        root.delegated_module_usage.clear();
+        if root.module_totals() == self.session_usage().module_totals() {
+            self.module_usage = previous.module_usage.clone();
+        }
         if !previous.bindings.is_empty() && previous.totals == self.totals {
             self.bindings = previous.bindings.clone();
             self.active_binding = Some(BindingUsage::new(

@@ -151,6 +151,20 @@ pub(super) fn extract_plugins(
                     }
                 }
             }
+            for (id, restriction) in &mut modules {
+                for (key, limit, maximum) in [
+                    ("model_max_output_tokens", &mut restriction.model_max_output_tokens, 4096),
+                    ("model_max_calls_per_turn", &mut restriction.model_max_calls_per_turn, 4),
+                ] {
+                    if limit.is_some_and(|value| value > maximum) {
+                        *limit = None;
+                        ignored_module_settings.push(format!(
+                            "plugins.{}.modules.{}.{} ignored: may only lower the default of {}",
+                            plugin.name, id, key, maximum
+                        ));
+                    }
+                }
+            }
             ignored_module_settings.sort();
             ignored_module_settings.dedup();
             Ok((

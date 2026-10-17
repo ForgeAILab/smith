@@ -336,6 +336,7 @@ pub(super) async fn run_interactive(
             let snapshot = host.snapshot();
             usage.reconcile_synthetic_records(snapshot.usage.records());
             usage.reconcile_advisor_records(snapshot.usage.records());
+            usage.reconcile_module_records(snapshot.usage.records());
             usage.reconcile_vision_records(snapshot.usage.records());
         }
 
