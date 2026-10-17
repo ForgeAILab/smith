@@ -60,6 +60,8 @@ pub async fn module_report(
     .report)
 }
 
+// Independent host-owned services are resolved before module mounting.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn prepare(
     request: &RuntimeRequest,
     web: &super::web::WebRoute,

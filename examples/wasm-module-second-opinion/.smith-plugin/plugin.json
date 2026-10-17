@@ -1,0 +1,9 @@
+{
+  "name": "second-opinion",
+  "version": "0.1.0",
+  "description": "Ask the session's current model to review recent work",
+  "modules": [{
+    "wasm": "./module.wasm",
+    "capabilities": { "model": true, "session_history": true }
+  }]
+}

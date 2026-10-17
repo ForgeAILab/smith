@@ -28,7 +28,8 @@ an idle session waits until its user types something.
 - Add interface version `smith:module@0.2.0`. Smith keeps loading 0.1
   modules unchanged.
 - Add a `complete` host function: one bounded, non-streaming, tool-free
-  model request on the session's current provider and model. The module
+  model request on the session's current route (provider/model or installed
+  agent). Installed agents retain their own generation limits. The module
   never sees a credential. It needs a new `model` capability, requested in
   the manifest and confirmed at install like every other capability.
 - Bound model spend per module: a cap on output tokens per call and on calls

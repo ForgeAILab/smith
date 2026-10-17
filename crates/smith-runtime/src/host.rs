@@ -79,6 +79,7 @@ mod persistence;
 mod policy;
 mod recovery;
 mod startup;
+mod watchers;
 
 use history::{
     append_shell_shortcut, redacted_result_text, tool_call_display_from_history,
@@ -216,6 +217,7 @@ pub struct HostSession {
     goal_admission_gate: Option<GoalAdmissionGate>,
     delegation_lifecycle: Mutex<Option<DelegationLifecycle>>,
     cache_controller: Mutex<Option<CacheLifecycleController>>,
+    module_watchers: Mutex<Option<watchers::WatcherSchedule>>,
     final_cache_lifecycle: Mutex<Option<crate::cache_controller::CacheControllerSnapshot>>,
     resume_capsule: Option<Arc<ResumeCapsuleSlot>>,
 }
@@ -271,7 +273,7 @@ impl HostSession {
         &self.session
     }
 
-    /// Session state with all reported advisor usage included, even when an
+    /// Session state with all reported advisor/module usage included, even when an
     /// interrupted tool-output phase bypassed Runtime's terminal hooks.
     pub fn snapshot(&self) -> SessionSnapshot {
         self.runtime.accounted_snapshot(&self.session)
@@ -705,6 +707,7 @@ impl HostSession {
         if let Some(result) = shutdown_result.as_ref() {
             return result.clone();
         }
+        self.stop_module_watchers().await;
         let cache_controller = self
             .cache_controller
             .lock()
@@ -779,6 +782,18 @@ impl HostSession {
         let result = goal_controller.and(delegation).and(session).and(journal);
         *shutdown_result = Some(result.clone());
         result
+    }
+
+    /// Stops passive module polls before a headless turn's exit policy waits on other work.
+    pub async fn stop_module_watchers(&self) {
+        let schedule = self
+            .module_watchers
+            .lock()
+            .expect("module watcher lock poisoned")
+            .take();
+        if let Some(schedule) = schedule {
+            schedule.shutdown().await;
+        }
     }
 }
 

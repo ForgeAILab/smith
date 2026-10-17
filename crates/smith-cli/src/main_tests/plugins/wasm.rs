@@ -166,16 +166,35 @@ async fn relay_example_delivers_a_message_between_two_sessions() {
         vec![
             call("join", r#"{"name":"alice"}"#),
             stop(),
-            call("join", r#"{"name":"bob"}"#),
-            stop(),
-            activate("send"),
-            call("send", r#"{"to":"alice","text":"ping from bob"}"#),
-            stop(),
             activate("inbox"),
             call("inbox", "{}"),
             stop(),
         ],
     )));
+    let mut bob_request = fixture.request(config.clone());
+    bob_request
+        .plugin_profiles
+        .get_mut(&config.agent.profile.name)
+        .unwrap()
+        .wasm_modules = composition(&fixture, &config);
+    bob_request.approval = Some(Arc::new(agent_runtime_core::approval::AllowAll));
+    bob_request.provider = Some(Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            call("join", r#"{"name":"bob"}"#),
+            stop(),
+            activate("send"),
+            call("send", r#"{"to":"alice","text":"ping from bob"}"#),
+            stop(),
+        ],
+    )));
+    let bob_runtime = smith_runtime::factory::build(
+        smith_runtime::harness::resolve(smith_runtime::harness::HarnessSpec::trusted(bob_request))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
     let runtime = smith_runtime::factory::build(
         smith_runtime::harness::resolve(smith_runtime::harness::HarnessSpec::trusted(request))
             .unwrap(),
@@ -197,7 +216,7 @@ async fn relay_example_delivers_a_message_between_two_sessions() {
         .unwrap();
     alice.run(prompt("join")).await.unwrap();
     assert_eq!(labels(), ["relay alice"]);
-    let bob = runtime
+    let bob = bob_runtime
         .runtime()
         .start_session(StartSession::new())
         .await
@@ -206,6 +225,22 @@ async fn relay_example_delivers_a_message_between_two_sessions() {
     bob.run(prompt("send")).await.unwrap();
     let sent = format!("{:?}", bob.history());
     assert!(sent.contains("sent to alice"), "{sent}");
+    let watcher = runtime
+        .mounted_modules()
+        .iter()
+        .flat_map(|module| &module.contributions)
+        .find_map(|contribution| {
+            if let smith_module::ModuleContribution::Watcher { source, .. } = contribution {
+                Some(source)
+            } else {
+                None
+            }
+        })
+        .expect("relay watcher");
+    let notices = watcher.poll(alice.id()).await.unwrap();
+    assert_eq!(notices.len(), 1);
+    assert!(notices[0].text.contains("alice") && notices[0].text.contains("bob"));
+    assert!(watcher.poll(alice.id()).await.unwrap().is_empty());
     // The contributor runs without a history grant, so the module stays
     // mounted and the next turn of the recipient can read its mail.
     alice.run(prompt("inbox")).await.unwrap();
@@ -1092,4 +1127,98 @@ fn model_and_notify_update_requests_require_review_before_granting() {
             .values()
             .all(|caps| !caps.model && !caps.session_notify)
     );
+}
+
+#[cfg(feature = "wasm-modules")]
+#[tokio::test]
+async fn second_opinion_example_reviews_history_on_the_current_model_route() {
+    use agent_runtime_core::usage::{CounterKind, UsageDelta};
+    let fixture = Fixture::new(true);
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/wasm-module-second-opinion")
+        .canonicalize()
+        .unwrap();
+    let text = install(&fixture, &example);
+    assert!(
+        text.contains("send data to the active model provider")
+            && text.contains("read recent session history")
+    );
+    let config = fixture.config(None);
+    let mut request = fixture.request(config.clone());
+    request
+        .plugin_profiles
+        .get_mut(&config.agent.profile.name)
+        .unwrap()
+        .wasm_modules = composition(&fixture, &config);
+    request.approval = Some(Arc::new(agent_runtime_core::approval::AllowAll));
+    let name = "wasm_14_second-opinion_second-opinion__review";
+    let raw = |tool: &str, id: &str, arguments: &str| {
+        let mut events = agent_runtime::provider::fake::tool_call_fragments(0, id, tool, arguments);
+        events.push(ProviderStreamEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
+        ScriptedStream::new(events)
+    };
+    let provider = Arc::new(FakeProvider::new(
+        config.model.value.clone(),
+        Capabilities::basic_streaming(),
+        vec![
+            raw(
+                "registry.activate",
+                "activate",
+                &format!(r#"{{"ids":["tool:{name}"]}}"#),
+            ),
+            raw(name, "review", r#"{"question":"What should I fix?"}"#),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "Check the boundary condition.".into(),
+                },
+                ProviderStreamEvent::Usage {
+                    delta: UsageDelta::new().with(CounterKind::Output, 4),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+            ScriptedStream::new(vec![ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            }]),
+        ],
+    ));
+    request.provider = Some(provider.clone());
+    // Host startup registers the live history service for root sessions.
+    let host = smith_runtime::host::start(smith_runtime::host::HostSessionRequest::new(
+        request,
+        &fixture.project,
+    ))
+    .await
+    .unwrap();
+    let runtime = host.runtime();
+    let session = host.session();
+    session
+        .run(UserInput::text(format!(
+            "Review HISTORY_SENTINEL with {name}"
+        )))
+        .await
+        .unwrap();
+    assert!(format!("{:?}", session.history()).contains("Check the boundary condition."));
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 4, "{:?}", session.history());
+    assert_eq!(requests[2].model.as_str(), config.model.value);
+    assert_eq!(requests[2].max_output_tokens, Some(1024));
+    assert!(requests[2].tools.is_empty());
+    assert!(
+        requests[2].messages[1]
+            .joined_text()
+            .contains("HISTORY_SENTINEL")
+    );
+    let snapshot = runtime.accounted_snapshot(session);
+    let usage = snapshot
+        .usage
+        .records()
+        .iter()
+        .find(|record| record.provenance.purpose.as_deref() == Some("module:second-opinion/module"))
+        .unwrap();
+    assert_eq!(usage.delta.get(CounterKind::Output), 4);
+    host.shutdown().await.unwrap();
 }

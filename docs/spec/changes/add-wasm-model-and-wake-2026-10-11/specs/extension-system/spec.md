@@ -5,8 +5,9 @@
 Smith SHALL offer a sandboxed module a host function that performs one
 bounded, non-streaming, tool-free request on the session's current model
 route, including an installed agent when selected, only when the module's manifest requested the model capability
-and the user granted it. The module MUST NOT receive a credential, choose a
-provider, or exceed the per-call output limit and the per-turn call limit.
+and the user granted it. The module MUST NOT receive a credential or choose a provider. Smith MUST
+enforce the per-turn call limit and returned-payload bound, and MUST pass the
+module's per-call output-token ceiling to provider executors.
 The function MUST be available only while the module is handling a tool
 call. A refused request MUST return a typed error to the module and MUST NOT
 count towards disabling it.

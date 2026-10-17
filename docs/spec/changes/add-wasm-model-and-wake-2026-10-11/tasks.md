@@ -27,20 +27,21 @@ completed_at:
 
 ## 3. Watchers
 
-- [ ] 3.1 `watcher` contribution in `smith-module`, refused at mount without
+- [x] 3.1 `watcher` contribution in `smith-module`, refused at mount without
   `session_notify`.
-- [ ] 3.2 Host-owned poll schedule, bounds, and serialisation with other
+- [x] 3.2 Host-owned poll schedule, bounds, and serialisation with other
   calls; root sessions only; none after a headless turn ends.
-- [ ] 3.3 Delivery through the session inbox with monitor flood limits and
+- [x] 3.3 Delivery through the session inbox with monitor flood limits and
   untrusted-text framing; TUI and headless event surfaces.
 
 ## 4. Examples and docs
 
-- [ ] 4.1 Relay example delivers with a watcher.
+- [x] 4.1 Relay example delivers with a watcher.
 - [ ] 4.2 `second-opinion` example using `complete` and `session_history`.
 - [ ] 4.3 `docs/wasm-modules.md`, CI build lines, end-to-end tests with the
   fake provider.
 
 ## 5. Gate
 
-- [ ] 5.1 fmt, clippy, full tests with `--no-fail-fast`, feature-free build.
+- [ ] 5.1 fmt, clippy, targeted crate tests with `--no-fail-fast`, feature-free
+  build. The full workspace gate runs separately.

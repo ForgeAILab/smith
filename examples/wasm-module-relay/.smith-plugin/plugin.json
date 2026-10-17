@@ -1,0 +1,9 @@
+{
+  "name": "relay",
+  "version": "0.1.0",
+  "description": "A shared mailbox so Smith sessions on one machine can message each other",
+  "modules": [{
+    "wasm": "./module.wasm",
+    "capabilities": { "plugin_data_read": true, "plugin_data_write": true, "session_notify": true }
+  }]
+}

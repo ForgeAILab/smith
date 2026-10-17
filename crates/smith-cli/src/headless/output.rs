@@ -37,6 +37,14 @@ pub(super) struct StreamEnvelope<'a> {
 }
 
 #[derive(Debug, Serialize)]
+pub(super) struct ModuleNotificationEnvelope<'a> {
+    pub(super) schema_version: u32,
+    #[serde(rename = "type")]
+    pub(super) kind: &'static str,
+    pub(super) notification: &'a smith_runtime::client::ModuleNotification,
+}
+
+#[derive(Debug, Serialize)]
 pub(super) struct CacheControllerEnvelope<'a> {
     pub(super) schema_version: u32,
     #[serde(rename = "type")]

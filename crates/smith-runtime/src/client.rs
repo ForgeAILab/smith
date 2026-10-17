@@ -605,15 +605,58 @@ impl From<serde_json::Error> for ClientProjectionError {
 /// Smith client event stream.
 pub type SmithEventStream = Pin<Box<dyn Stream<Item = SmithEvent> + Send>>;
 
+/// Bounded host notification, separate from canonical event sequence numbers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleNotification {
+    /// Root session receiving the notification.
+    pub session: String,
+    /// Installed plugin name, supplied by the host rather than guest text.
+    pub plugin: String,
+    /// Ordered untrusted notices, each at most 4096 bytes.
+    pub notices: Vec<String>,
+    /// Host diagnostic when this module's watcher schedule was stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_reason: Option<String>,
+}
+
+impl ModuleNotification {
+    /// Text for an immediate transcript notice.
+    pub fn display_text(&self) -> String {
+        let text = self.stopped_reason.as_ref().map_or_else(
+            || self.notices.join("\n"),
+            |reason| format!("watcher stopped: {reason}"),
+        );
+        let text: String = text
+            .chars()
+            .filter(|character| {
+                (!character.is_control() || matches!(*character, '\n' | '\t'))
+                    && !matches!(
+                        *character,
+                        '\u{200b}'..='\u{200f}'
+                            | '\u{202a}'..='\u{202e}'
+                            | '\u{2060}'..='\u{206f}'
+                            | '\u{feff}'
+                    )
+            })
+            .collect();
+        format!("{}: {text}", self.plugin)
+    }
+}
+
 /// Event adapter over one canonical Agent Runtime session.
 #[derive(Debug, Clone)]
 pub struct SmithSession {
     canonical: SessionHandle,
+    module_notifications: tokio::sync::broadcast::Sender<ModuleNotification>,
 }
 
 impl SmithSession {
     pub(crate) fn new(canonical: SessionHandle) -> Self {
-        Self { canonical }
+        let (module_notifications, _) = tokio::sync::broadcast::channel(64);
+        Self {
+            canonical,
+            module_notifications,
+        }
     }
 
     /// Stable session identity.
@@ -628,6 +671,17 @@ impl SmithSession {
                 .subscribe()
                 .map(|canonical| SmithEvent::project_or_unknown(&canonical)),
         )
+    }
+
+    /// Subscribes to immediate module notifications without altering canonical events.
+    pub fn module_notifications(&self) -> tokio::sync::broadcast::Receiver<ModuleNotification> {
+        self.module_notifications.subscribe()
+    }
+
+    pub(crate) fn module_notification_sender(
+        &self,
+    ) -> tokio::sync::broadcast::Sender<ModuleNotification> {
+        self.module_notifications.clone()
     }
 }
 
@@ -1327,6 +1381,20 @@ mod tests {
             SmithEvent::project_or_unknown(&canonical),
             SmithEvent::project_or_unknown(&replayed)
         );
+    }
+
+    #[test]
+    fn module_notice_display_keeps_the_host_label_without_terminal_controls() {
+        let notice = ModuleNotification {
+            session: "root".into(),
+            plugin: "fixture-plugin".into(),
+            notices: vec!["line\n\u{1b}[2J\u{202e}untrusted".into()],
+            stopped_reason: None,
+        };
+        let display = notice.display_text();
+        assert!(display.starts_with("fixture-plugin: line\n"));
+        assert!(!display.contains('\u{1b}'));
+        assert!(!display.contains('\u{202e}'));
     }
 
     #[tokio::test]

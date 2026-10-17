@@ -13,6 +13,34 @@ fn hosted_search_requests_are_omitted_from_text_usage() {
 }
 
 #[test]
+fn module_notification_stream_preserves_plugin_and_notice_boundaries() {
+    let notification = smith_runtime::client::ModuleNotification {
+        session: "root".into(),
+        plugin: "fixture-plugin".into(),
+        notices: vec!["first\nline".into(), "second".into()],
+        stopped_reason: None,
+    };
+    let mut stdout = Vec::new();
+    write_json(
+        &mut stdout,
+        &super::super::output::ModuleNotificationEnvelope {
+            schema_version: OUTPUT_SCHEMA_VERSION,
+            kind: "module_notification",
+            notification: &notification,
+        },
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(value["type"], "module_notification");
+    assert_eq!(value["notification"]["plugin"], "fixture-plugin");
+    assert_eq!(
+        value["notification"]["notices"],
+        serde_json::json!(["first\nline", "second"])
+    );
+    assert!(value.get("event").is_none());
+}
+
+#[test]
 fn budget_and_rate_limit_events_have_typed_stream_payloads() {
     use agent_runtime_core::provider::{RateLimitSnapshot, RateLimitWindow};
     use smith_runtime::client::{BudgetCategory, SmithEvent, SmithEventKind};
@@ -786,4 +814,22 @@ fn legacy_v1_result_shapes_remain_frozen_as_migration_fixtures() {
         assert_eq!(value["schema_version"], 1);
         assert!(value.get("interaction_required").is_none());
     }
+}
+
+#[test]
+fn module_usage_in_result_envelope_retains_module_attribution() {
+    let records = vec![UsageRecord {
+        source: UsageSource::SemanticSummary,
+        provenance: Provenance {
+            purpose: Some("module:review/module".into()),
+            ..Provenance::default()
+        },
+        delta: UsageDelta::new()
+            .with(CounterKind::InputUncached, 50)
+            .with(CounterKind::Output, 10),
+    }];
+    let modules = super::super::output::module_usage_output(&records);
+    let value = serde_json::to_value(modules).unwrap();
+    assert_eq!(value["review/module"]["input_uncached"], 50);
+    assert_eq!(value["review/module"]["output"], 10);
 }

@@ -20,10 +20,11 @@ use smith_runtime::host::HostSession;
 use super::background::apply_background_exit_policy;
 use super::fold::HeadlessFold;
 use super::output::{
-    CacheControllerEnvelope, CacheOutput, LifecycleOutput, ReasoningOutput, ResultEnvelope,
-    ResultStatus, StreamEnvelope, SyntheticUsageOutput, UsageOutput, UsageProvenance,
-    account_output, activation_output, approval_diagnostic, child_session_outputs, outcome,
-    recovery_output, terminal_error, write_json, write_text, write_text_projection,
+    CacheControllerEnvelope, CacheOutput, LifecycleOutput, ModuleNotificationEnvelope,
+    ReasoningOutput, ResultEnvelope, ResultStatus, StreamEnvelope, SyntheticUsageOutput,
+    UsageOutput, UsageProvenance, account_output, activation_output, approval_diagnostic,
+    child_session_outputs, outcome, recovery_output, terminal_error, write_json, write_text,
+    write_text_projection,
 };
 use super::signals::{StopSignals, StopState, interrupt};
 use super::{HeadlessBrokers, INTERACTION_REQUIRED_EXIT, OUTPUT_SCHEMA_VERSION, Outcome};
@@ -102,6 +103,7 @@ async fn run_inner(
     let mut events = host.client().events();
     let mut hosted_search_notices = smith_client::notice::HostedSearchNotices::default();
     let mut image_input_notices = smith_client::notice::ImageInputNotices::default();
+    let mut module_notifications = host.client().module_notifications();
     let mut cache_projection = CacheProjection::default();
     if let Ok(history) = host.client_timeline_events().await {
         cache_projection.replay(history);
@@ -146,9 +148,30 @@ async fn run_inner(
                 }
                 continue;
             },
-            event = events.next() => event,
+            notice = module_notifications.recv() => {
+                match notice {
+                    Ok(notice) if format == OutputFormat::StreamJson => {
+                        write_json(stdout, &ModuleNotificationEnvelope {
+                            schema_version: OUTPUT_SCHEMA_VERSION,
+                            kind: "module_notification",
+                            notification: &notice,
+                        })?;
+                    }
+                    Ok(notice) => {
+                        writeln!(stderr, "{}", notice.display_text())?;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                        writeln!(stderr, "{count} module notifications were skipped by the display")?;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {}
+                }
+                continue;
+            }
+            event = events.next() => {
+                let Some(event) = event else { break; };
+                event
+            }
         };
-        let Some(event) = event else { break };
         fold.apply(&event);
 
         if let Some(notice) = hosted_search_notices.observe(&event, session.id().as_str())
@@ -194,6 +217,7 @@ async fn run_inner(
             break;
         }
     }
+    host.stop_module_watchers().await;
 
     let stream_error = fold
         .finish

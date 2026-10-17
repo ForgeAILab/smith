@@ -21,7 +21,9 @@ fn non_fatal_watcher_diagnostics_remain_visible_on_a_mounted_module() {
             compiled_in: true,
             origin: ModuleOrigin::Sandboxed {
                 plugin: "plugin".into(),
-                requested_capabilities: [smith_module::ModuleCapability::SessionNotify].into_iter().collect(),
+                requested_capabilities: [smith_module::ModuleCapability::SessionNotify]
+                    .into_iter()
+                    .collect(),
                 granted_capabilities: Default::default(),
                 capability_details: vec![],
                 withheld_capabilities: vec!["notify the live session and start turns".into()],

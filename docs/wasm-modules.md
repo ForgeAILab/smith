@@ -6,6 +6,10 @@ and appear as **sandboxed**, with plugin provenance. Default builds enable the
 `wasm-modules` feature. Feature-free builds list installed components as **not
 supported in this build** and never instantiate them.
 
+Smith loads both interface 0.1 and 0.2 components. Interface 0.2 adds the
+`complete` host function and a watcher contribution with `poll`. Version 0.1
+components keep their original host interface and behavior.
+
 Version 0.1 offers four contribution kinds: tools, context contributors,
 tool-output processors, and cached status items. It provides no provider
 registration, approval replacement, commands, observers, arbitrary pipeline
@@ -59,6 +63,8 @@ other valid content in the bundle remains available.
 | `workspace_write` | `fs-write` with root `workspace` |
 | `plugin_data_read` | `fs-read` with root `plugin-data`, and `kv-get` |
 | `plugin_data_write` | `fs-write` with root `plugin-data`, and `kv-set` |
+| `model` | Interface 0.2 `complete`: send text to the session's active model provider, with host-owned credentials; no `data_egress` grant needed |
+| `session_notify` | Session notification capability (interface 0.2) |
 | `session_history` | `session-history` for the current session, and history supplied to context contributors (empty without it) |
 | `network` | `http` to exact named hosts over HTTPS, or an explicitly named HTTP origin |
 | `data_egress` | Additional destination grant required by `http`, including requests without a body |
@@ -96,6 +102,10 @@ Only the user file may narrow capabilities, by the id shown in `/modules`:
 [plugins.my-plugin.modules."my-plugin/module"]
 network = false
 workspace_write = false
+model = false
+session_notify = false
+model_max_output_tokens = 1024
+model_max_calls_per_turn = 2
 ```
 
 Endpoint lists retain only their intersection with confirmed grants. `false`
@@ -118,7 +128,34 @@ Default limits are 64 MiB of linear memory per instance, 5 seconds for a tool,
 Arguments and results have a 1 MiB aggregate ceiling, with additional WIT limits
 on strings, lists, identifiers, JSON schemas and nesting. Oversized values fail;
 they are never silently truncated. Status labels have at most 80 Unicode scalar
-values. User-config limit overrides are not offered in this version.
+values. Other execution limit overrides are not offered in this version.
+
+Interface 0.2 `complete` performs one tool-free completion on the session's current
+model route, including its installed CLI agent when selected. It accepts optional
+system text, at most 64 text messages,
+and a positive output token ceiling. The default ceilings are 4096 output tokens
+per call and 4 calls per turn per module. Input must also fit the model's input
+limit, conservatively budgeted as one token per UTF-8 byte plus message framing.
+Only the global user plugin table may
+lower `model_max_output_tokens` or `model_max_calls_per_turn`; zero disables model
+calls. Values above the defaults, project settings and profile settings are ignored
+and reported. An over-limit request returns `limit-reached`, never a silent clamp.
+
+Both routes use Agent Runtime's shared one-shot API. Provider routes receive the
+module's output-token bound; installed agents control their own generation limits.
+For an installed agent, Smith renders the role-labelled conversation as one user
+input and withholds its own tools. CLI usage is recorded with no catalog price.
+All routes retain the call-count, deadline and payload limits. A successful
+truncated answer returns `length`; filtered, empty, tool-calling or unfinished
+answers return a recoverable error.
+
+Only tool calls may use `complete`. Describe, mount, status, poll, context
+contributors and tool-output processors receive `not-available-in-phase`. Model
+calls have a separate 120 second deadline; time inside the host call does not
+consume the guest's 5 second tool deadline. Model refusals and provider errors are
+recoverable host errors and do not count toward disabling the module. Each provider
+attempt is attributed to the installed module id and included in session usage and
+cost, including provider-reported usage before a failed or interrupted response.
 
 A trap, timeout, resource exhaustion or invalid result fails that invocation,
 records a diagnostic, and leaves the session running. A failed context contributor
@@ -127,22 +164,65 @@ runs with empty history and keeps its tools available. If the host cannot fit a
 contributor view within the payload limits, it skips that contribution for the
 request without counting a module failure. A failed output processor preserves
 the original output. Three consecutive invocation failures disable the module
-for the session. Successful
-calls reset the consecutive counter but do not reenable a disabled module.
+for the session. Successful calls reset the consecutive counter but do not reenable a disabled module.
 Interactive rebuilds retain session failure counters. Guest instances are fresh
 on each mount. Calls into one instance are serialized. The host refreshes status
 after mount and tool/pipeline calls; rendering reads the cache without entering
 WASM. Failed loading, including an unknown interface version, leaves a failed row
 and does not prevent session startup.
 
+## Watcher notifications
+
+Interface 0.2 modules can register a `watcher` ID and implement `poll(id)`.
+The installed module must have the confirmed `session_notify` grant. Without
+it Smith refuses the watcher at mount and shows the reason in `/modules`;
+the module's other contributions remain available. Setting
+`session_notify = false` in the user file prevents polling and lists the
+capability as withheld by the user.
+
+The root session's host owns the schedule. The first poll occurs after five
+seconds, with at most one poll every five seconds per module and a 500 ms
+deadline. Multiple watcher IDs share that budget in mount order. Polls use the
+same instance lock as tools and pipeline calls; a busy instance skips the tick
+instead of queuing work. Polls do not add status-refresh calls to their deadline.
+Each poll returns at most eight notices, each at most
+4096 UTF-8 bytes. A module cannot call `complete` from `poll`.
+
+Notices are batched over the monitor policy's 200 ms window. Its flood limits
+are 1,000 events or 1 MiB in a rolling ten-second window per module; exceeding
+either stops that module's watcher schedule. The bounded session inbox may
+also refuse delivery when full, stopping the source rather than building an
+unbounded queue. The TUI displays notices with the installed plugin name;
+headless stream JSON emits `module_notification` envelopes, separate from
+canonical runtime sequence numbers. Other headless formats show notifications
+on stderr. Credential redaction applies to displayed notice text.
+
+The model receives notices as user-role inbox content, explicitly framed as
+untrusted plugin data with JSON preserving notice boundaries. Delivery waits
+for the next safe provider/tool boundary and never interrupts a stream or
+tool result. An idle interactive session takes an ordinary, accounted turn,
+including in approval mode `ask`; that turn may request approval as usual.
+
+Child sessions never poll. Headless polling stops when the turn ends, before
+any background-exit wait; watchers cannot keep the process alive. Shutdown or
+a composition rebuild cancels the old schedule, and the new composition gets
+one fresh schedule. A disabled module is not polled. The first failed,
+oversized or timed-out poll stops that module's schedule and exposes a host
+diagnostic; it does not retry a poisoned instance or fail the session. Poll
+failures still count toward the module's ordinary three-failure disable rule.
+
 ## Authoring
 
 Start from [`examples/wasm-module-hello`](../examples/wasm-module-hello/README.md).
-It is a complete plugin with a Rust cdylib, one tool, one status item, one workspace
+[`examples/wasm-module-relay`](../examples/wasm-module-relay/README.md) is a larger
+one: four tools, a context contributor, a watcher, a status item, and plugin data
+as storage. [`examples/wasm-module-second-opinion`](../examples/wasm-module-second-opinion/README.md)
+combines `complete` and `session_history` for a review by the current model.
+The hello example is a complete plugin with a Rust cdylib, one tool, one status item, one workspace
 read capability, a build script, lockfile, and built component. The guest owns a
 separate Cargo workspace excluded from Smith's workspace.
 
-Implement `smith_module_sdk::Module` (generated `bindings::Guest`) and call
+Implement `smith_module_sdk::Module` and call
 `smith_module_sdk::export!(YourModule)`. SDK tool/status/context builders help
 construct typed declarations. The export wrapper retains a versioned Smith import.
 Unused exports still exist and return an unknown-id error. Build the core module
@@ -155,8 +235,7 @@ bash examples/wasm-module-hello/build.sh
 smith plugin add ./examples/wasm-module-hello
 ```
 
-The interface is `smith:module@0.1.0`, one `module` world. Current bindings accept
-compatible 0.1 patch versions; unsupported major/minor packages report both the
-found package and supported package. There is no previous package yet. When a
-second interface is introduced, supporting its predecessor needs a separate
-adapter. New contribution kinds or host imports require a new package version.
+The supported interfaces are `smith:module@0.1.0` and `smith:module@0.2.0`,
+each with one `module` world. Older 0.1 components load through a compatibility
+adapter and cannot reach the 0.2 functions. Unsupported package versions report
+both the found version and the supported versions.

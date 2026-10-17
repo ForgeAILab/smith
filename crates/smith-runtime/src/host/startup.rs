@@ -594,6 +594,13 @@ pub async fn start_with_modules(
 
     let session_history_registration = runtime.session_history().register(session.clone());
     let client = crate::client::SmithSession::new(session.clone());
+    let module_watchers = watchers::WatcherSchedule::start(
+        &runtime,
+        session.clone(),
+        surface,
+        client.module_notification_sender(),
+        persistence_redactor.clone(),
+    );
     Ok(HostSession {
         runtime,
         model_image_input: config.model_image_input.value,
@@ -614,6 +621,7 @@ pub async fn start_with_modules(
         goal_admission_gate,
         delegation_lifecycle: Mutex::new(delegation_lifecycle),
         cache_controller: Mutex::new(Some(cache_controller)),
+        module_watchers: Mutex::new(module_watchers),
         final_cache_lifecycle: Mutex::new(None),
         resume_capsule,
     })

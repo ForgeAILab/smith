@@ -62,5 +62,5 @@ agent-runtime-mcp = { workspace = true, features = ["http"] }
 agent-runtime-testkit = { workspace = true }
 tempfile = { workspace = true }
 syn = { version = "2", features = ["full", "visit"] }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 toml = { workspace = true }

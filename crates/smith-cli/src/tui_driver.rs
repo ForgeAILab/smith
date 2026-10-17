@@ -21,7 +21,7 @@ use smith_host::{
     RotationRequests,
 };
 use smith_runtime::client::{
-    ChildPhase, SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent,
+    ChildPhase, ModuleNotification, SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent,
 };
 use smith_runtime::factory::RuntimePolicy;
 use smith_runtime::host::HostSession;
@@ -440,6 +440,7 @@ struct TuiLoop<'a> {
     commands: Arc<local_command::file_commands::CommandContext>,
     session: &'a smith_runtime::SessionHandle,
     events: smith_runtime::client::SmithEventStream,
+    module_notifications: tokio::sync::broadcast::Receiver<ModuleNotification>,
     keys: &'a mut crate::screen_runner::TerminalEvents,
     spinner: tokio::time::Interval,
     frame: tokio::time::Interval,
@@ -503,6 +504,22 @@ where
 
             notice = tui.interactions.next_notice() => {
                 tui.on_interaction_notice(notice);
+            }
+
+            notice = tui.module_notifications.recv() => {
+                match notice {
+                    Ok(notice) => {
+                        tui.app.transcript.push_notice(NoticeKind::Monitor, notice.display_text());
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                        tui.app.transcript.push_notice(
+                            NoticeKind::Monitor,
+                            format!("{count} module notifications were skipped by the display"),
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {}
+                }
+                tui.dirty = true;
             }
 
             envelope = tui.events.next() => {
@@ -576,6 +593,7 @@ impl<'a> TuiLoop<'a> {
         } = inputs;
         let session = host.session();
         let events = host.client().events();
+        let module_notifications = host.client().module_notifications();
         let spinner = tokio::time::interval(SPINNER_TICK);
         let frame = tokio::time::interval(FRAME);
         let (local_tx, local_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -634,6 +652,7 @@ impl<'a> TuiLoop<'a> {
             commands,
             session,
             events,
+            module_notifications,
             keys,
             spinner,
             frame,

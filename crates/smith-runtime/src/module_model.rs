@@ -141,7 +141,8 @@ impl ModuleModel for ModuleModelService {
                     .collect()
             };
             let rendered_input = ModuleModelRequest {
-                system: input.system.clone(),
+                // One-shot always supplies a system message, even when empty.
+                system: Some(input.system.clone().unwrap_or_default()),
                 messages: messages
                     .iter()
                     .map(|message| (message.role, message.joined_text()))
