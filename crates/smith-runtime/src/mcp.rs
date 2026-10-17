@@ -655,6 +655,9 @@ impl McpSupervisor {
                     }
                     None => Vec::new(),
                 };
+                if self.retired.is_cancelled() {
+                    return;
+                }
                 self.record_failure(&server.name, bounded(error.to_string()), stderr);
             }
         }

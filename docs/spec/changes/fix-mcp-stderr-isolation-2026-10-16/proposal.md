@@ -27,7 +27,12 @@ server that fails to start explains why only on stderr.
   terminal escapes, keeps only the text after a carriage return, and redacts
   every environment value Smith passed to the server.
 - Each line goes to the session log at `info`. When a server fails to start
-  or exits on its own, the tail is logged at `warn`.
+  or exits on its own, the tail is logged at `warn`. The log subscriber is
+  now installed before the host starts and holds events (up to 1 MiB) until
+  the session's log file exists; servers start before the session id is
+  known, so their startup output was otherwise dropped.
+- An exit is noticed from the closed protocol output or, when an escaped
+  descendant still holds that output open, from a 250 ms process poll.
 - The last few lines are attached to the failure that `/mcp` and the status
   bar already show. A server that exits after connecting is now reported as
   failed with its exit status and stderr, instead of staying `connected`.
@@ -39,9 +44,13 @@ server that fails to start explains why only on stderr.
 
 - Affected specs: `extension-system`
 - Affected code: `crates/smith-runtime/src/mcp/stdio.rs`,
+  `crates/smith-runtime/src/mcp/stderr.rs` (new),
   `crates/smith-runtime/src/mcp.rs`, `crates/smith-cli/src/mcp.rs`,
   `crates/smith-cli/src/local_command/mcp.rs`,
-  `crates/smith-cli/src/runtime_host.rs`, `docs/extensions.md`
+  `crates/smith-cli/src/runtime_host.rs`, `crates/smith-cli/src/logging.rs`,
+  `crates/smith-cli/src/main.rs`, `docs/extensions.md`
+- `/mcp` keeps its one-line-per-server shape: the stderr lines follow the
+  failure reason as ` · stderr: a | b | c`, so no TUI renderer changes.
 - The watchdog itself is unchanged; its contract tests keep their
   expectations.
 - A tool call that fails because the server died still returns the upstream

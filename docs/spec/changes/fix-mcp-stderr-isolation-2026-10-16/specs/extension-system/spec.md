@@ -50,6 +50,21 @@ composer and could not be cleared.
   error
 - **AND** its tools are withdrawn at the next safe boundary
 
+#### Scenario: A server exits while a descendant holds its output
+
+- **GIVEN** a connected stdio MCP server that started a background process
+  sharing its stdout and stderr
+- **WHEN** the server exits with status 4
+- **THEN** the server is reported as failed with that status within about two
+  seconds
+
+#### Scenario: Output before the session log exists
+
+- **GIVEN** `SMITH_LOG=info` and a server that writes to stderr while Smith is
+  still starting the session
+- **WHEN** the session's log file is created
+- **THEN** those lines are in it
+
 #### Scenario: Smith stops a server
 
 - **GIVEN** a connected stdio MCP server

@@ -31,6 +31,8 @@ const CLOSE_GRACE: Duration = Duration::from_secs(3);
 const EXIT_GRACE: Duration = Duration::from_millis(500);
 const REAP_BOUND: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// How often a running server is checked for having exited on its own.
+const EXIT_POLL: Duration = Duration::from_millis(250);
 
 #[cfg(test)]
 static DIRECT_SPAWN_WARNINGS: std::sync::atomic::AtomicUsize =
@@ -73,22 +75,25 @@ impl ServerProcess {
     }
 
     fn reap(&self) -> bool {
+        self.try_reap().unwrap_or_else(|error| {
+            tracing::warn!(%error, "failed to reap MCP server");
+            false
+        })
+    }
+
+    fn try_reap(&self) -> io::Result<bool> {
         let mut child = self.child.lock().expect("MCP child");
         let Some(running) = child.as_mut() else {
-            return true;
+            return Ok(true);
         };
-        match running.try_wait() {
-            Ok(Some(status)) => {
+        Ok(match running.try_wait()? {
+            Some(status) => {
                 child.take();
                 self.output.record_status(status);
                 true
             }
-            Ok(None) => false,
-            Err(error) => {
-                tracing::warn!(%error, "failed to reap MCP server");
-                false
-            }
-        }
+            None => false,
+        })
     }
 
     async fn kill_and_wait(&self) {
@@ -197,10 +202,36 @@ pub(super) fn spawn(
     });
     processes.children.retain(|child| child.strong_count() > 0);
     processes.children.push(Arc::downgrade(&process));
+    watch_exit(Arc::downgrade(&process));
     Ok(StdioTransport {
         io: AsyncRwTransport::new(stdout, stdin),
         process,
     })
+}
+
+/// Notices the process ending even while an escaped descendant still holds
+/// its output open, which would otherwise hide the exit from the transport.
+fn watch_exit(process: Weak<ServerProcess>) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(EXIT_POLL).await;
+            // Never hold the process across a sleep: dropping it is what
+            // stops a server whose connection is gone.
+            let Some(process) = process.upgrade() else {
+                return;
+            };
+            match process.try_reap() {
+                Ok(false) => {}
+                Ok(true) => {
+                    process.output.mark_lost();
+                    return;
+                }
+                // Closing still reports a reap failure; polling must not
+                // repeat it every interval.
+                Err(_) => return,
+            }
+        }
+    });
 }
 
 impl StdioTransport {
@@ -234,21 +265,10 @@ impl Transport<RoleClient> for StdioTransport {
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleClient>> {
         let message = self.io.receive().await;
         // The output closed. Unless Smith is stopping the server, it is gone
-        // on its own; reaping keeps its exit status for the report.
-        if message.is_none() && self.process.output.mark_lost() && !self.process.reap() {
-            let process = Arc::downgrade(&self.process);
-            tokio::spawn(async move {
-                let deadline = tokio::time::Instant::now() + REAP_BOUND;
-                // Never hold the process across a sleep: its drop is what
-                // stops a server whose connection is gone.
-                while let Some(process) = process.upgrade() {
-                    if process.reap() || tokio::time::Instant::now() >= deadline {
-                        break;
-                    }
-                    drop(process);
-                    tokio::time::sleep(POLL_INTERVAL).await;
-                }
-            });
+        // on its own; the exit watch records its status for the report.
+        if message.is_none() {
+            self.process.output.mark_lost();
+            self.process.reap();
         }
         message
     }
@@ -406,6 +426,34 @@ exit 3"#
             output.lines(),
             ["npm notice run npx", "fatal: token [redacted] rejected"]
         );
+    }
+
+    #[tokio::test]
+    async fn an_exit_is_reported_while_an_orphan_still_holds_the_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let orphan = directory.path().join("orphan.pid");
+        let mut transport = spawn_shell(&format!(
+            r#"sleep 30 & echo $! > '{}'
+printf '%s\n' '{{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}}'
+echo 'fatal: dying' >&2
+exit 4"#,
+            orphan.display()
+        ));
+        let output = transport.stderr();
+        tokio::time::timeout(Duration::from_secs(5), transport.receive())
+            .await
+            .unwrap()
+            .expect("server notification");
+        let lost = tokio::time::timeout(Duration::from_secs(5), output.lost()).await;
+        if let Ok(pid) = std::fs::read_to_string(&orphan) {
+            let _ = kill(Pid::from_raw(pid.trim().parse().unwrap()), Signal::SIGKILL);
+        }
+        assert_eq!(
+            lost.expect("the exit must be noticed without an output EOF")
+                .as_deref(),
+            Some("exited unexpectedly (exit status: 4)")
+        );
+        assert_eq!(output.lines(), ["fatal: dying"]);
     }
 
     #[tokio::test]
