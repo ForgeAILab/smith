@@ -1,10 +1,12 @@
-use std::fmt;
 use std::sync::Arc;
+use std::{fmt, future::Future, pin::Pin};
 
 use agent_runtime::harness::{
     ComponentDescriptor, ComponentPhase, ContextContributor, HistoryProjector, ModelInterceptor,
     ToolOutputProcessor, ToolViewResolver, TurnCommitHook,
 };
+use agent_runtime_core::error::RuntimeError;
+use agent_runtime_core::ids::SessionId;
 use agent_runtime_core::observer::EventObserver;
 use agent_runtime_core::tool::Tool;
 
@@ -24,6 +26,13 @@ pub enum ModuleContribution {
     },
     /// Declaration only; command dispatch is host-owned.
     Command(SlashCommand),
+    /// Recorded watcher handle; scheduling and delivery are host-owned.
+    Watcher {
+        /// Stable evidence identity.
+        name: String,
+        /// Pollable source, serialised with this module's other calls.
+        source: Arc<dyn ModuleWatcher>,
+    },
     /// Live bounded declaration; clients own rendering.
     StatusItem {
         /// Stable evidence identity.
@@ -145,6 +154,24 @@ impl StatusItem {
     pub fn severity(&self) -> Option<StatusSeverity> {
         self.severity
     }
+}
+
+/// Untrusted notice returned by a watcher; the sandbox validates byte bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleNotice {
+    /// Text of at most 4096 UTF-8 bytes.
+    pub text: String,
+}
+
+/// A bounded poll result containing at most eight notices.
+pub type ModulePollFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<ModuleNotice>, RuntimeError>> + Send + 'a>>;
+
+/// Passive watcher; the host decides when to poll and where to deliver notices.
+pub trait ModuleWatcher: Send + Sync + fmt::Debug {
+    /// Polls in the host's session, without starting a scheduling loop.
+    /// A busy sandbox instance skips the call and returns an empty result.
+    fn poll(&self, session: &SessionId) -> ModulePollFuture<'_>;
 }
 
 #[cfg(test)]

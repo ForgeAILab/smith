@@ -49,6 +49,8 @@ pub(crate) fn capability(c: smith_module::ModuleCapability) -> w::Capability {
         C::Credential => w::Capability::Credential,
         C::Approval => w::Capability::Approval,
         C::Provider => w::Capability::Provider,
+        C::Model => w::Capability::Model,
+        C::SessionNotify => w::Capability::SessionNotify,
     }
 }
 pub(crate) fn messages(messages: &[Message]) -> Result<Vec<w::Message>, WasmError> {
@@ -216,6 +218,20 @@ pub(crate) fn fragments(
         })
         .collect()
 }
+pub(crate) fn usage_counters(
+    delta: &agent_runtime_core::usage::UsageDelta,
+) -> Result<Vec<w::UsageCounter>, WasmError> {
+    delta
+        .iter()
+        .map(|(kind, value)| {
+            Ok(w::UsageCounter {
+                kind: enum_to_wit(kind)?,
+                value,
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn usage(
     records: &[agent_runtime_core::usage::UsageRecord],
 ) -> Result<Vec<w::UsageRecord>, WasmError> {

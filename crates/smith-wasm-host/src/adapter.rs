@@ -1,5 +1,6 @@
-use crate::bindings::{Module as Guest, smith::module::types as w};
+use crate::bindings::smith::module::types as w;
 use crate::broker::Broker;
+use crate::compatibility::Guest;
 use crate::limits::{bounded, identifier};
 use crate::{WasmEngine, WasmError, WasmLimits};
 use agent_runtime::harness::{
@@ -18,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use wasmtime::Store;
-use wasmtime::component::{Component, Linker};
+use wasmtime::component::Component;
 
 /// Reserved cache subtree below the private host state directory.
 pub const COMPONENT_CACHE_DIRECTORY: &str = "plugins/wasm-cache";
@@ -40,6 +41,8 @@ pub struct CapabilityGrant {
 pub struct WasmModuleConfig {
     /// Plugin recorded as UserManifest provenance.
     pub plugin_name: String,
+    /// Stable installed module id used for model usage attribution.
+    pub module_id: String,
     /// Manifest requests before user narrowing.
     pub requested_capabilities: Vec<CapabilityGrant>,
     /// Effective grants, never wider than requests.
@@ -99,12 +102,7 @@ impl WasmModule {
             if name.starts_with("smith:module/") {
                 versioned = true;
                 let version = name.rsplit('@').next().unwrap_or("");
-                let pieces = version.split('.').collect::<Vec<_>>();
-                if pieces.len() != 3
-                    || pieces[0] != "0"
-                    || pieces[1] != "1"
-                    || pieces[2].parse::<u32>().is_err()
-                {
+                if !matches!(version, "0.1.0" | "0.2.0") {
                     return Err(WasmError::InterfaceVersion { found: name.into() });
                 }
             } else if name.starts_with("wasi:") {
@@ -297,6 +295,7 @@ impl Session {
         if self.child_session {
             self.health = self.parent_health.child_session(&session);
         }
+        self.store.data_mut().model_health = self.health.clone();
         self.store.data_mut().session = Some(session);
     }
     fn new(
@@ -310,14 +309,22 @@ impl Session {
             .is_some_and(|context| context.is_child_session);
         let mut store = Store::new(engine.raw(), Broker::new(config, context));
         store.limiter(|broker| broker);
+        store.epoch_deadline_callback(|store| {
+            let remaining = store
+                .data()
+                .deadline
+                .saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                Err(wasmtime::Trap::Interrupt.into())
+            } else {
+                Ok(wasmtime::UpdateDeadline::Continue(
+                    remaining.as_millis().max(1) as u64,
+                ))
+            }
+        });
+        store.data_mut().deadline = Instant::now() + config.limits.component_deadline;
         store.set_epoch_deadline(config.limits.component_deadline.as_millis().max(1) as u64);
-        let mut linker = Linker::new(engine.raw());
-        Guest::add_to_linker::<_, wasmtime::component::HasSelf<Broker>>(
-            &mut linker,
-            |broker: &mut Broker| broker,
-        )
-        .map_err(|e| WasmError::Load(e.to_string()))?;
-        let guest = Guest::instantiate(&mut store, component, &linker).map_err(|e| {
+        let guest = Guest::instantiate(&mut store, component).map_err(|e| {
             if store.data().memory_denied {
                 WasmError::Memory
             } else if e.downcast_ref::<wasmtime::Trap>().is_some() {
@@ -348,6 +355,7 @@ impl Session {
             .set_epoch_deadline(duration.as_millis().max(1) as u64);
         self.store.data_mut().deadline = Instant::now() + duration;
         self.store.data_mut().failure = None;
+        self.store.data_mut().model_refused = false;
         self.store.data_mut().memory_denied = false;
     }
     fn call<T>(
@@ -369,11 +377,22 @@ impl Session {
         }
         result
     }
+    fn guest_error(&self, error: &w::ModuleError) -> WasmError {
+        if self.store.data().model_refused && bounded(error, &self.store.data().limits).is_ok() {
+            WasmError::ModelRefused
+        } else {
+            guest_error(error, &self.store.data().limits)
+        }
+    }
     fn finish<T>(&mut self, result: Result<T, WasmError>) -> Result<T, WasmError> {
         let status = self.refresh();
         let result = result.and_then(|value| status.map(|()| value));
+        self.record_result(result)
+    }
+    fn record_result<T>(&mut self, result: Result<T, WasmError>) -> Result<T, WasmError> {
         match &result {
             Ok(_) => self.health.record_success(),
+            Err(WasmError::ModelRefused) => self.health.record_success(),
             Err(error) if !matches!(error, WasmError::Disabled(_)) => {
                 tracing::warn!(error = %error, "sandboxed module invocation failed");
                 if self.health.record_failure(error.to_string()) {
@@ -484,6 +503,8 @@ fn mount(
     let mut keys = BTreeSet::new();
     let mut tools = Vec::new();
     let mut components = Vec::new();
+    let mut watchers = Vec::new();
+    session.health.clear_contribution_diagnostics();
     for declaration in declarations {
         match declaration {
             w::Contribution::Tool(tool) => {
@@ -512,6 +533,24 @@ fn mount(
                     return Err(WasmError::MalformedResult("duplicate status id".into()));
                 }
                 session.status_ids.push(id);
+            }
+            w::Contribution::Watcher(id) => {
+                identifier(&id)?;
+                if id.starts_with("runtime.core.") || !keys.insert(("watcher", id.clone())) {
+                    return Err(WasmError::MalformedResult(
+                        "protected/duplicate watcher id".into(),
+                    ));
+                }
+                if config.granted_capabilities.iter().any(|grant| {
+                    grant.capability == ModuleCapability::SessionNotify
+                }) {
+                    watchers.push(id);
+                } else {
+                    session.health.contribution_diagnostic(
+                        &id,
+                        "watcher refused: session_notify capability was not granted",
+                    );
+                }
             }
             w::Contribution::ContextContributor(spec) => components.push((true, spec)),
             w::Contribution::ToolOutputProcessor(spec) => components.push((false, spec)),
@@ -583,6 +622,15 @@ fn mount(
             PipelineComponent::ToolOutputProcessor(component)
         }));
     }
+    for id in watchers {
+        contributions.push(ModuleContribution::Watcher {
+            name: format!("{namespace}.{id}"),
+            source: Arc::new(GuestWatcher {
+                session: session.clone(),
+                id,
+            }),
+        });
+    }
     for id in status_ids {
         contributions.push(ModuleContribution::StatusItem {
             name: format!("{namespace}.{id}"),
@@ -646,6 +694,15 @@ struct GuestTool {
     id: String,
     spec: ToolSpec,
 }
+struct CancelInvocationOnDrop(agent_runtime_core::cancel::Cancellation);
+impl Drop for CancelInvocationOnDrop {
+    fn drop(&mut self) {
+        self.0
+            .cancel(agent_runtime_core::cancel::CancelReason::Host(
+                "module invocation ended".into(),
+            ));
+    }
+}
 #[async_trait::async_trait]
 impl Tool for GuestTool {
     fn spec(&self) -> ToolSpec {
@@ -669,6 +726,11 @@ impl Tool for GuestTool {
         let session = self.session.clone();
         let id = self.id.clone();
         let session_id = ctx.session.clone();
+        let mut invocation = ctx.clone();
+        invocation.cancel = ctx.cancel.child();
+        // spawn_blocking cannot be aborted: dropping invoke must still stop
+        // its async model service and retain any provider-reported usage.
+        let _cancel = CancelInvocationOnDrop(invocation.cancel.clone());
         tokio::task::spawn_blocking(move || {
             let mut session = session.lock().unwrap_or_else(|e| e.into_inner());
             session.bind_session(session_id);
@@ -680,9 +742,21 @@ impl Tool for GuestTool {
                 let deadline = session.store.data().limits.tool_deadline;
                 let output = session
                     .call(deadline, |guest, store| {
-                        guest.call_call_tool(store, &id, &input)
+                        store.data_mut().tool_phase = true;
+                        store.data_mut().invocation = Some(invocation);
+                        let result = guest.call_call_tool(&mut *store, &id, &input);
+                        store.data_mut().tool_phase = false;
+                        store.data_mut().invocation = None;
+                        result
                     })?
-                    .map_err(|error| guest_error(&error, &session.store.data().limits))?;
+                    .map_err(|error| session.guest_error(&error));
+                let output = match output {
+                    Ok(output) => output,
+                    Err(WasmError::ModelRefused) => {
+                        return Ok(ToolOutcome::error("module model request refused"));
+                    }
+                    Err(error) => return Err(error),
+                };
                 if output.len() > session.store.data().limits.payload_bytes {
                     return Err(WasmError::OversizedPayload("tool output".into()));
                 }
@@ -752,7 +826,7 @@ impl ContextContributor for GuestPipeline {
                     .call(deadline, |guest, store| {
                         guest.call_contribute_context(store, &id, &input)
                     })?
-                    .map_err(|error| guest_error(&error, &session.store.data().limits))?;
+                    .map_err(|error| session.guest_error(&error))?;
                 bounded(&patch, &session.store.data().limits)?;
                 Ok(ContextPatch::new(crate::projection::fragments(
                     patch,
@@ -808,7 +882,7 @@ impl ToolOutputProcessor for GuestPipeline {
                     .call(deadline, |guest, store| {
                         guest.call_process_tool_output(store, &id, &input)
                     })?
-                    .map_err(|error| guest_error(&error, &session.store.data().limits))?;
+                    .map_err(|error| session.guest_error(&error))?;
                 bounded(&patch, &session.store.data().limits)?;
                 let result: ToolOutcome =
                     serde_json::from_str(&patch.outcome_json).map_err(|_| {
@@ -871,4 +945,64 @@ fn absolute_location(path: &std::path::Path) -> Result<PathBuf, WasmError> {
         .file_name()
         .ok_or_else(|| WasmError::Load("invalid cache directory".into()))?;
     Ok(absolute_location(parent)?.join(name))
+}
+
+#[derive(Debug)]
+struct GuestWatcher {
+    session: Arc<Mutex<Session>>,
+    id: String,
+}
+impl smith_module::ModuleWatcher for GuestWatcher {
+    fn poll(
+        &self,
+        session_id: &agent_runtime_core::ids::SessionId,
+    ) -> smith_module::ModulePollFuture<'_> {
+        let session = self.session.clone();
+        let id = self.id.clone();
+        let session_id = session_id.clone();
+        Box::pin(async move {
+            let cancel = agent_runtime_core::cancel::Cancellation::new();
+            let _cancel = CancelInvocationOnDrop(cancel.clone());
+            tokio::task::spawn_blocking(move || {
+                let mut session = match session.try_lock() {
+                    Ok(session) => session,
+                    Err(std::sync::TryLockError::WouldBlock) => return Ok(Vec::new()),
+                    Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                };
+                // A queued blocking worker must not enter the guest after
+                // shutdown or the host poll deadline dropped its future.
+                if cancel.is_cancelled() {
+                    return Ok(Vec::new());
+                }
+                session.bind_session(session_id);
+                let result = (|| {
+                    identifier(&id)?;
+                    let deadline = session
+                        .store
+                        .data()
+                        .limits
+                        .component_deadline
+                        .min(Duration::from_millis(500));
+                    let notices = session
+                        .call(deadline, |guest, store| guest.call_poll(store, &id))?
+                        .map_err(|error| session.guest_error(&error))?;
+                    if notices.len() > 8 {
+                        return Err(WasmError::OversizedPayload("notices".into()));
+                    }
+                    bounded(&notices, &session.store.data().limits)?;
+                    Ok(notices
+                        .into_iter()
+                        .map(|notice| smith_module::ModuleNotice { text: notice.text })
+                        .collect())
+                })();
+                // Polls have one 500 ms guest-call budget; refreshing every
+                // status item here would add more guest deadlines to it.
+                session
+                    .record_result(result)
+                    .map_err(|error| RuntimeError::tool(error.to_string()))
+            })
+            .await
+            .map_err(|_| RuntimeError::tool("module host worker failed"))?
+        })
+    }
 }

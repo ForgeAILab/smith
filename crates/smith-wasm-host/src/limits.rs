@@ -14,6 +14,12 @@ pub struct WasmLimits {
     pub status_deadline: Duration,
     /// Aggregate argument/result bytes, no greater than 1 MiB.
     pub payload_bytes: usize,
+    /// Maximum model output tokens per call; never above 4096.
+    pub model_max_output_tokens: u32,
+    /// Maximum model calls per turn per module; never above 4.
+    pub model_max_calls_per_turn: u32,
+    /// Separate model service deadline; never above 120 seconds.
+    pub model_deadline: Duration,
 }
 impl Default for WasmLimits {
     fn default() -> Self {
@@ -23,6 +29,9 @@ impl Default for WasmLimits {
             component_deadline: Duration::from_millis(500),
             status_deadline: Duration::from_millis(5),
             payload_bytes: 1024 * 1024,
+            model_max_output_tokens: 4096,
+            model_max_calls_per_turn: 4,
+            model_deadline: Duration::from_secs(120),
         }
     }
 }
@@ -48,12 +57,15 @@ pub enum WasmError {
     /// Guest requested an ungranted host function.
     #[error("capability denied: {0}")]
     CapabilityDenied(String),
+    /// Guest propagated a recoverable model service refusal.
+    #[error("module model request refused")]
+    ModelRefused,
     /// Repeated failures permanently disabled this session instance.
     #[error("module disabled: {0}")]
     Disabled(String),
     /// Unsupported interface package version.
     #[error(
-        "unsupported module interface {found}; supported smith:module@0.1.0 (compatible 0.1.x; no previous package yet)"
+        "unsupported module interface {found}; supported smith:module@0.1.0 and smith:module@0.2.0"
     )]
     InterfaceVersion {
         /// Found package/version.

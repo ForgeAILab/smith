@@ -1,0 +1,7 @@
+[package]
+name = "smith-module-sdk-v01"
+version = "0.6.0"
+edition = "2024"
+publish = false
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = { version = "=0.46.0", default-features = false, features = ["macros", "realloc", "std"] }

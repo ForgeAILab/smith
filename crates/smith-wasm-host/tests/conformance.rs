@@ -20,6 +20,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 fn fixture(name: &str) -> Vec<u8> {
+    let name = if let Some(legacy) = name.strip_prefix("v0.1/") {
+        legacy.to_owned()
+    } else if name == "unsupported" || name.starts_with("wasi") {
+        name.to_owned()
+    } else {
+        format!("v0.2/{name}")
+    };
     std::fs::read(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures")
@@ -30,6 +37,7 @@ fn fixture(name: &str) -> Vec<u8> {
 fn config(root: &std::path::Path) -> WasmModuleConfig {
     WasmModuleConfig {
         plugin_name: "test".into(),
+        module_id: "test/module".into(),
         requested_capabilities: vec![],
         granted_capabilities: vec![],
         host_state_dir: root.join("host"),
@@ -57,6 +65,7 @@ fn context(root: &std::path::Path, transport: Arc<ReplayTransport>) -> ModuleCon
         transport,
         vision: None,
         main_model_accepts_images: false,
+        model: None,
         image_binding: None,
         session_history: None,
         semantic_summary_enabled: false,
@@ -140,6 +149,14 @@ async fn invoke_in_session(
     action: &str,
     session: &str,
 ) -> Result<ToolOutcome, agent_runtime_core::error::RuntimeError> {
+    invoke_at(tool, action, session, "turn").await
+}
+async fn invoke_at(
+    tool: &dyn Tool,
+    action: &str,
+    session: &str,
+    turn: &str,
+) -> Result<ToolOutcome, agent_runtime_core::error::RuntimeError> {
     let call_id = ToolCallId::new("call");
     let spec = tool.spec();
     let prepared = PreparedToolCall::from_static_effects(
@@ -152,7 +169,7 @@ async fn invoke_in_session(
         prepared,
         &InvocationContext {
             session: SessionId::new(session),
-            turn: Some(TurnId::new("turn")),
+            turn: Some(TurnId::new(turn)),
             call_id,
             request: RequestId::new("request"),
             workspace: Arc::new(MemoryWorkspace::new("/workspace")),
@@ -171,7 +188,9 @@ fn unsupported_version_names_found_and_supported_and_wasi_is_absent() {
     let error =
         WasmModule::load(engine.clone(), fixture("unsupported"), config(root.path())).unwrap_err();
     assert!(matches!(error, WasmError::InterfaceVersion { .. }));
-    assert!(error.to_string().contains("9.0.0") && error.to_string().contains("0.1.x"));
+    assert!(error.to_string().contains("9.0.0"));
+    assert!(error.to_string().contains("smith:module@0.1.0"));
+    assert!(error.to_string().contains("smith:module@0.2.0"));
     for (fixture_name, import) in [
         ("wasi", "wasi:filesystem/types"),
         ("wasi-network", "wasi:sockets/tcp"),
@@ -496,6 +515,48 @@ async fn oversized_history_skips_contribution_without_resetting_or_incrementing_
 }
 
 #[tokio::test]
+async fn context_contributor_runs_without_history_and_survives_an_unfittable_view() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    let contributor = |cfg| {
+        let (_, mut contributions, _) = mount("context", cfg, &ctx);
+        let ModuleContribution::Pipeline(PipelineComponent::ContextContributor(component)) =
+            contributions.remove(0)
+        else {
+            panic!("context contributor");
+        };
+        component
+    };
+    let mut view = ContextView {
+        session: SessionId::new("session"),
+        turn: TurnId::new("turn"),
+        history: Arc::from([Message::user("malformed")]),
+        activation: Fingerprint::of("activation"),
+        state: None,
+    };
+    // Ungranted: the guest runs but never sees the text that would make this
+    // fixture return a protected fragment.
+    let ungranted = contributor(config(root.path()));
+    for _ in 0..4 {
+        let patch = ungranted.contribute(&view).await.unwrap();
+        assert_eq!(patch.fragments.len(), 1);
+    }
+
+    let mut cfg = config(root.path());
+    cfg.granted_capabilities = vec![grant(C::HostRead, &["session-history"], &[])];
+    cfg.requested_capabilities = cfg.granted_capabilities.clone();
+    let granted = contributor(cfg);
+    let long: Vec<_> = (0..257).map(|_| Message::user("turn")).collect();
+    view.history = Arc::from(long);
+    for _ in 0..4 {
+        let patch = granted.contribute(&view).await.unwrap();
+        assert!(patch.fragments.is_empty());
+    }
+    view.history = Arc::from([Message::user("short")]);
+    assert_eq!(granted.contribute(&view).await.unwrap().fragments.len(), 1);
+}
+
+#[tokio::test]
 async fn output_processor_replaces_outcome_and_failure_passes_original() {
     let root = tempfile::tempdir().unwrap();
     let ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
@@ -790,4 +851,564 @@ async fn child_health_is_independent_and_retained_by_actual_session_identity() {
         rebuilt.mount(&ctx).is_err(),
         "a parent rebuild must keep the parent disabled"
     );
+}
+
+#[tokio::test]
+async fn frozen_v01_tools_and_status_still_work() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    let (_, contributions, health) = mount("v0.1/tools", config(root.path()), &ctx);
+    assert_eq!(contributions.len(), 3);
+    let output = invoke(tool(&contributions).as_ref(), "ok").await.unwrap();
+    assert_eq!(output.value, serde_json::Value::Null);
+    assert!(format!("{:?}", output.content).contains("ok"));
+    assert!(!output.is_error);
+    let source = contributions
+        .iter()
+        .find_map(|c| match c {
+            ModuleContribution::StatusItem { source, .. } => Some(source),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(source.current().unwrap().label(), "calls: 1");
+    assert!(health.failure().is_none());
+}
+
+#[tokio::test]
+async fn completion_refusals_are_typed_and_do_not_disable_the_module() {
+    let root = tempfile::tempdir().unwrap();
+    for granted in [false, true] {
+        let transport = Arc::new(ReplayTransport::single(Vec::new()));
+        let ctx = context(root.path(), transport.clone());
+        let mut config = config(root.path());
+        if granted {
+            let grant = CapabilityGrant {
+                capability: C::Model,
+                roots: vec![],
+                hosts: vec![],
+                allow_http: false,
+            };
+            config.requested_capabilities.push(grant.clone());
+            config.granted_capabilities.push(grant);
+        }
+        let (_, contributions, health) = mount("complete", config, &ctx);
+        let tool = tool(&contributions);
+        for _ in 0..4 {
+            let output = invoke(tool.as_ref(), "complete").await.unwrap();
+            let text = serde_json::to_string(&output).unwrap();
+            if granted {
+                assert!(
+                    text.contains("Unavailable") && text.contains("no model service is attached")
+                );
+            } else {
+                // wit-bindgen's Debug output qualifies both enum names.
+                assert!(
+                    text.contains("Err(HostError::CapabilityDenied(Capability::Model))"),
+                    "{text}"
+                );
+            }
+        }
+        assert!(health.failure().is_none());
+        assert!(transport.requests().is_empty());
+    }
+}
+
+fn watcher(contributions: &[ModuleContribution]) -> Arc<dyn smith_module::ModuleWatcher> {
+    contributions
+        .iter()
+        .find_map(|c| match c {
+            ModuleContribution::Watcher { source, .. } => Some(source.clone()),
+            _ => None,
+        })
+        .unwrap()
+}
+
+fn notify_config(root: &std::path::Path) -> WasmModuleConfig {
+    let mut config = config(root);
+    let grant = CapabilityGrant {
+        capability: C::SessionNotify,
+        roots: vec![],
+        hosts: vec![],
+        allow_http: false,
+    };
+    config.requested_capabilities.push(grant.clone());
+    config.granted_capabilities.push(grant);
+    config
+}
+
+#[test]
+fn watcher_without_notify_is_refused_without_losing_other_contributions() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    for requested in [false, true] {
+        let mut config = notify_config(root.path());
+        config.granted_capabilities.clear();
+        if !requested {
+            config.requested_capabilities.clear();
+        }
+        let (_, contributions, health) = mount("complete", config, &ctx);
+        assert!(
+            !contributions
+                .iter()
+                .any(|c| matches!(c, ModuleContribution::Watcher { .. }))
+        );
+        assert!(
+            contributions
+                .iter()
+                .any(|c| matches!(c, ModuleContribution::Tool(_)))
+        );
+        assert!(
+            contributions
+                .iter()
+                .any(|c| matches!(c, ModuleContribution::StatusItem { .. }))
+        );
+        assert!(health.failure().is_none());
+        assert!(health.contribution_diagnostics().iter().any(|reason| {
+            reason.contains("watcher refused") && reason.contains("session_notify")
+        }));
+    }
+}
+
+#[tokio::test]
+async fn watcher_polls_notices_without_a_scheduler() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    let (_, contributions, health) = mount("watcher", notify_config(root.path()), &ctx);
+    let notices = watcher(&contributions)
+        .poll(&SessionId::new("session"))
+        .await
+        .unwrap();
+    assert_eq!(
+        notices,
+        vec![smith_module::ModuleNotice {
+            text: "fixture notice".into()
+        }]
+    );
+    assert!(health.failure().is_none());
+}
+
+#[tokio::test]
+async fn invalid_poll_results_and_deadlines_share_invocation_health() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    for (fixture, expected) in [
+        ("poll-oversize", "payload too large"),
+        ("poll-many", "payload too large"),
+        ("poll-unknown", "UnknownId"),
+        ("poll-loop", "deadline exceeded"),
+    ] {
+        let mut config = notify_config(root.path());
+        config.limits.component_deadline = Duration::from_millis(100);
+        let (_, contributions, health) = mount(fixture, config, &ctx);
+        let watcher = watcher(&contributions);
+        for attempt in 0..3 {
+            let error = watcher.poll(&SessionId::new("session")).await.unwrap_err();
+            // An epoch interrupt poisons the component instance. The first
+            // poll must report the deadline, as tool calls do; later polls
+            // trap with CannotEnterComponent before entering guest code.
+            let expected = if fixture == "poll-loop" && attempt > 0 {
+                "module trapped"
+            } else {
+                expected
+            };
+            assert!(error.to_string().contains(expected), "{fixture}: {error}");
+        }
+        assert!(health.failure().is_some(), "{fixture}");
+        assert!(
+            watcher
+                .poll(&SessionId::new("session"))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("disabled")
+        );
+    }
+}
+
+#[test]
+fn watcher_ids_are_validated_before_publication() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    for fixture_name in ["watcher-duplicate", "watcher-invalid"] {
+        let module = WasmModule::load(
+            WasmEngine::new().unwrap(),
+            fixture(fixture_name),
+            config(root.path()),
+        )
+        .unwrap();
+        assert!(
+            module
+                .mount(&ctx)
+                .unwrap_err()
+                .to_string()
+                .contains("watcher id")
+        );
+    }
+}
+
+#[derive(Debug)]
+struct FakeModel {
+    calls: std::sync::atomic::AtomicU32,
+    delay: Duration,
+    oversized: bool,
+    fail: bool,
+}
+impl smith_module::ModuleModel for FakeModel {
+    fn complete(
+        &self,
+        request: smith_module::ModuleModelRequest,
+        invocation: smith_module::ModuleModelInvocation,
+    ) -> smith_module::ModuleModelFuture<'_> {
+        Box::pin(async move {
+            use agent_runtime_core::usage::{CounterKind, UsageDelta};
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            assert_eq!(request.system.as_deref(), Some("fixture system"));
+            assert_eq!(
+                request.messages,
+                [(
+                    agent_runtime_core::content::Role::User,
+                    "fixture prompt".into()
+                )]
+            );
+            assert_eq!(request.max_output_tokens, 32);
+            assert_eq!(invocation.module_id, "test/module");
+            tokio::time::sleep(self.delay).await;
+            if self.fail {
+                return Err(agent_runtime_core::error::RuntimeError::tool(
+                    "credential-that-must-not-leak",
+                ));
+            }
+            Ok(smith_module::ModuleModelResponse {
+                text: if self.oversized {
+                    "x".repeat(1024 * 1024 + 1)
+                } else {
+                    "model answer".into()
+                },
+                finish_reason: "stop".into(),
+                usage: UsageDelta::new()
+                    .with(CounterKind::InputUncached, 11)
+                    .with(CounterKind::Output, 7),
+            })
+        })
+    }
+}
+fn fake_model(delay: Duration) -> Arc<FakeModel> {
+    Arc::new(FakeModel {
+        calls: std::sync::atomic::AtomicU32::new(0),
+        delay,
+        oversized: false,
+        fail: false,
+    })
+}
+fn model_config(root: &std::path::Path) -> WasmModuleConfig {
+    let mut config = config(root);
+    let grant = CapabilityGrant {
+        capability: C::Model,
+        roots: vec![],
+        hosts: vec![],
+        allow_http: false,
+    };
+    config.requested_capabilities.push(grant.clone());
+    config.granted_capabilities.push(grant);
+    let notify = CapabilityGrant {
+        capability: C::SessionNotify,
+        roots: vec![],
+        hosts: vec![],
+        allow_http: false,
+    };
+    config.requested_capabilities.push(notify.clone());
+    config.granted_capabilities.push(notify);
+    config
+}
+
+#[derive(Debug, Default)]
+struct GatedModel {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+impl smith_module::ModuleModel for GatedModel {
+    fn complete(
+        &self,
+        _: smith_module::ModuleModelRequest,
+        _: smith_module::ModuleModelInvocation,
+    ) -> smith_module::ModuleModelFuture<'_> {
+        Box::pin(async move {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(smith_module::ModuleModelResponse {
+                text: "answer".into(),
+                finish_reason: "stop".into(),
+                usage: agent_runtime_core::usage::UsageDelta::new(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn watcher_skips_a_busy_instance_without_queuing_or_counting_a_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let model = Arc::new(GatedModel::default());
+    let mut ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    ctx.model = Some(model.clone());
+    let (_, contributions, health) = mount("complete", model_config(root.path()), &ctx);
+    let tool = tool(&contributions);
+    let call = tokio::spawn(async move { invoke(tool.as_ref(), "complete").await });
+    model.entered.notified().await;
+    assert!(
+        watcher(&contributions)
+            .poll(&SessionId::new("session"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(health.failure().is_none());
+    model.release.notify_one();
+    assert!(!call.await.unwrap().unwrap().is_error);
+    assert_eq!(
+        watcher(&contributions)
+            .poll(&SessionId::new("session"))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(health.failure().is_none());
+}
+
+#[tokio::test]
+async fn model_calls_suspend_guest_deadline_and_survive_limits_and_remounts() {
+    let root = tempfile::tempdir().unwrap();
+    let model = fake_model(Duration::from_millis(80));
+    let mut ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    ctx.model = Some(model.clone());
+    let config = model_config(root.path());
+    let (module, contributions, health) = mount("complete", config, &ctx);
+    let tool = tool(&contributions);
+    for _ in 0..4 {
+        let output = invoke(tool.as_ref(), "complete").await.unwrap();
+        let text = serde_json::to_string(&output).unwrap();
+        assert!(
+            text.contains("model answer") && text.contains("stop") && text.contains('7'),
+            "{text}"
+        );
+    }
+    for _ in 0..3 {
+        let output = invoke(tool.as_ref(), "complete").await.unwrap();
+        assert!(
+            serde_json::to_string(&output)
+                .unwrap()
+                .contains("LimitReached")
+        );
+    }
+    assert!(health.failure().is_none());
+    let Mounted::TrackedContributions { contributions, .. } = module.mount(&ctx).unwrap() else {
+        panic!("active")
+    };
+    let output = invoke(self::tool(&contributions).as_ref(), "complete")
+        .await
+        .unwrap();
+    assert!(
+        serde_json::to_string(&output)
+            .unwrap()
+            .contains("LimitReached")
+    );
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::Relaxed), 4);
+    let output = invoke_at(tool.as_ref(), "complete", "session", "next-turn")
+        .await
+        .unwrap();
+    assert!(
+        serde_json::to_string(&output)
+            .unwrap()
+            .contains("model answer")
+    );
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::Relaxed), 5);
+}
+
+#[tokio::test]
+async fn model_input_bounds_and_withheld_grant_do_not_call_provider_or_disable() {
+    let root = tempfile::tempdir().unwrap();
+    let model = fake_model(Duration::ZERO);
+    let mut ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    ctx.model = Some(model.clone());
+    let mut config = model_config(root.path());
+    config.limits.model_max_output_tokens = 16;
+    let (_, contributions, health) = mount("complete", config, &ctx);
+    for action in ["complete", "output-limit", "many-messages", "large-input"] {
+        let text =
+            serde_json::to_string(&invoke(tool(&contributions).as_ref(), action).await.unwrap())
+                .unwrap();
+        assert!(
+            text.contains("LimitReached") || text.contains("PayloadTooLarge"),
+            "{text}"
+        );
+    }
+    assert!(health.failure().is_none());
+    let (_, contributions, health) = mount("complete", self::config(root.path()), &ctx);
+    for _ in 0..4 {
+        let text = serde_json::to_string(
+            &invoke(tool(&contributions).as_ref(), "complete")
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            text.contains("CapabilityDenied(Capability::Model)"),
+            "{text}"
+        );
+    }
+    assert!(health.failure().is_none());
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn model_service_deadline_and_errors_are_recoverable_and_secret_safe() {
+    for (delay, oversized, fail, expected) in [
+        (Duration::from_millis(80), false, false, "deadline exceeded"),
+        (Duration::ZERO, true, false, "PayloadTooLarge"),
+        (Duration::ZERO, false, true, "model request failed"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let model = Arc::new(FakeModel {
+            calls: 0.into(),
+            delay,
+            oversized,
+            fail,
+        });
+        let mut ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+        ctx.model = Some(model.clone());
+        let mut config = model_config(root.path());
+        config.limits.model_deadline = Duration::from_millis(20);
+        let (_, contributions, health) = mount("complete", config, &ctx);
+        for _ in 0..3 {
+            let text = serde_json::to_string(
+                &invoke(tool(&contributions).as_ref(), "complete")
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(text.contains(expected), "{text}");
+            assert!(!text.contains("credential-that-must-not-leak"));
+        }
+        assert!(health.failure().is_none());
+    }
+}
+
+#[tokio::test]
+async fn model_is_refused_in_every_non_tool_export() {
+    let root = tempfile::tempdir().unwrap();
+    let model = fake_model(Duration::ZERO);
+    let mut ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    ctx.model = Some(model.clone());
+    // The fixture asserts phase refusals in describe, mount, status and poll.
+    let (_, contributions, health) = mount("complete", model_config(root.path()), &ctx);
+    watcher(&contributions)
+        .poll(&SessionId::new("session"))
+        .await
+        .unwrap();
+    // Its pipeline exports also assert refusal and preserve the supplied outcome.
+    for contribution in &contributions {
+        match contribution {
+            ModuleContribution::Pipeline(PipelineComponent::ContextContributor(component)) => {
+                let view = ContextView {
+                    session: SessionId::new("session"),
+                    turn: TurnId::new("turn"),
+                    history: Arc::from([]),
+                    activation: Fingerprint::of("activation"),
+                    state: None,
+                };
+                component.contribute(&view).await.unwrap();
+            }
+            ModuleContribution::Pipeline(PipelineComponent::ToolOutputProcessor(component)) => {
+                let view = ToolOutputView {
+                    session: SessionId::new("session"),
+                    turn: TurnId::new("turn"),
+                    request: RequestId::new("request"),
+                    call: ToolCall {
+                        id: ToolCallId::new("call"),
+                        name: "probe".into(),
+                        arguments: serde_json::json!({}),
+                    },
+                    state: None,
+                    usage: Arc::from([]),
+                    now: Timestamp(100),
+                };
+                component
+                    .process(&view, ToolOutcome::text("original"))
+                    .await
+                    .unwrap();
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+    assert!(health.failure().is_none());
+}
+
+#[tokio::test]
+async fn model_input_limit_and_lowered_turn_limit_are_enforced() {
+    let root = tempfile::tempdir().unwrap();
+    let model = fake_model(Duration::ZERO);
+    let mut ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    ctx.model = Some(model.clone());
+    ctx.max_input_tokens = 1;
+    let (_, contributions, health) = mount("complete", model_config(root.path()), &ctx);
+    let text = serde_json::to_string(
+        &invoke(tool(&contributions).as_ref(), "complete")
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(text.contains("LimitReached"));
+    assert!(health.failure().is_none());
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+    ctx.max_input_tokens = 32000;
+    let mut config = model_config(root.path());
+    config.limits.model_max_calls_per_turn = 1;
+    let (_, contributions, health) = mount("complete", config, &ctx);
+    invoke(tool(&contributions).as_ref(), "complete")
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        let text = serde_json::to_string(
+            &invoke(tool(&contributions).as_ref(), "complete")
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(text.contains("LimitReached"));
+    }
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert!(health.failure().is_none());
+}
+
+#[tokio::test]
+async fn guest_deadline_still_interrupts_a_loop_after_model_completion() {
+    let root = tempfile::tempdir().unwrap();
+    let model = fake_model(Duration::from_millis(80));
+    let mut ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    ctx.model = Some(model.clone());
+    let (_, contributions, _) = mount("complete", model_config(root.path()), &ctx);
+    let error = invoke(tool(&contributions).as_ref(), "loop-after-complete")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("deadline"), "{error}");
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn propagated_model_refusals_are_tool_errors_without_disabling() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    let (_, contributions, health) = mount("complete", config(root.path()), &ctx);
+    for _ in 0..4 {
+        assert!(
+            invoke(tool(&contributions).as_ref(), "propagate")
+                .await
+                .unwrap()
+                .is_error
+        );
+    }
+    assert!(health.failure().is_none());
 }

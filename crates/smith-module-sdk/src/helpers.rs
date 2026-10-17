@@ -67,3 +67,59 @@ impl ContextPatchBuilder {
         ContextPatch { fragments: self.0 }
     }
 }
+
+/// Builds a text-only completion request; the host independently checks bounds.
+pub struct CompletionRequestBuilder(CompletionRequest);
+impl CompletionRequestBuilder {
+    /// Creates a request with an explicit output token ceiling.
+    pub fn new(max_output_tokens: u32) -> Self {
+        Self(CompletionRequest {
+            system: None,
+            messages: vec![],
+            max_output_tokens,
+        })
+    }
+    /// Sets optional system text.
+    pub fn system(mut self, text: impl Into<String>) -> Self {
+        self.0.system = Some(text.into());
+        self
+    }
+    /// Appends a text message with its role.
+    pub fn message(mut self, role: Role, text: impl Into<String>) -> Self {
+        self.0.messages.push(CompletionMessage {
+            role,
+            text: text.into(),
+        });
+        self
+    }
+    /// Finishes the request without truncating input.
+    pub fn build(self) -> CompletionRequest {
+        self.0
+    }
+}
+
+/// Builds a watcher declaration; declaration never grants notification authority.
+pub struct WatcherBuilder(String);
+impl WatcherBuilder {
+    /// Names the watcher routed through poll.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+    /// Finishes the contribution.
+    pub fn build(self) -> Contribution {
+        Contribution::Watcher(self.0)
+    }
+}
+
+/// Builds an untrusted notice; the host independently checks its byte bound.
+pub struct NoticeBuilder(Notice);
+impl NoticeBuilder {
+    /// Sets the notice text.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self(Notice { text: text.into() })
+    }
+    /// Finishes the notice without truncating text.
+    pub fn build(self) -> Notice {
+        self.0
+    }
+}

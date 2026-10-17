@@ -20,6 +20,11 @@ pub(crate) struct Broker {
     pub session: Option<agent_runtime_core::ids::SessionId>,
     pub runtime: Option<tokio::runtime::Handle>,
     pub deadline: Instant,
+    pub tool_phase: bool,
+    pub model_refused: bool,
+    pub invocation: Option<agent_runtime_core::tool::InvocationContext>,
+    module_id: String,
+    pub model_health: std::sync::Arc<smith_module::ModuleHealth>,
 }
 impl Broker {
     pub(crate) fn new(config: &crate::WasmModuleConfig, context: Option<ModuleContext>) -> Self {
@@ -42,6 +47,11 @@ impl Broker {
             session: None,
             runtime: tokio::runtime::Handle::try_current().ok(),
             deadline: Instant::now(),
+            tool_phase: false,
+            model_refused: false,
+            invocation: None,
+            module_id: config.module_id.clone(),
+            model_health: config.session_health.clone(),
         }
     }
     fn service_call<T: Send + 'static>(
@@ -67,6 +77,11 @@ impl Broker {
             session: self.session.clone(),
             runtime: None,
             deadline: self.deadline,
+            tool_phase: self.tool_phase,
+            model_refused: self.model_refused,
+            invocation: self.invocation.clone(),
+            module_id: self.module_id.clone(),
+            model_health: self.model_health.clone(),
         };
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         std::thread::Builder::new()
@@ -100,7 +115,7 @@ impl Broker {
         self.failure = Some(WasmError::CapabilityDenied(format!("{capability:?}")));
         w::HostError::CapabilityDenied(crate::projection::capability(capability))
     }
-    fn check<T: serde::Serialize>(&mut self, value: &T) -> Result<(), w::HostError> {
+    pub(crate) fn check<T: serde::Serialize>(&mut self, value: &T) -> Result<(), w::HostError> {
         crate::limits::bounded(value, &self.limits).map_err(|error| {
             let host_error = match &error {
                 WasmError::OversizedPayload(field) => {
@@ -561,6 +576,131 @@ impl Broker {
     }
 }
 impl host::Host for Broker {
+    fn complete(
+        &mut self,
+        request: w::CompletionRequest,
+    ) -> Result<w::CompletionResponse, w::HostError> {
+        let started = Instant::now();
+        let result = (|| {
+            // Model refusals are recoverable and never enter the invocation failure pool.
+            if !self.tool_phase {
+                return Err(w::HostError::NotAvailableInPhase);
+            }
+            if !self.grants.iter().any(|grant| grant.capability == C::Model) {
+                return Err(w::HostError::CapabilityDenied(w::Capability::Model));
+            }
+            if request.messages.len() > 64 {
+                return Err(w::HostError::PayloadTooLarge(w::PayloadLimit {
+                    field: "messages".into(),
+                    maximum: 64,
+                }));
+            }
+            if request.max_output_tokens == 0 {
+                return Err(w::HostError::InvalidInput(
+                    "max output tokens must be positive".into(),
+                ));
+            }
+            crate::limits::bounded(&request, &self.limits).map_err(|_| {
+                w::HostError::PayloadTooLarge(w::PayloadLimit {
+                    field: "completion input".into(),
+                    maximum: self.limits.payload_bytes as u32,
+                })
+            })?;
+            if request.max_output_tokens > self.limits.model_max_output_tokens.min(4096) {
+                return Err(w::HostError::LimitReached(
+                    "model output token limit".into(),
+                ));
+            }
+            let model = self
+                .context
+                .as_ref()
+                .and_then(|context| context.model.clone())
+                .ok_or_else(|| w::HostError::Unavailable("no model service is attached".into()))?;
+            let invocation = self
+                .invocation
+                .clone()
+                .ok_or(w::HostError::NotAvailableInPhase)?;
+            let runtime = self
+                .runtime
+                .clone()
+                .ok_or_else(|| w::HostError::Unavailable("async runtime unavailable".into()))?;
+            let request = smith_module::ModuleModelRequest {
+                system: request.system,
+                messages: request
+                    .messages
+                    .into_iter()
+                    .map(|message| {
+                        let role = match message.role {
+                            w::Role::System => agent_runtime_core::content::Role::System,
+                            w::Role::User => agent_runtime_core::content::Role::User,
+                            w::Role::Assistant => agent_runtime_core::content::Role::Assistant,
+                            w::Role::Tool => agent_runtime_core::content::Role::Tool,
+                        };
+                        (role, message.text)
+                    })
+                    .collect(),
+                max_output_tokens: request.max_output_tokens,
+            };
+            if let Some(context) = &self.context
+                && request.input_tokens_upper_bound() > context.max_input_tokens
+            {
+                return Err(w::HostError::LimitReached("model input limit".into()));
+            }
+            if invocation.cancel.is_cancelled() {
+                return Err(w::HostError::Unavailable("model call cancelled".into()));
+            }
+            let sequence = self
+                .model_health
+                .reserve_model_call(
+                    &invocation.session,
+                    invocation.turn.as_ref(),
+                    self.limits.model_max_calls_per_turn,
+                )
+                .ok_or_else(|| w::HostError::LimitReached("model calls per turn limit".into()))?;
+            let attribution = smith_module::ModuleModelInvocation {
+                module_id: self.module_id.clone(),
+                context: invocation,
+                sequence,
+            };
+            let timeout = self.limits.model_deadline.min(Duration::from_secs(120));
+            // The epoch callback consults this extended deadline before it can trap
+            // on re-entry into guest code. Host time is not guest execution time.
+            let result = runtime.block_on(async move {
+                tokio::time::timeout(timeout, model.complete(request, attribution)).await
+            });
+            let response = result
+                .map_err(|_| w::HostError::Unavailable("model service deadline exceeded".into()))?
+                .map_err(|error| match error.kind {
+                    agent_runtime_core::error::ErrorKind::Limit => {
+                        w::HostError::LimitReached("model input limit".into())
+                    }
+                    agent_runtime_core::error::ErrorKind::Serialization => {
+                        w::HostError::PayloadTooLarge(w::PayloadLimit {
+                            field: "completion response".into(),
+                            maximum: self.limits.payload_bytes as u32,
+                        })
+                    }
+                    _ => w::HostError::Unavailable("model request failed".into()),
+                })?;
+            let response = w::CompletionResponse {
+                text: response.text,
+                finish_reason: response.finish_reason,
+                usage: crate::projection::usage_counters(&response.usage)
+                    .map_err(|_| w::HostError::Unavailable("invalid model usage".into()))?,
+            };
+            crate::limits::bounded(&response, &self.limits).map_err(|_| {
+                w::HostError::PayloadTooLarge(w::PayloadLimit {
+                    field: "completion response".into(),
+                    maximum: self.limits.payload_bytes as u32,
+                })
+            })?;
+            Ok(response)
+        })();
+        self.deadline += started.elapsed();
+        self.model_refused |= result.is_err();
+        result
+    }
+
     fn log(&mut self, level: w::LogLevel, message: String) -> Result<(), w::HostError> {
         let result = Broker::log(self, level, message);
         self.result(result)
@@ -588,5 +728,85 @@ impl host::Host for Broker {
     fn session_history(&mut self, limit: u32) -> Result<w::HistorySnapshot, w::HostError> {
         let result = self.service_call(move |broker| Broker::session_history(broker, limit));
         self.result(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model_broker() -> Broker {
+        let grant = CapabilityGrant {
+            capability: C::Model,
+            roots: vec![],
+            hosts: vec![],
+            allow_http: false,
+        };
+        Broker::new(
+            &crate::WasmModuleConfig {
+                plugin_name: "test".into(),
+                module_id: "test/module".into(),
+                requested_capabilities: vec![grant.clone()],
+                granted_capabilities: vec![grant],
+                host_state_dir: ".".into(),
+                data_dir: ".".into(),
+                cache_dir: ".".into(),
+                limits: WasmLimits::default(),
+                session_health: std::sync::Arc::default(),
+                reserved_tool_names: Default::default(),
+            },
+            None,
+        )
+    }
+
+    fn request() -> w::CompletionRequest {
+        w::CompletionRequest {
+            system: None,
+            messages: vec![],
+            max_output_tokens: 32,
+        }
+    }
+
+    #[test]
+    fn model_phase_and_payload_refusals_are_recoverable() {
+        let mut broker = model_broker();
+        assert!(matches!(
+            host::Host::complete(&mut broker, request()),
+            Err(w::HostError::NotAvailableInPhase)
+        ));
+        broker.tool_phase = true;
+        let mut input = request();
+        input.messages = (0..65)
+            .map(|_| w::CompletionMessage {
+                role: w::Role::User,
+                text: "message".into(),
+            })
+            .collect();
+        assert!(matches!(
+            host::Host::complete(&mut broker, input),
+            Err(w::HostError::PayloadTooLarge(w::PayloadLimit {
+                maximum: 64,
+                ..
+            }))
+        ));
+        let mut input = request();
+        input.system = Some("x".repeat(1024 * 1024 + 1));
+        assert!(matches!(
+            host::Host::complete(&mut broker, input),
+            Err(w::HostError::PayloadTooLarge(_))
+        ));
+        let mut input = request();
+        input.system = Some("x".repeat(64 * 1024));
+        assert!(matches!(
+            host::Host::complete(&mut broker, input),
+            Err(w::HostError::Unavailable(_))
+        ));
+        let mut input = request();
+        input.max_output_tokens = 0;
+        assert!(matches!(
+            host::Host::complete(&mut broker, input),
+            Err(w::HostError::InvalidInput(_))
+        ));
+        assert!(broker.failure.is_none());
     }
 }

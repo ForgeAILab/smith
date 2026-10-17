@@ -16,12 +16,19 @@ pub enum ModuleCapability {
     Credential,
     Approval,
     Provider,
+    Model,
+    SessionNotify,
 }
 
 #[derive(Debug, Default)]
 struct HealthState {
     consecutive_failures: u8,
     failure: Option<String>,
+    diagnostics: std::collections::BTreeMap<String, String>,
+    model_calls: std::collections::BTreeMap<
+        agent_runtime_core::ids::SessionId,
+        (agent_runtime_core::ids::TurnId, u32),
+    >,
     child_sessions: std::collections::BTreeMap<String, std::sync::Arc<ModuleHealth>>,
 }
 
@@ -29,6 +36,37 @@ struct HealthState {
 #[derive(Debug, Default)]
 pub struct ModuleHealth(Mutex<HealthState>);
 impl ModuleHealth {
+    /// Records a bounded, non-fatal contribution diagnostic for module listings.
+    pub fn contribution_diagnostic(&self, name: &str, reason: &str) {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if state.diagnostics.len() < 256 || state.diagnostics.contains_key(name) {
+            state.diagnostics.insert(
+                name.chars().take(128).collect(),
+                reason.chars().take(512).collect(),
+            );
+        }
+    }
+
+    /// Clears diagnostics when a fresh composition mounts this module.
+    pub fn clear_contribution_diagnostics(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .diagnostics
+            .clear();
+    }
+
+    /// Safe explanations for refused or stopped contributions, in stable order.
+    pub fn contribution_diagnostics(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .diagnostics
+            .iter()
+            .map(|(name, reason)| format!("{name}: {reason}"))
+            .collect()
+    }
+
     /// Retains an independent child session counter across module rebuilds.
     /// The actual session identity comes from host invocation context, never the guest.
     pub fn child_session(
@@ -42,6 +80,31 @@ impl ModuleHealth {
             .entry(session.as_str().into())
             .or_default()
             .clone()
+    }
+
+    /// Reserves a model attempt in the host's turn, surviving composition rebuilds.
+    /// Refusals do not affect invocation health. Missing turns fail closed.
+    pub fn reserve_model_call(
+        &self,
+        session: &agent_runtime_core::ids::SessionId,
+        turn: Option<&agent_runtime_core::ids::TurnId>,
+        maximum: u32,
+    ) -> Option<u32> {
+        let turn = turn?;
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let (current, count) = state
+            .model_calls
+            .entry(session.clone())
+            .or_insert_with(|| (turn.clone(), 0));
+        if current != turn {
+            *current = turn.clone();
+            *count = 0;
+        }
+        if *count >= maximum.min(4) {
+            return None;
+        }
+        *count += 1;
+        Some(*count)
     }
 
     /// Records permanent session disabling, for example a registration collision.

@@ -53,6 +53,8 @@ impl Budget {
             "value" => 64 * 1024,
             "nodes" => 4096,
             "counters" => 5,
+            "messages" if self.path.contains("CompletionRequest") => 64,
+            "usage" if self.path.contains("CompletionResponse") => 5,
             "fragments" | "headers" => 64,
             "effects" | "permission_upper_bound" | "before" | "after" | "roots" | "hosts" => 32,
             _ => 256,
@@ -72,6 +74,12 @@ impl Budget {
             "parameters_json" => 64 * 1024,
             "arguments_json" | "outcome_json" => 1024 * 1024,
             "text" | "url" | "signature" | "Text" if content => 1024 * 1024,
+            "system" | "text"
+                if self.path.contains("CompletionRequest")
+                    || self.path.contains("CompletionResponse") =>
+            {
+                1024 * 1024
+            }
             _ => 4096,
         };
         if value.len() > maximum {

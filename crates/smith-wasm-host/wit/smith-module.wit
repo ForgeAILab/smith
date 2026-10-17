@@ -174,8 +174,9 @@ interface types {
   }
 
   /// ContextView. activation is the exact opaque Fingerprint string.
-  /// history is exact bounded canonical history, <= 256 messages; if it
-  /// cannot fit, this call fails. Access requires host-read/session-history.
+  /// history is exact bounded canonical history, <= 256 messages, and empty
+  /// without host-read/session-history. If it cannot fit, the host skips this
+  /// call for the request; it is never truncated.
   /// state is only the caller's VersionedSessionState, never another namespace.
   record context-view {
     session: string,

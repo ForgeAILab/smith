@@ -2,9 +2,13 @@
 
 mod contributions;
 mod http;
+mod model;
 pub use http::{
     MODULE_HTTP_BODY_LIMIT, ModuleHttp, ModuleHttpFuture, ModuleHttpMethod, ModuleHttpRequest,
     ModuleHttpResponse,
+};
+pub use model::{
+    ModuleModel, ModuleModelFuture, ModuleModelInvocation, ModuleModelRequest, ModuleModelResponse,
 };
 mod planner;
 mod sandbox;
@@ -22,8 +26,8 @@ use agent_runtime_core::ids::SessionId;
 use agent_runtime_core::provider_credential::{ProviderCredentialSource, ProviderCredentialTarget};
 
 pub use contributions::{
-    MAX_STATUS_LABEL_CHARS, ModuleContribution, PipelineComponent, SlashCommand, StatusItem,
-    StatusSeverity, StatusSource,
+    MAX_STATUS_LABEL_CHARS, ModuleContribution, ModuleNotice, ModulePollFuture, ModuleWatcher,
+    PipelineComponent, SlashCommand, StatusItem, StatusSeverity, StatusSource,
 };
 pub use planner::{
     ModuleBlockReason, ModuleReport, ModuleState, MountPlan, MountedModule, mount_modules,
@@ -150,6 +154,8 @@ pub struct ModuleContext {
     pub transport: Arc<dyn HttpTransport>,
     /// Bounded guest HTTP service, separate from provider POST serialization.
     pub http: Option<Arc<dyn ModuleHttp>>,
+    /// Optional tool-only model service; sandbox mediation remains host-owned.
+    pub model: Option<Arc<dyn ModuleModel>>,
     /// Selected provider image route, if supported.
     pub image_binding: Option<ImageBinding>,
     /// Separate vision route, only resolved for a text-only main model.
@@ -174,6 +180,7 @@ impl fmt::Debug for ModuleContext {
             .debug_struct("ModuleContext")
             .field("setting_keys", &self.settings.keys().collect::<Vec<_>>())
             .field("posture", &self.posture)
+            .field("has_model", &self.model.is_some())
             .field("has_image_binding", &self.image_binding.is_some())
             .field("has_vision", &self.vision.is_some())
             .field("has_web_settings", &self.web.is_some())

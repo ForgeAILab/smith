@@ -6,11 +6,11 @@ completed_at:
 
 ## 1. Interface
 
-- [ ] 1.1 Define `smith:module@0.2.0`: `complete` import and its types, the
+- [x] 1.1 Define `smith:module@0.2.0`: `complete` import and its types, the
   `watcher` contribution variant, the `poll` export, and the notice type.
-- [ ] 1.2 Load 0.1 components through an adapter; conformance fixtures for
+- [x] 1.2 Load 0.1 components through an adapter; conformance fixtures for
   both versions and for an unsupported version.
-- [ ] 1.3 SDK support and builders for the new functions.
+- [x] 1.3 SDK support and builders for the new functions.
 
 ## 2. Model calls
 

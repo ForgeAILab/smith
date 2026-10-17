@@ -3,6 +3,15 @@
 #[allow(missing_docs, unreachable_pub)]
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
+        path: "wit/v0.2",
+        world: "module",
+        additional_derives: [serde::Serialize, serde::Deserialize],
+    });
+}
+
+#[allow(missing_docs, unreachable_pub)]
+pub(crate) mod bindings_v01 {
+    wasmtime::component::bindgen!({
         path: "wit",
         world: "module",
         additional_derives: [serde::Serialize, serde::Deserialize],
@@ -12,6 +21,7 @@ pub(crate) mod bindings {
 mod adapter;
 mod bounds;
 mod broker;
+mod compatibility;
 mod engine;
 mod limits;
 mod projection;
