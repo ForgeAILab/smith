@@ -47,9 +47,12 @@ fn catalog_model_choices_use_the_model_picker_rows_and_compact_limits() {
     assert_eq!(model_limits.max_output_tokens, 32_768);
 }
 
-#[test]
-fn default_model_choices_reuse_the_model_picker_rows_and_stay_selectable() {
-    use smith_config::inventory::{InventoryLimit, ModelInventoryEntry, ModelLimitOrigin};
+/// A current provider model, an unavailable one, and a profile's
+/// provider-qualified installed-agent pair, under three usable providers.
+fn default_choice_inventory() -> SelectionInventory {
+    use smith_config::inventory::{
+        InventoryLimit, ModelInventoryEntry, ModelLimitOrigin, ProviderInventoryEntry,
+    };
     let limit = |value| {
         Some(InventoryLimit {
             value,
@@ -83,25 +86,103 @@ fn default_model_choices_reuse_the_model_picker_rows_and_stay_selectable() {
     unavailable.selectable = false;
     unavailable.disabled_reason = Some("catalog model does not support tool calling".into());
     let agent = model("google", "cli/claude-code/opus");
-    let inventory = SelectionInventory {
-        models: vec![current.clone(), unavailable.clone(), agent.clone()],
-        ..SelectionInventory::default()
+    let provider = |name: &str, active: bool| ProviderInventoryEntry {
+        name: name.into(),
+        kind: Some("fake".into()),
+        adapter_available: true,
+        selectable: true,
+        model_count: 1,
+        active,
+        source: None,
     };
-    let entries = super::model_entries(&inventory);
-    assert_eq!(entries.len(), 3, "setup keeps every listed pair");
-    for (entry, source) in entries.iter().zip([current, unavailable, agent]) {
-        let picker_row = crate::resources::model_entry(source, None);
+    SelectionInventory {
+        models: vec![current, unavailable, agent],
+        providers: vec![
+            provider("google", false),
+            provider("other", false),
+            provider("remote", true),
+        ],
+        ..SelectionInventory::default()
+    }
+}
+
+#[test]
+fn default_model_choices_reuse_the_model_picker_rows_and_stay_selectable() {
+    let inventory = default_choice_inventory();
+    let entries = crate::resources::default_model_entries(&inventory, |_| true);
+    let provider_rows = entries
+        .iter()
+        .filter(|entry| !entry.id.contains("/cli/"))
+        .collect::<Vec<_>>();
+    assert_eq!(provider_rows.len(), 2, "setup keeps every provider pair");
+    for (entry, source) in provider_rows.into_iter().zip(&inventory.models) {
+        let picker_row = crate::resources::model_entry(source.clone(), None);
         assert_eq!(entry.id, picker_row.id);
         assert_eq!(entry.label, picker_row.label);
         assert_eq!(entry.description, picker_row.description);
         assert_eq!(entry.detail, picker_row.detail);
         assert_eq!(entry.active, picker_row.active);
-        // Setup has always let any listed pair become the default.
+        // Setup has always let any listed provider pair become the default.
         assert_eq!(entry.disabled_reason, None);
     }
     assert_eq!(entries[0].label, "example-model");
     assert_eq!(entries[0].description, "remote · 128k context");
     assert!(entries[0].active);
+
+    // The profile's agent pair is not a second row: the agent is listed once,
+    // as `/model` lists it, under the current default's provider.
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.label == "cli/claude-code/opus"),
+        "{entries:#?}"
+    );
+    let opus = entries
+        .iter()
+        .filter(|entry| entry.id.ends_with("/cli/claude-code/opus"))
+        .collect::<Vec<_>>();
+    assert_eq!(opus.len(), 1, "{entries:#?}");
+    assert_eq!(opus[0].id, "remote/cli/claude-code/opus");
+    assert_eq!(opus[0].label, "opus");
+    assert_eq!(opus[0].description, "Claude Code CLI · 200k context");
+}
+
+#[test]
+fn choosing_an_installed_agent_as_default_writes_it_with_the_current_provider() {
+    let inventory = default_choice_inventory();
+    let mut app = SetupApp::new(
+        SetupMode::Menu,
+        super::provider_entries(&inventory),
+        crate::resources::default_model_entries(&inventory, |program| program == "claude"),
+        glm_quick_start(),
+        setup_action_entries(&SetupMode::Menu),
+        setup_prompts(),
+    );
+    let change_default = setup_action_entries(&SetupMode::Menu)
+        .iter()
+        .position(|entry| entry.id == "change-default")
+        .expect("the menu offers Change default");
+    for _ in 0..change_default {
+        app.on_key(setup_key(KeyCode::Down));
+    }
+    app.on_key(setup_key(KeyCode::Enter));
+    for character in "sonnet".chars() {
+        app.on_key(setup_key(KeyCode::Char(character)));
+    }
+    assert!(matches!(
+        app.on_key(setup_key(KeyCode::Enter)),
+        SetupEffect::None
+    ));
+    let SetupEffect::Submit { submission, .. } = app.on_key(setup_key(KeyCode::Enter)) else {
+        panic!("the review submits the chosen default");
+    };
+    let SetupSubmission::ChangeDefault { provider, model } = submission else {
+        panic!("Change default submits a default pair");
+    };
+    assert_eq!(
+        (provider.as_str(), model.as_str()),
+        ("remote", "cli/claude-code/sonnet")
+    );
 }
 
 #[test]

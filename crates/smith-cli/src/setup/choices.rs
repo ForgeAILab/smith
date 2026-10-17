@@ -218,18 +218,8 @@ pub(super) fn provider_entries(inventory: &SelectionInventory) -> Vec<ResourceEn
         .collect()
 }
 
-/// Default-model choices, in the same rows `/model` shows.
-///
-/// Setup has always let any listed pair become the default, so a row `/model`
-/// would mark unavailable stays selectable here.
+/// Default-model choices, in the same rows `/model` shows, installed agents
+/// included.
 pub(super) fn model_entries(inventory: &SelectionInventory) -> Vec<ResourceEntry> {
-    inventory
-        .models
-        .iter()
-        .map(|model| {
-            let mut entry = crate::resources::model_entry(model.clone(), None);
-            entry.disabled_reason = None;
-            entry
-        })
-        .collect()
+    crate::resources::default_model_entries(inventory, crate::resources::program_on_path)
 }

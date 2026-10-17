@@ -372,6 +372,69 @@ pub(crate) fn model_entry(
     }
 }
 
+/// Setup's default-model choices, in the rows `/model` shows.
+///
+/// Setup has always let any listed provider pair become the default, so a
+/// provider row `/model` would mark unavailable stays selectable here.
+/// Installed agents are the `/model` agent rows, installation check included.
+/// A default is written as a provider/model pair, so each agent row's id also
+/// carries the provider it is written with: the current default's, as
+/// `/model` keeps the current provider, or the first usable one.
+pub(crate) fn default_model_entries(
+    inventory: &SelectionInventory,
+    available: impl Fn(&str) -> bool,
+) -> Vec<ResourceEntry> {
+    let mut entries = model_entries(inventory.models.clone(), None)
+        .into_iter()
+        .map(|mut entry| {
+            entry.disabled_reason = None;
+            entry
+        })
+        .collect::<Vec<_>>();
+    let carrier = inventory
+        .providers
+        .iter()
+        .find(|provider| provider.active && provider.adapter_available)
+        .or_else(|| {
+            inventory
+                .providers
+                .iter()
+                .find(|provider| provider.adapter_available)
+        });
+    let Some(carrier) = carrier else {
+        return entries;
+    };
+    let active_agent = inventory
+        .models
+        .iter()
+        .find(|model| {
+            model.active && smith_config::cli_agents::parse_cli_model_id(&model.model).is_some()
+        })
+        .map(|model| model.model.as_str());
+    entries.extend(
+        append_cli_agent_models_with_availability(Vec::new(), active_agent, available)
+            .into_iter()
+            .map(|mut entry| {
+                entry.id = format!("{}/{}", carrier.name, entry.id);
+                entry
+            }),
+    );
+    entries
+}
+
+/// Whether a program is present and executable on `PATH`.
+pub(crate) fn program_on_path(program: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|directory| {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(directory.join(program))
+            .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    })
+}
+
 fn child_agent_entries(
     profile_inventory: &[ProfileInventoryEntry],
     agents: &ResolvedAgent,
@@ -671,23 +734,23 @@ fn append_cli_agent_models(
     models: Vec<ResourceEntry>,
     harness: Option<&smith_config::resolve::ResolvedHarness>,
 ) -> Vec<ResourceEntry> {
-    append_cli_agent_models_with_availability(models, harness, program_on_path)
+    let active = harness.map(|harness| {
+        smith_config::cli_agents::cli_model_id(&harness.kind.value, &harness.model.value)
+    });
+    append_cli_agent_models_with_availability(models, active.as_deref(), program_on_path)
 }
 
 fn append_cli_agent_models_with_availability(
     models: Vec<ResourceEntry>,
-    harness: Option<&smith_config::resolve::ResolvedHarness>,
+    active_cli_model: Option<&str>,
     available: impl Fn(&str) -> bool,
 ) -> Vec<ResourceEntry> {
     let mut models = models;
-    let active_cli_model = harness.map(|harness| {
-        smith_config::cli_agents::cli_model_id(&harness.kind.value, &harness.model.value)
-    });
     for entry in smith_config::cli_agents::CLI_AGENTS {
         let installed = available(entry.program);
         for model in entry.models {
             let id = smith_config::cli_agents::cli_model_id(entry.kind, model);
-            let active = active_cli_model.as_deref() == Some(id.as_str());
+            let active = active_cli_model == Some(id.as_str());
             // The limits are Smith's own bookkeeping, not the agent's: it owns
             // its context, so they are labelled as the default they are rather
             // than dressed up as advertised capability.
@@ -1197,19 +1260,6 @@ pub(super) fn abbreviate(path: &str, home: &str) -> String {
     }
 }
 
-/// Whether a program is present and executable on `PATH`.
-fn program_on_path(program: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|directory| {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::metadata(directory.join(program))
-            .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{append_connectable_connections, connection_entries, model_entries};
@@ -1292,6 +1342,83 @@ kind = "fake"
                 .iter()
                 .any(|row| row.id == "cli/claude-code/opus" && row.active)
         );
+    }
+
+    #[test]
+    fn setup_default_rows_list_agents_as_the_model_picker_does() {
+        let provider = |name: &str, active: bool, adapter_available: bool| {
+            ProviderInventoryEntry {
+                name: name.into(),
+                kind: Some("fake".into()),
+                adapter_available,
+                selectable: adapter_available,
+                model_count: 1,
+                active,
+                source: None,
+            }
+        };
+        let agent_pair = ModelInventoryEntry {
+            provider: "google".into(),
+            model: "cli/claude-code/sonnet".into(),
+            label: "cli/claude-code/sonnet".into(),
+            context_tokens: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            output_budget: None,
+            context_windows: Vec::new(),
+            tool_call: None,
+            reasoning: None,
+            structured_output: None,
+            catalog_provider: None,
+            catalog_revision: None,
+            catalog_retrieved_at_ms: None,
+            profiles: vec!["cc".into()],
+            selectable: true,
+            disabled_reason: None,
+            active: true,
+        };
+        let inventory = smith_config::inventory::SelectionInventory {
+            models: vec![agent_pair],
+            providers: vec![provider("google", true, true), provider("zeta", false, true)],
+            ..Default::default()
+        };
+        let claude_only = |program: &str| program == "claude";
+        let picker = super::append_cli_agent_models_with_availability(
+            Vec::new(),
+            Some("cli/claude-code/sonnet"),
+            claude_only,
+        );
+        let setup = super::default_model_entries(&inventory, claude_only);
+        assert_eq!(setup.len(), picker.len(), "one row per agent model");
+        for (setup, picker) in setup.iter().zip(&picker) {
+            assert_eq!(setup.id, format!("google/{}", picker.id));
+            assert_eq!(setup.label, picker.label);
+            assert_eq!(setup.description, picker.description);
+            assert_eq!(setup.detail, picker.detail);
+            assert_eq!(setup.active, picker.active);
+            assert_eq!(setup.disabled_reason, picker.disabled_reason);
+        }
+        assert!(
+            setup
+                .iter()
+                .any(|row| row.id == "google/cli/claude-code/sonnet" && row.active)
+        );
+        assert!(setup.iter().any(|row| {
+            row.id.starts_with("google/cli/codex/")
+                && row.disabled_reason.as_deref() == Some("`codex` is not on PATH")
+        }));
+
+        // An unusable current provider hands the agent rows to the first
+        // usable one; with none, setup cannot write an agent default at all.
+        let mut fallback = inventory.clone();
+        fallback.providers = vec![provider("google", true, false), provider("zeta", false, true)];
+        assert!(
+            super::default_model_entries(&fallback, claude_only)
+                .iter()
+                .all(|row| row.id.starts_with("zeta/cli/"))
+        );
+        fallback.providers = vec![provider("google", true, false)];
+        assert!(super::default_model_entries(&fallback, claude_only).is_empty());
     }
 
     #[test]
