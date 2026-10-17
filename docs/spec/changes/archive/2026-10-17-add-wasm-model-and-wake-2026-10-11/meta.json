@@ -1,0 +1,13 @@
+{
+  "change_id": "add-wasm-model-and-wake",
+  "change_ref": "add-wasm-model-and-wake-2026-10-11",
+  "created_at": "2026-10-11T21:09:05Z",
+  "updated_at": "2026-10-17T20:03:08Z",
+  "status": "proposed",
+  "depends_on": [
+    "agent-runtime one-shot call change (proposal pending, runtime v0.5.0)"
+  ],
+  "external_dependencies": [],
+  "source_branch": "wip/module-kernel-worktree-2026-10-11 (663a5ed)",
+  "completed_at": "2026-10-17T06:42:09Z"
+}

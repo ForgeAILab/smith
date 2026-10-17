@@ -704,7 +704,11 @@ payload, or malformed result MUST fail only that call, MUST NOT end the
 session or corrupt canonical session state, and MUST be recorded as a
 diagnostic. After repeated consecutive failures Smith SHALL disable the
 module for the rest of the session and report it as failed. A failing
-pipeline contribution MUST contribute nothing for that phase.
+pipeline contribution MUST contribute nothing for that phase. A context
+contributor SHALL run without the session-history capability, and it then
+receives an empty history. A view that Smith itself cannot fit within the
+payload limits MUST skip that contribution and MUST NOT count as a failure
+of the module.
 
 #### Scenario: Tool call times out
 
@@ -725,6 +729,22 @@ pipeline contribution MUST contribute nothing for that phase.
 - **GIVEN** a WASM context contributor that returns a malformed patch
 - **WHEN** the provider request is assembled
 - **THEN** the request is assembled without that contribution
+
+#### Scenario: Contributor without history access
+
+- **GIVEN** a WASM context contributor whose module was not granted session
+  history
+- **WHEN** the provider request is assembled
+- **THEN** the contributor runs with an empty history
+- **AND** its tools stay available
+
+#### Scenario: History too large to pass
+
+- **GIVEN** a granted WASM context contributor and a session history beyond
+  the payload limits
+- **WHEN** the provider request is assembled
+- **THEN** the request is assembled without that contribution
+- **AND** the module is not disabled
 
 ### Requirement: WASM modules ship inside plugin bundles
 
@@ -749,3 +769,212 @@ MUST display the new capability before confirmation.
 - **GIVEN** an installed plugin whose WASM module had no file access
 - **WHEN** an update requests workspace write access
 - **THEN** the plugin is withheld until the user confirms the new capability
+
+### Requirement: Sandboxed modules can call the session's model
+
+Smith SHALL offer a sandboxed module a host function that performs one
+bounded, non-streaming, tool-free request on the session's current model
+route, including an installed agent when selected, only when the module's manifest requested the model capability
+and the user granted it. The module MUST NOT receive a credential or choose a provider. Smith MUST
+enforce the per-turn call limit and returned-payload bound, and MUST pass the
+module's per-call output-token ceiling to provider executors.
+The function MUST be available only while the module is handling a tool
+call. A refused request MUST return a typed error to the module and MUST NOT
+count towards disabling it.
+
+Smith SHALL use the shared one-shot executor. Provider routes SHALL receive
+the requested output-token ceiling; installed-agent routes use the CLI's own
+generation limits and SHALL receive the role-labelled conversation rendered
+as one user input. Both routes remain subject to the host deadline, call-count
+and ABI payload limits. A truncated successful answer SHALL return finish
+reason `length`; filtered, empty, tool-calling or unfinished answers SHALL
+return a recoverable error. Installed-agent usage SHALL remain unpriced.
+
+#### Scenario: Granted module asks the model
+
+- **GIVEN** a WASM module granted the model capability
+- **WHEN** its tool calls the model function with a prompt
+- **THEN** the request is sent on the session's current provider and model
+- **AND** the module receives the response text and usage
+- **AND** no credential is visible to the module
+
+#### Scenario: Ungranted module asks the model
+
+- **GIVEN** a WASM module without the model capability
+- **WHEN** its tool calls the model function
+- **THEN** the function returns an error naming the missing capability
+- **AND** no provider request is made
+
+#### Scenario: Per-turn limit reached
+
+- **GIVEN** a WASM module that has made the permitted number of model calls
+  in the current turn
+- **WHEN** it calls the model function again
+- **THEN** the call is refused with a limit error
+- **AND** the module is not disabled
+
+#### Scenario: Model call outside a tool call
+
+- **GIVEN** a WASM module granted the model capability
+- **WHEN** its context contributor calls the model function
+- **THEN** the call is refused
+
+### Requirement: Sandboxed modules can notify a session
+
+Smith SHALL let a sandboxed module contribute a watcher that Smith polls at
+a host-owned bounded interval while a root session is live, only when the
+module was granted the session-notify capability. Notices returned by a
+watcher SHALL be delivered through the session inbox under the same rules as
+monitor notifications: shown to the user without a prompt, supplied to the
+model at the next safe boundary, and never interrupting a stream or tool
+result. Notices MUST be bounded in count and size, MUST be labelled with the
+plugin that produced them, and MUST be presented to the model as untrusted
+text.
+
+#### Scenario: Notice reaches an idle session
+
+- **GIVEN** an idle interactive session with a granted watcher
+- **WHEN** a poll returns one notice
+- **THEN** the notice is shown with its plugin name
+- **AND** the session takes a turn with the notice supplied to the model
+
+#### Scenario: Notice arrives during a stream
+
+- **GIVEN** the agent is streaming a response
+- **WHEN** a poll returns a notice
+- **THEN** the stream is not interrupted
+- **AND** the notice is supplied at the next safe boundary
+
+#### Scenario: Watcher without the capability
+
+- **GIVEN** a WASM module that contributes a watcher without the
+  session-notify capability
+- **WHEN** the module is mounted
+- **THEN** the watcher is refused with a reason
+- **AND** the module's other contributions remain available
+
+#### Scenario: Headless run ends
+
+- **GIVEN** a headless run with a granted watcher
+- **WHEN** its turn completes
+- **THEN** the process exits without waiting for further polls
+
+### Requirement: Interface versions coexist
+
+Smith SHALL load modules built against interface 0.1 and interface 0.2. A
+0.1 module MUST behave as it did before and MUST NOT be able to reach
+functions introduced in 0.2.
+
+#### Scenario: Older module still loads
+
+- **GIVEN** an installed module built against interface 0.1
+- **WHEN** a Smith that supports 0.2 starts a session
+- **THEN** the module mounts and its tools work as before
+
+### Requirement: MCP server stderr never reaches the terminal
+
+Smith SHALL capture the stderr of every stdio MCP server it starts, including
+the watchdog's own messages and anything a descendant of the server writes,
+and MUST NOT let any of it reach Smith's terminal in an interactive or a
+headless run. Smith SHALL drain that output continuously so a server never
+blocks on a full pipe, and SHALL keep only a bounded tail per server with
+terminal escape sequences removed and every environment value it passed to
+the server redacted. Smith SHALL write that output to the session log. When
+a server fails to start or exits on its own, Smith SHALL report the failure
+with the last lines of that tail where the user already sees MCP status, and
+normal output from a healthy server MUST NOT produce any notice. Found by the
+owner on 2026-10-16: `npm notice` lines from `npx` were painted over the
+composer and could not be cleared.
+
+#### Scenario: A healthy server writes to stderr
+
+- **GIVEN** a trusted stdio MCP server that writes `npm notice` lines to
+  stderr and then connects
+- **WHEN** an interactive session is open
+- **THEN** nothing the server wrote appears on the terminal
+- **AND** the server is listed as connected with no stderr detail
+- **AND** the lines are written to the session log at `info` level
+
+#### Scenario: A server fails to start
+
+- **GIVEN** a trusted stdio MCP server that writes
+  `cannot find module` to stderr and exits with status 1
+- **WHEN** Smith tries to connect it
+- **THEN** `/mcp` lists the server as failed
+- **AND** the failure includes `cannot find module`
+
+#### Scenario: A headless run with a failing server
+
+- **GIVEN** the same failing server
+- **WHEN** `smith -p` runs with `--output-format json`
+- **THEN** Smith's stdout carries only the JSON envelope and its stderr does
+  not contain the server's output
+- **AND** the result's `diagnostics` name the server and include its last
+  stderr line
+
+#### Scenario: A connected server exits
+
+- **GIVEN** a connected stdio MCP server
+- **WHEN** the server exits on its own with status 3 after writing an error
+  to stderr
+- **THEN** the server is reported as failed with its exit status and that
+  error
+- **AND** its tools are withdrawn at the next safe boundary
+
+#### Scenario: A server exits while a descendant holds its output
+
+- **GIVEN** a connected stdio MCP server that started a background process
+  sharing its stdout and stderr
+- **WHEN** the server exits with status 4
+- **THEN** the server is reported as failed with that status within about two
+  seconds
+
+#### Scenario: Output before the session log exists
+
+- **GIVEN** `SMITH_LOG=info` and a server that writes to stderr while Smith is
+  still starting the session
+- **WHEN** the session's log file is created
+- **THEN** those lines are in it
+
+#### Scenario: Smith stops a server
+
+- **GIVEN** a connected stdio MCP server
+- **WHEN** Smith closes the connection on reconfigure or exit
+- **THEN** the server is not reported as failed
+
+#### Scenario: A server prints its own credential
+
+- **GIVEN** a server started with `API_TOKEN` resolved from a credential
+- **WHEN** the server writes that token's value to stderr
+- **THEN** the session log and the reported failure show it redacted
+
+### Requirement: Readable WASM module ids
+
+A WASM module's id SHALL be its plugin name, `/`, and its component path
+without the `.wasm` suffix, when that value fits the module id alphabet and
+length. Otherwise it SHALL be `wasm.` followed by hashes of the plugin name
+and component path. Both forms SHALL be stable across installs. The hashed
+form SHALL remain an alias for a module that has a readable id, so install
+records, capability grants, and configuration written before this change
+keep applying without reinstalling. Listings and diagnostics SHALL show the
+readable id.
+
+#### Scenario: Readable id
+
+- **GIVEN** plugin `relay` with component `modules/mailbox.wasm`
+- **WHEN** the plugin is installed
+- **THEN** the module id is `relay/modules/mailbox`
+
+#### Scenario: Unrepresentable name
+
+- **GIVEN** a plugin or component path with characters outside the module
+  id alphabet
+- **WHEN** the plugin is installed
+- **THEN** the module id is the hashed form
+
+#### Scenario: Install from before the change
+
+- **GIVEN** a module installed and granted capabilities under its hashed id
+- **WHEN** Smith starts after upgrading
+- **THEN** the module loads with the same grants under its readable id
+- **AND** a configuration entry naming the hashed id still applies to it

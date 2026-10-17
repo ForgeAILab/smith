@@ -1502,25 +1502,34 @@ endpoint shape, or model-name prefix.
 Smith SHALL select the advisor for a main profile from, in increasing
 precedence, the top-level `advisor` key and the profile's own `advisor` key
 (inherited through `extends`). The value SHALL be a profile name, a
-`provider/model` reference, or `false`; `false` SHALL disable the advisor for
-that profile. Because profile names never contain `/`, the first `/` SHALL
-separate the provider from a model id that may itself contain `/`.
+`provider/model` reference, an installed agent `cli/<kind>/<model>`, or
+`false`. `false` SHALL disable the advisor for that profile. A value starting
+with `cli/` whose `<kind>` is in the installed-agent catalog SHALL be an
+installed agent, never a provider named `cli`. Otherwise, because profile
+names never contain `/`, the first `/` SHALL separate the provider from a
+model id that may itself contain `/`.
 
 A profile advisor SHALL resolve with that profile's provider, model, settings,
 and instructions, whatever its `use` placements. A model advisor SHALL resolve
 with the top-level settings and its `[models."<provider>/<model>"]` entry and
-no profile's settings or instructions. `use` SHALL NOT accept an `advisor`
-placement.
+no profile's settings or instructions. An installed-agent advisor SHALL
+resolve as a model advisor whose model is the agent id. Its provider SHALL be
+the main session's resolved provider, which supplies identity and limits and
+is never called. Its `[harness.<kind>]` settings SHALL apply. `use` SHALL NOT
+accept an `advisor` placement.
 
-Nothing SHALL advise itself: a top-level default naming the active profile
-SHALL be skipped for that profile, a profile-level key naming the profile
-itself SHALL be rejected, and a model advisor naming the session's resolved
-provider and model SHALL be skipped. A profile's own advisor selection SHALL
-be ignored while it serves as an advisor, because an advisor request carries
-no tools. Smith SHALL reject, before credential or provider construction, an
-advisor naming an unknown profile, an undeclared provider, or a malformed
-value. `smith config explain advisor` SHALL report the winner and every
-overridden source.
+Nothing SHALL advise itself. A top-level default naming the active profile
+SHALL be skipped for that profile. A profile-level key naming the profile
+itself SHALL be rejected. A model or installed-agent advisor naming the
+session's resolved model SHALL be skipped. A profile's own advisor selection
+SHALL be ignored while it serves as an advisor, because an advisor request
+carries no tools. Before credential or provider construction, Smith SHALL
+reject an advisor that names an unknown profile, an undeclared provider, an
+unknown installed-agent kind, or a malformed value. `smith config explain
+advisor` SHALL report the winner and every overridden source.
+
+A `vision` target SHALL NOT be an installed agent; Smith SHALL reject one,
+saying an installed agent cannot serve image requests.
 
 #### Scenario: Top-level profile default
 
@@ -1538,6 +1547,30 @@ overridden source.
 - **THEN** the advisor resolves provider `chatgpt` and model `gpt-6.1-sol`
 - **AND** the advisor request is not capped by `code`'s `max_output_tokens`
 - **AND** carries no profile instructions
+
+#### Scenario: Installed-agent reference
+
+- **GIVEN** top-level `advisor = "cli/claude-code/opus"` and no provider
+  named `cli`
+- **AND** profile `code` resolves provider `chatgpt`
+- **WHEN** profile `code` starts
+- **THEN** configuration loads
+- **AND** the advisor resolves model `cli/claude-code/opus` with provider
+  `chatgpt`
+- **AND** the advisor's harness is `claude-code` with model `opus`
+
+#### Scenario: Unknown installed-agent kind
+
+- **GIVEN** `advisor = "cli/emacs/sonnet"` and no provider named `cli`
+- **WHEN** configuration loads
+- **THEN** Smith reports an unknown provider `cli` at the `advisor` key
+
+#### Scenario: Installed agent as vision target
+
+- **GIVEN** `vision = "cli/claude-code/opus"`
+- **WHEN** configuration loads
+- **THEN** Smith rejects the `vision` key, saying an installed agent cannot
+  serve image requests
 
 #### Scenario: Profile disables the advisor
 
@@ -1560,6 +1593,13 @@ overridden source.
   `gpt-6.1-sol` starts as the main profile
 - **THEN** configuration loads and that session has no advisor
 
+#### Scenario: Installed-agent advisor names the main binding
+
+- **GIVEN** top-level `advisor = "cli/claude-code/opus"`
+- **WHEN** a profile whose model is `cli/claude-code/opus` starts as the
+  main profile
+- **THEN** configuration loads and that session has no advisor
+
 #### Scenario: Unknown profile
 
 - **GIVEN** `advisor = "sool"` and a profile named `sol`
@@ -1576,10 +1616,14 @@ overridden source.
 
 ### Requirement: Fixed skill directory layout
 
-Smith SHALL read skills from `skills/<name>/SKILL.md` beneath the user state
-root and beneath the project's `.smith/` directory, with the containing
-directory's name as the skill's name. The layout MUST be fixed rather than
-configurable, and Smith MUST NOT create either directory.
+Smith SHALL read skills from `skills/<name>/SKILL.md` in four fixed places,
+with the containing directory's name as the skill's name. For the user layer
+these are beneath the user state root (`<home>/.smith`) and beneath
+`<home>/.agents`. For the workspace layer they are beneath the project's
+`.smith/` directory and beneath the project's `.agents/` directory. Within
+one layer, the `.smith` location SHALL win over the `.agents` location for
+the same name. The layout MUST be fixed rather than configurable, and Smith
+MUST NOT create any of these directories.
 
 #### Scenario: Author adds a user skill
 
@@ -1587,6 +1631,19 @@ configurable, and Smith MUST NOT create either directory.
   root with a `description` in its frontmatter
 - **WHEN** Smith next starts in any project
 - **THEN** the skill is available in that session
+
+#### Scenario: Skill installed in the shared user location
+
+- **GIVEN** a skill installer wrote `<home>/.agents/skills/pdf/SKILL.md`
+- **WHEN** Smith next starts in any project
+- **THEN** skill `pdf` is available in that session from the user layer
+
+#### Scenario: Skill installed in the shared project location
+
+- **GIVEN** the project contains `.agents/skills/deploy/SKILL.md`
+- **WHEN** a session starts in that project
+- **THEN** skill `deploy` is listed in the workspace layer
+- **AND** it activates only after its content is trusted
 
 #### Scenario: Layout is not configurable
 
@@ -2711,3 +2768,34 @@ malformed file MUST still fail loudly.
   string `kind` or `label`
 - **WHEN** Smith reads the trust file
 - **THEN** Smith reports the trust file as unreadable
+
+### Requirement: Model and notify capabilities are reviewed and narrowable
+
+The plugin manifest SHALL accept `model` and `session_notify` as module
+capability keys. Each MUST be shown in the install and update review, MUST
+be granted only by the confirmed install record, and MUST be withholdable
+per module from the user file. The user file SHALL be able to lower a
+module's per-call output limit and per-turn call limit, and no
+configuration layer may raise them above the built-in defaults.
+
+#### Scenario: Install shows the model capability
+
+- **GIVEN** a plugin whose module requests `model`
+- **WHEN** the user installs it
+- **THEN** the review states the module can send data to the active model
+  provider
+- **AND** nothing is installed until the user confirms
+
+#### Scenario: User withholds notify
+
+- **GIVEN** an installed module granted `session_notify`
+- **WHEN** the user file sets that capability to false for the module
+- **THEN** its watcher is not polled
+- **AND** the capability is listed as withheld by the user
+
+#### Scenario: Project file tries to raise a limit
+
+- **GIVEN** a project file that sets a module's per-turn call limit above
+  the default
+- **WHEN** configuration is resolved
+- **THEN** the setting is ignored and reported

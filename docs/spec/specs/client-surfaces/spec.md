@@ -754,8 +754,30 @@ empty list whose guidance names its key shows no footer.
 
 Runtime pickers SHALL render directly above the fixed composer with at most
 five matching rows visible. They MUST preserve the transcript region instead
-of drawing a centered modal over it. Choosers shown before a session exists
-SHALL draw from the top-left of the screen, sized to their content.
+of drawing a centered modal over it. The model, provider, profile, thinking,
+effort, advisor, and context-window pickers SHALL open on the current choice,
+so Enter keeps it; lists of actions or destinations (connect, disconnect,
+resume, account, file and agent references) keep opening on their first row.
+
+Setup's default-model chooser (setup's Change default, and the catalog model
+step of `/connect`) SHALL be the `/model` picker in a different place: the
+same title row with filter and position, at most five rows in the `/model`
+row text (model name, `provider · N context`, `✓ current`), the selected
+row's facts beneath it, opening on the current model until the flow
+remembers a choice of its own. Inside a session it SHALL sit directly above
+the composer with the identity footer above its controls row, as `/model`
+does. Before a session exists it SHALL sit at the bottom of the screen with
+one blank row and then its single controls row last. Escape still returns to
+the previous setup step. A provider model row selects and writes exactly what
+it did before; installed-agent rows follow the requirement `Setup lists
+installed agents as /model does`.
+
+Every other screen shown before a session exists (setup's other steps, the
+ChatGPT and xAI login screens, the connection review, and the
+`smith --resume` picker) SHALL sit at the bottom of the screen, sized to its
+content: its title, its content, one blank row, and its controls, with the
+last controls row on the last row of the screen. Content taller than the
+screen SHALL use the whole screen and scroll as before.
 
 #### Scenario: Runtime picker preserves the coding surface
 
@@ -779,13 +801,62 @@ SHALL draw from the top-left of the screen, sized to their content.
 - **AND** the selected row's detail uses compact sizes, for example
   `1M context · 128k output`
 
-#### Scenario: Standalone chooser before a session
+#### Scenario: Runtime selections open on their current choice
+
+- **GIVEN** the session's effort is `high`, and a provider, profile, thinking
+  state, and advisor choice are each marked current
+- **WHEN** the user opens `/effort`, `/provider`, `/profile`, `/think`, or
+  `/advisor`
+- **THEN** the selection starts on the row marked `✓ current`
+- **AND** pressing Enter applies that current choice rather than the first row
+- **AND** `/connect` and `/resume` still open on their first row
+
+#### Scenario: Connection model step is the model picker
+
+- **GIVEN** a session is idle and the user runs `/connect google`
+- **WHEN** authentication is chosen and the catalog model step opens
+- **THEN** the step shows `Connect Google Gemini · Choose default model` with
+  `type to filter` and its position on one title row, directly above the
+  composer
+- **AND** each row shows the model name and `google · N context`, with the
+  selected row's limits and `google/<model-id>` beneath it, as `/model`
+  shows a configured model
+- **AND** the identity footer sits above `↑↓ choose · enter confirm · esc
+  back`
+- **AND** at most five models are visible and typing filters them
+
+#### Scenario: Default-model choice before a session sits at the bottom
+
+- **GIVEN** no session exists and the user runs `smith setup` and chooses
+  Change default
+- **WHEN** the default-model choice opens
+- **THEN** its title, at most five model rows, and the selected row's facts
+  are drawn at the bottom of the screen, followed by one blank row and the
+  controls row as the last row
+- **AND** the selection starts on the current default model, marked
+  `✓ current`
+- **AND** choosing a model and pressing Escape on the review returns to the
+  chooser on that chosen model
+- **AND** nothing is written until the review is confirmed
+
+#### Scenario: Standalone screen before a session sits at the bottom
 
 - **GIVEN** no session exists yet
-- **WHEN** setup, `smith --resume`, or ChatGPT login shows a choice
-- **THEN** its title is on the first row at the left gutter and its rows
-  follow directly beneath
-- **AND** no frame, centered box, or blank filler rows are drawn
+- **WHEN** setup, `smith --resume`, or ChatGPT login shows any step other
+  than the default model
+- **THEN** its last controls row is the last row of the screen, with one
+  blank row above it
+- **AND** its title and content sit directly above that blank row, with every
+  row above the title left blank
+- **AND** no frame, centered box, or blank filler rows are drawn between its
+  rows
+
+#### Scenario: Long setup review keeps the whole screen
+
+- **GIVEN** a 44×16 terminal and a setup review longer than the screen
+- **WHEN** the review is shown
+- **THEN** its title is on the first row and its controls on the last row
+- **AND** the review scrolls between them with its position shown
 
 #### Scenario: Numbered fixed choices
 
@@ -1744,7 +1815,13 @@ the higher-precedence control for the active session's subsequent turn.
 The TUI SHALL accept `/context <NAME|default>` to set or clear the session's
 context window override. It SHALL apply the change at the next idle boundary
 and persist it on resume. `/context` with no argument SHALL keep its current
-report and add the available windows, marking the active one.
+report and add the available windows, marking the active one. When the
+session is idle and the active model has more than one named window,
+`/context` with no argument SHALL also open a `Choose context window` picker
+directly above the composer, in the compact pane `/model` uses, opening on
+the current window. Enter SHALL switch to the chosen window as `/context
+NAME` does, and Escape SHALL close the picker and leave the report. Headless
+and machine `/context` SHALL keep returning only the report.
 
 #### Scenario: Switch window while idle
 
@@ -1765,6 +1842,25 @@ report and add the available windows, marking the active one.
 - **GIVEN** a session ran with the `/context 872k` override
 - **WHEN** that session is resumed
 - **THEN** the `872k` window is still active
+
+#### Scenario: Bare context offers the window picker
+
+- **GIVEN** the session is idle and the active model declares windows
+  `128k`, `1m`, and `32k`, with `128k` active
+- **WHEN** the user submits `/context`
+- **THEN** the usage report is appended to the transcript as before
+- **AND** `Choose context window` opens directly above the composer with
+  `128k` selected and marked `✓ current`
+- **AND** moving to `1m` and pressing Enter switches the window as
+  `/context 1m` does
+
+#### Scenario: Bare context without a choice to make
+
+- **GIVEN** the active model declares one window or none, or a turn is
+  running
+- **WHEN** the user submits `/context`
+- **THEN** only the usage report is appended
+- **AND** no picker opens
 
 ### Requirement: Current installed-agent model choices
 
@@ -2873,13 +2969,17 @@ Smith cannot make.
 ### Requirement: Advisor command
 
 The TUI SHALL provide `/advisor` in command discovery and help. With no
-argument it SHALL open the shared inline picker listing off, the configured
-default, and each profile and model that can serve as an advisor, with the
-current choice preselected. `/advisor off`, `/advisor on`, `/advisor default`,
-`/advisor <profile>`, and `/advisor <provider>/<model>` SHALL select directly.
-The command SHALL require an idle turn, SHALL confirm the result with a
-notice, and `/status` SHALL show the effective advisor and whether it comes
-from configuration or the session override.
+argument it SHALL open the shared inline picker. The picker SHALL list off,
+the configured default, each profile that can serve as an advisor, and the
+same model rows `/model` lists, including installed agents, with the same
+labels and availability checks. It SHALL leave out the session's own model
+binding, and the current choice SHALL be preselected. A model row the advisor
+cannot use SHALL be shown disabled with the reason, not hidden.
+`/advisor off`, `/advisor on`, `/advisor default`, `/advisor <profile>`,
+`/advisor <provider>/<model>`, and `/advisor cli/<kind>/<model>` SHALL select
+directly. The command SHALL require an idle turn and SHALL confirm the result
+with a notice. `/status` SHALL show the effective advisor and whether it
+comes from configuration or the session override.
 
 #### Scenario: Listed in discovery
 
@@ -2905,6 +3005,23 @@ from configuration or the session override.
 - **WHEN** the user runs `/advisor` with no argument
 - **THEN** the picker lists off, default, and the available targets
 - **AND** the current choice is preselected
+
+#### Scenario: Picker offers the same models as /model
+
+- **GIVEN** `claude` is on `PATH` and `codex` is not
+- **WHEN** the user runs `/advisor` with no argument
+- **THEN** every `cli/claude-code/<model>` row `/model` offers is selectable
+- **AND** every `cli/codex/<model>` row is shown disabled because `codex` is
+  not on `PATH`
+- **AND** the session's own model is not listed
+
+#### Scenario: Select an installed agent directly
+
+- **GIVEN** an idle session and `claude` on `PATH`
+- **WHEN** the user runs `/advisor cli/claude-code/opus`
+- **THEN** a notice confirms the advisor for this session
+- **AND** `/status` shows advisor `cli/claude-code/opus`, attributed to the
+  session override
 
 #### Scenario: Busy turn
 
@@ -3311,3 +3428,149 @@ drop the image.
 - **WHEN** the run starts
 - **THEN** Smith exits with an error naming the path, before any provider
   request
+
+### Requirement: The composer inserts line breaks in every terminal
+
+The composer SHALL insert a newline at the cursor, without submitting, for
+Ctrl+J in every terminal, and for Shift+Enter and Alt+Enter where the
+terminal reports them. Typing `\` and then Enter SHALL replace the backslash
+with a newline. In the command palette, Ctrl+J, Shift+Enter and Alt+Enter
+SHALL also insert a newline and MUST NOT run a command. Submitting a
+multi-line draft MUST send its newlines intact. While an idle draft is
+non-empty and no overlay is open, the hint row SHALL name a newline key.
+`/help` SHALL list every newline key, as SHALL the shortcuts panel wherever
+the terminal leaves it room for its rows. When a draft is
+taller than the composer, the composer SHALL scroll so that the cursor row
+stays visible.
+
+#### Scenario: Ctrl+J in a terminal without keyboard enhancements
+
+- **GIVEN** a terminal that sends Shift+Enter as a plain Enter
+- **AND** the composer holds `first`
+- **WHEN** the user presses Ctrl+J, types `second`, and presses Enter
+- **THEN** Smith submits `first\nsecond` as one message
+
+#### Scenario: Shift+Enter in a kitty-protocol terminal
+
+- **GIVEN** a terminal that answers the keyboard-protocol query, such as
+  Ghostty (and cmux) or kitty
+- **WHEN** the user presses Shift+Enter in a non-empty draft
+- **THEN** a newline is inserted at the cursor and nothing is submitted
+
+#### Scenario: A newline key in the command palette
+
+- **GIVEN** the composer holds `/status` with the command palette open
+- **WHEN** the user presses Ctrl+J, Shift+Enter or Alt+Enter
+- **THEN** the draft becomes `/status` followed by a newline
+- **AND** no command runs and the palette stays open
+
+#### Scenario: Newline keys are discoverable
+
+- **GIVEN** an idle composer with a non-empty draft and no overlay
+- **WHEN** Smith renders the hint row
+- **THEN** it reads `ctrl+j for newline`
+- **AND** the shortcuts panel lists Shift+Enter, Alt+Enter, Ctrl+J and
+  `\` then Enter
+
+#### Scenario: A tall draft keeps the cursor in view
+
+- **GIVEN** a twelve-line draft in a composer limited to eight rows
+- **WHEN** the cursor is on the last line
+- **THEN** the composer shows the last eight rows with the cursor on the last
+  one
+- **AND** pressing Up moves within the draft and scrolls it, without recalling
+  history
+
+### Requirement: Keyboard disambiguation never outlives the screen
+
+When the terminal answers the kitty keyboard-protocol query, Smith SHALL
+push `DISAMBIGUATE_ESCAPE_CODES` after it enters the alternate screen. It
+MUST NOT request release or repeat events. Smith SHALL query at most once per
+process, at the first entry, before any terminal input reader exists. Every
+exit path that leaves the alternate screen SHALL pop the flags before it
+leaves: normal quit, error, panic, the exit-deadline backstop, and a second
+stop signal. Smith MUST pop only flags it pushed, and at most once. With
+disambiguation on, Ctrl+[, Ctrl+I and Ctrl+M SHALL keep their legacy meanings
+of Esc, Tab and Enter, and every other existing binding SHALL behave as it
+does without the protocol.
+
+#### Scenario: Quitting restores the shell's keyboard mode
+
+- **GIVEN** Smith pushed keyboard flags in a kitty-protocol terminal
+- **WHEN** the user quits
+- **THEN** Smith writes the pop before it leaves the alternate screen
+- **AND** the shell receives Shift+Enter in its own encoding again
+
+#### Scenario: A terminal without the protocol
+
+- **GIVEN** a terminal that answers the device-attributes query but not the
+  keyboard query
+- **WHEN** Smith enters and leaves the alternate screen
+- **THEN** Smith writes neither a push nor a pop
+
+#### Scenario: Restoring twice pops once
+
+- **GIVEN** Smith pushed keyboard flags
+- **WHEN** a panic hook and then the terminal guard both restore the terminal
+- **THEN** exactly one pop is written
+
+### Requirement: Models configured with named windows are listed
+
+The selection inventory SHALL list a model configured only with named
+context windows wherever configured models are listed (`/model`, `/provider`
+counts, and setup's default-model choice), with the limits the runtime would
+apply: the session's selected window for the active model, otherwise the
+model's `default_context_window`. A window without `max_input_tokens` MUST
+preview its input limit as its context minus the model's output ceiling, as
+the runtime derives it.
+
+#### Scenario: Active windows-only model is listed and current
+
+- **GIVEN** `remote/window-model` declares windows `128k`, `1m`, and `32k`
+  with only `context_tokens`, `default_context_window = "128k"`, and
+  `max_output_tokens = 8192`
+- **AND** it is the active model
+- **WHEN** the user opens `/model` and types `window`
+- **THEN** `window-model  remote · 128k context` is listed and marked
+  `✓ current`
+- **AND** its detail shows the `119.8k` input limit the runtime derives from
+  the `128k` window
+
+#### Scenario: Inactive windows-only model uses its default window
+
+- **GIVEN** `remote/wide-model` declares only named windows with
+  `default_context_window = "272k"`
+- **AND** another model is active
+- **WHEN** the user opens `/model` or setup's Change default
+- **THEN** `wide-model  remote · 272k context` is listed and selectable
+
+### Requirement: Setup lists installed agents as /model does
+
+Setup's default-model choice SHALL list installed coding agents with the
+`/model` agent rows: one row per agent model in the curated
+`cli/<kind>/<model>` namespace, with the same name, description, detail, and
+installation check, and no provider-qualified row for the same agent model.
+Choosing an agent row MUST write the `cli/<kind>/<model>` model with the
+current default's provider, as `/model` keeps the current provider, or with
+the first usable configured provider when the current default's provider is
+not usable. Provider model rows keep setup's rule that every listed pair can
+become the default.
+
+#### Scenario: Agent rows read as in /model
+
+- **GIVEN** profile `cc` selects `google/cli/claude-code/opus` and `claude` is
+  on `PATH`
+- **WHEN** the user runs `smith setup` and chooses Change default
+- **THEN** `opus  Claude Code CLI · 200k context` appears once
+- **AND** no row reads `cli/claude-code/opus  google · 200k context`
+- **AND** an agent whose program is not on `PATH` is shown unavailable with
+  the reason `/model` gives
+
+#### Scenario: Choosing an agent keeps the current provider
+
+- **GIVEN** the current default is `remote/example-model`
+- **WHEN** the user chooses `sonnet  Claude Code CLI` in Change default and
+  confirms the review
+- **THEN** the review names `remote/cli/claude-code/sonnet`
+- **AND** the written default profile selects provider `remote` and model
+  `cli/claude-code/sonnet`
