@@ -1,0 +1,40 @@
+● reasoning · thinking on · effort high · session override · applies to the next turn
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Connect Google Gemini · Choose default model · type to filter                                                     1/21
+❯ Deep Research Max Preview (Apr-21-2026)  google · 131k context
+  131k input · 65.5k output ceiling · google/deep-research-max-preview-04-2026 · tools+reasoning · models.dev/google…
+  Deep Research Preview (Apr-21-2026)      google · 131k context
+  Gemini 2.5 Computer Use Preview 10-2025  google · 128k context
+  Gemini 2.5 Flash                         google · 1M context
+  Gemini 2.5 Flash-Lite                    google · 1M context
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                               remote/example-model · dev · ask · think on · effort high
+  ↑↓ choose · enter confirm · esc back

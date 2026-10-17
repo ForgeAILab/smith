@@ -171,18 +171,20 @@ pub fn draw_with_screen<S: Screen>(
         return Rect::default();
     }
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
+    let stacked = screen.stacked_controls();
+    let hint_rows = if stacked { 2 } else { 1 };
     let desired = screen.content_height(area.width);
     let available = area
         .height
         .saturating_sub(composer_rows)
-        .saturating_sub(1)
+        .saturating_sub(hint_rows)
         .saturating_sub(3);
     let inline_rows = desired.min(available);
     let [transcript, inline, composer, hint] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(inline_rows),
         Constraint::Length(composer_rows),
-        Constraint::Length(1),
+        Constraint::Length(hint_rows),
     ])
     .areas(area);
     draw_transcript(frame, transcript, app, theme);
@@ -195,7 +197,15 @@ pub fn draw_with_screen<S: Screen>(
         .footer()
         .map(|footer| footer.hint(area.width))
         .unwrap_or_default();
-    draw_identity_footer_with_hint(frame, hint, app, theme, keys);
+    if stacked && hint.height > 1 {
+        // The session's own resource pickers keep identity above their keys.
+        let [identity, controls] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(hint);
+        draw_identity_footer_with_hint(frame, identity, app, theme, String::new());
+        draw_control_hint(frame, controls, &keys, theme);
+    } else {
+        draw_identity_footer_with_hint(frame, hint, app, theme, keys);
+    }
     inline
 }
 

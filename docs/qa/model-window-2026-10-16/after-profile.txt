@@ -1,0 +1,40 @@
+● reasoning · thinking on · effort high · session override · applies to the next turn
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Choose profile · type to filter                                                                                    3/6
+  alt     build · scratch alternate profile
+  build   build · coding workflow with policy-bounded mutation
+❯ dev     build · scratch dev profile                                                                          ✓ current
+  use main+child · remote/example-model · rev 41505e8c626f… · source built-in default `agent_modes.build.posture`
+  plan    plan · read-only inspection and planning
+  review  review · read-only change review and findings
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                               remote/example-model · dev · ask · think on · effort high
+  ↑↓ choose · enter confirm · esc cancel

@@ -268,69 +268,81 @@ fn model_entries(
         // exist for profile matching and direct selection, not as a second
         // display row for the same agent.
         .filter(|model| smith_config::cli_agents::parse_cli_model_id(&model.model).is_none())
-        .map(|model| {
-            let id = model.id();
-            let profiles = if model.profiles.is_empty() {
-                String::new()
-            } else {
-                format!(" · profiles {}", model.profiles.join(","))
-            };
-            let capabilities = [
-                model
-                    .tool_call
-                    .is_some_and(|enabled| enabled)
-                    .then_some("tools"),
-                model
-                    .reasoning
-                    .is_some_and(|enabled| enabled)
-                    .then_some("reasoning"),
-                model
-                    .structured_output
-                    .is_some_and(|enabled| enabled)
-                    .then_some("structured"),
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-            let capabilities = if capabilities.is_empty() {
-                String::new()
-            } else {
-                format!(" · {}", capabilities.join("+"))
-            };
-            let provenance = match (
-                model.catalog_provider.as_deref(),
-                model.catalog_revision.as_deref(),
-                model.catalog_retrieved_at_ms,
-            ) {
-                (Some(provider), Some(revision), Some(retrieved)) => format!(
-                    " · models.dev/{provider} advertised · rev {} · {} old",
-                    bounded_text(revision, 12),
-                    catalog_age(retrieved)
-                ),
-                _ => String::new(),
-            };
-            let window_detail = if model.context_windows.len() > 1 {
-                let active = if model.active {
-                    context_window
-                        .map(|name| format!(" · active window {name}"))
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                format!(" · windows {}{active}", model.context_windows.join("/"))
-            } else {
-                String::new()
-            };
-            let limit_source = model.context_tokens.as_ref().map_or_else(
-                || "unknown source".to_owned(),
-                |limit| picker_limit_source(&limit.origin),
-            );
-            let source_detail = if provenance.is_empty() {
-                format!(" · {limit_source}")
-            } else {
-                String::new()
-            };
-            let entry = ResourceEntry::new(
+        .map(|model| model_entry(model, context_window))
+        .collect::<Vec<_>>()
+}
+
+/// One `/model` row: the model's label, `provider · N context`, and its limit
+/// facts beneath the selected row.
+///
+/// Setup's default-model choice builds its rows here too, so both lists read
+/// the same.
+pub(crate) fn model_entry(
+    model: ModelInventoryEntry,
+    context_window: Option<&str>,
+) -> ResourceEntry {
+    let id = model.id();
+    let profiles = if model.profiles.is_empty() {
+        String::new()
+    } else {
+        format!(" · profiles {}", model.profiles.join(","))
+    };
+    let capabilities = [
+        model
+            .tool_call
+            .is_some_and(|enabled| enabled)
+            .then_some("tools"),
+        model
+            .reasoning
+            .is_some_and(|enabled| enabled)
+            .then_some("reasoning"),
+        model
+            .structured_output
+            .is_some_and(|enabled| enabled)
+            .then_some("structured"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let capabilities = if capabilities.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", capabilities.join("+"))
+    };
+    let provenance = match (
+        model.catalog_provider.as_deref(),
+        model.catalog_revision.as_deref(),
+        model.catalog_retrieved_at_ms,
+    ) {
+        (Some(provider), Some(revision), Some(retrieved)) => format!(
+            " · models.dev/{provider} advertised · rev {} · {} old",
+            bounded_text(revision, 12),
+            catalog_age(retrieved)
+        ),
+        _ => String::new(),
+    };
+    let window_detail = if model.context_windows.len() > 1 {
+        let active = if model.active {
+            context_window
+                .map(|name| format!(" · active window {name}"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        format!(" · windows {}{active}", model.context_windows.join("/"))
+    } else {
+        String::new()
+    };
+    let limit_source = model.context_tokens.as_ref().map_or_else(
+        || "unknown source".to_owned(),
+        |limit| picker_limit_source(&limit.origin),
+    );
+    let source_detail = if provenance.is_empty() {
+        format!(" · {limit_source}")
+    } else {
+        String::new()
+    };
+    let entry = ResourceEntry::new(
                 id.clone(),
                 model.label,
                 format!(
@@ -353,13 +365,11 @@ fn model_entries(
                 model.context_tokens.as_ref().map_or_else(|| "unknown".to_owned(), |limit| context_quantity(limit.value)),
             ))
             .active(model.active);
-            match model.disabled_reason {
-                Some(reason) => entry.disabled(reason),
-                None if model.selectable => entry,
-                None => entry.disabled("model is not locally selectable"),
-            }
-        })
-        .collect::<Vec<_>>()
+    match model.disabled_reason {
+        Some(reason) => entry.disabled(reason),
+        None if model.selectable => entry,
+        None => entry.disabled("model is not locally selectable"),
+    }
 }
 
 fn child_agent_entries(

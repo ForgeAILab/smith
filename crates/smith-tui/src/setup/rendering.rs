@@ -17,6 +17,9 @@ impl Screen for SetupApp {
     }
 
     fn content_height(&self, width: u16) -> u16 {
+        if let Some(picker) = self.model_picker() {
+            return compact_picker_rows(picker, width, self.error.as_deref());
+        }
         if let Some(picker) = &self.picker {
             return picker_content_height(
                 picker,
@@ -51,6 +54,10 @@ impl Screen for SetupApp {
                 .map(ResourcePicker::footer)
                 .unwrap_or(ScreenFooter::Field { back }),
         })
+    }
+
+    fn stacked_controls(&self) -> bool {
+        self.model_picker().is_some()
     }
 
     fn on_event(&mut self, event: ScreenEvent) -> ScreenStep<Self::Outcome, Self::Effect> {
@@ -88,6 +95,19 @@ fn draw_setup_surface(
 ) {
     let back = !app.history.is_empty();
     let base_title = app.title.as_deref().unwrap_or("Smith setup");
+    if let Some(picker) = app.model_picker() {
+        // The default-model choice is the session's model picker: the same
+        // compact pane above the composer, or at the bottom of the screen
+        // before a session exists.
+        let title = format!("{base_title} · {}", picker.title);
+        let error = app.error.as_deref();
+        if embedded {
+            draw_compact_picker(frame, area, picker, &title, error, theme);
+        } else {
+            draw_bottom_picker(frame, area, picker, &title, error, theme);
+        }
+        return;
+    }
     if let Some(picker) = &app.picker {
         let title = if app.step == Step::Action {
             format!("{base_title} · Welcome · choose how to connect a model")
@@ -201,6 +221,15 @@ fn draw_setup_surface(
             }
         }
         frame.render_widget(Paragraph::new(rows), body);
+    }
+}
+
+impl SetupApp {
+    /// The default-model choice, which renders exactly as the `/model` picker.
+    fn model_picker(&self) -> Option<&ResourcePicker> {
+        self.picker
+            .as_ref()
+            .filter(|_| self.step == Step::ModelChoice)
     }
 }
 

@@ -312,19 +312,51 @@ pub(crate) fn draw_compact_resource_picker(
     picker: &ResourcePicker,
     theme: Theme,
 ) {
+    draw_compact_picker(frame, area, picker, &picker.title, None, theme);
+}
+
+/// Draws the runtime picker's compact pane under a flow's own title.
+///
+/// The title row, the five-choice cap, and the selected-row detail are the
+/// ones `/model` draws above the composer; a validation error sits between
+/// the title and the choices so it is never scrolled away.
+pub(crate) fn draw_compact_picker(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    picker: &ResourcePicker,
+    title: &str,
+    error: Option<&str>,
+    theme: Theme,
+) {
     if area.is_empty() {
         return;
     }
+    frame.render_widget(Clear, area);
+    let mut prefix = error
+        .map(|error| {
+            indented_words(
+                &format!("error: {error}"),
+                area.width,
+                2,
+                Tone::Danger,
+                theme,
+            )
+        })
+        .unwrap_or_default();
+    let body = usize::from(area.height).saturating_sub(1);
+    // The choices keep at least one row; an error yields before the list does.
+    prefix.truncate(body.saturating_sub(1));
     let view = entry_view(
         picker,
-        usize::from(area.height).saturating_sub(1),
+        body.saturating_sub(prefix.len()),
         area.width,
         theme,
         true,
     );
-    draw_picker_heading(frame, area, picker, &picker.title, view.scrolling, theme);
+    draw_picker_heading(frame, area, picker, title, view.scrolling, theme);
+    prefix.extend(view.lines);
     frame.render_widget(
-        Paragraph::new(view.lines),
+        Paragraph::new(prefix),
         Rect::new(
             area.x,
             area.y + 1,
@@ -332,6 +364,62 @@ pub(crate) fn draw_compact_resource_picker(
             area.height.saturating_sub(1),
         ),
     );
+}
+
+/// Rows the compact pane needs, including a wrapped validation error.
+pub(crate) fn compact_picker_rows(picker: &ResourcePicker, width: u16, error: Option<&str>) -> u16 {
+    let error_rows = error.map_or(0, |error| {
+        indented_words(
+            &format!("error: {error}"),
+            width,
+            2,
+            Tone::Danger,
+            Theme::new(),
+        )
+        .len()
+    });
+    compact_resource_picker_rows(picker)
+        .saturating_add(u16::try_from(error_rows).unwrap_or(u16::MAX))
+}
+
+/// Draws the compact pane at the bottom of a standalone screen.
+///
+/// Before a session exists there is no composer to sit above, so the pane
+/// keeps its place at the bottom of the terminal: the title and choices, one
+/// blank row, then the same single controls row a session shows beneath its
+/// identity footer.
+pub(crate) fn draw_bottom_picker(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    picker: &ResourcePicker,
+    title: &str,
+    error: Option<&str>,
+    theme: Theme,
+) {
+    frame.render_widget(Clear, area);
+    if area.is_empty() {
+        return;
+    }
+    let hint = picker.footer().hint(area.width);
+    let hint_rows = u16::from(!hint.is_empty()).min(area.height);
+    let gap = u16::from(hint_rows > 0 && area.height > 2);
+    let pane = compact_picker_rows(picker, area.width, error)
+        .min(area.height.saturating_sub(hint_rows + gap));
+    let top = area.bottom().saturating_sub(pane + gap + hint_rows);
+    draw_compact_picker(
+        frame,
+        Rect::new(area.x, top, area.width, pane),
+        picker,
+        title,
+        error,
+        theme,
+    );
+    if hint_rows > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::from(format!("  {hint}"))).style(theme.style(Tone::Dim)),
+            Rect::new(area.x, area.bottom() - 1, area.width, 1),
+        );
+    }
 }
 
 fn draw_picker_heading(

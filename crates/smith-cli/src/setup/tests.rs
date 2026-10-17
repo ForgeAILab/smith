@@ -23,22 +23,85 @@ fn setup_key(code: KeyCode) -> KeyEvent {
 }
 
 #[test]
-fn catalog_model_choices_keep_ids_first_and_use_compact_limits() {
+fn catalog_model_choices_use_the_model_picker_rows_and_compact_limits() {
     let context = setup_context_for(PathBuf::from("<HOME>"), PathBuf::from("<PROJECT>"));
     let (entries, limits) =
-        catalog_model_entries(&context, "openrouter", "OpenRouter").expect("catalog models");
+        catalog_model_entries(&context, "openrouter", "openrouter", "OpenRouter")
+            .expect("catalog models");
     let entry = entries
         .iter()
         .find(|entry| entry.id == "aion-labs/aion-2.0")
         .expect("Aion model");
+    // `/model` rows: the display name, `provider · N context`, and the limit
+    // facts beneath the selected row, which still name the exact model ID.
+    assert_ne!(entry.label, entry.id);
+    assert_eq!(entry.description, "openrouter · 131k context");
     assert_eq!(
-        entry.description,
-        "aion-labs/aion-2.0 · 131k context · 131k input · 32.7k output · reasoning"
+        entry.detail,
+        "131k context · 131k input · 32.7k output ceiling · openrouter/aion-labs/aion-2.0 · \
+         tools+reasoning · models.dev/openrouter advertised"
     );
     let model_limits = limits.get(&entry.id).expect("model limits");
     assert_eq!(model_limits.context_tokens, 131_072);
     assert_eq!(model_limits.max_input_tokens, 131_072);
     assert_eq!(model_limits.max_output_tokens, 32_768);
+}
+
+#[test]
+fn default_model_choices_reuse_the_model_picker_rows_and_stay_selectable() {
+    use smith_config::inventory::{InventoryLimit, ModelInventoryEntry, ModelLimitOrigin};
+    let limit = |value| {
+        Some(InventoryLimit {
+            value,
+            origin: ModelLimitOrigin::BuiltIn,
+        })
+    };
+    let model = |provider: &str, model: &str| ModelInventoryEntry {
+        provider: provider.into(),
+        model: model.into(),
+        label: model.into(),
+        context_tokens: limit(128_000),
+        max_input_tokens: limit(124_000),
+        max_output_tokens: limit(4_096),
+        output_budget: None,
+        context_windows: Vec::new(),
+        tool_call: None,
+        reasoning: None,
+        structured_output: None,
+        catalog_provider: None,
+        catalog_revision: None,
+        catalog_retrieved_at_ms: None,
+        profiles: Vec::new(),
+        selectable: true,
+        disabled_reason: None,
+        active: false,
+    };
+    let mut current = model("remote", "example-model");
+    current.active = true;
+    current.profiles = vec!["dev".into()];
+    let mut unavailable = model("other", "other-model");
+    unavailable.selectable = false;
+    unavailable.disabled_reason = Some("catalog model does not support tool calling".into());
+    let agent = model("google", "cli/claude-code/opus");
+    let inventory = SelectionInventory {
+        models: vec![current.clone(), unavailable.clone(), agent.clone()],
+        ..SelectionInventory::default()
+    };
+    let entries = super::model_entries(&inventory);
+    assert_eq!(entries.len(), 3, "setup keeps every listed pair");
+    for (entry, source) in entries.iter().zip([current, unavailable, agent]) {
+        let picker_row = crate::resources::model_entry(source, None);
+        assert_eq!(entry.id, picker_row.id);
+        assert_eq!(entry.label, picker_row.label);
+        assert_eq!(entry.description, picker_row.description);
+        assert_eq!(entry.detail, picker_row.detail);
+        assert_eq!(entry.active, picker_row.active);
+        // Setup has always let any listed pair become the default.
+        assert_eq!(entry.disabled_reason, None);
+    }
+    assert_eq!(entries[0].label, "example-model");
+    assert_eq!(entries[0].description, "remote · 128k context");
+    assert!(entries[0].active);
 }
 
 #[test]

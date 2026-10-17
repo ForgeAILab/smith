@@ -77,6 +77,12 @@ pub trait Screen {
         None
     }
 
+    /// Put the controls on their own row beneath the identity footer, as the
+    /// session's own resource pickers do, instead of sharing one hint row.
+    fn stacked_controls(&self) -> bool {
+        false
+    }
+
     /// Reduce one input while leaving external work to the host.
     fn on_event(&mut self, event: ScreenEvent) -> Step<Self::Outcome, Self::Effect>;
 

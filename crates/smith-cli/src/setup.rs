@@ -233,14 +233,16 @@ pub(crate) async fn run_surface(
             .find(|descriptor| descriptor.provider == Some(provider.as_str())),
         _ => None,
     }
-    .and_then(|descriptor| descriptor.connection)
-    .and_then(|connection| {
+    .and_then(|descriptor| Some((descriptor.provider?, descriptor.connection?)))
+    .and_then(|(provider, connection)| {
         connection
             .catalog_provider
-            .map(|catalog| (catalog, connection.label))
+            .map(|catalog| (provider, catalog, connection.label))
     });
     let (models, catalog_model_limits) = match catalog_connection {
-        Some((catalog, label)) => catalog_model_entries(&context, catalog, label)?,
+        Some((provider, catalog, label)) => {
+            catalog_model_entries(&context, provider, catalog, label)?
+        }
         None => (model_entries(&context.inventory), BTreeMap::new()),
     };
     let provider_actions = setup_action_entries(&mode);

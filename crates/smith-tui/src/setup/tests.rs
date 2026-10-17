@@ -4,6 +4,7 @@ use ratatui::backend::TestBackend;
 
 mod flows;
 mod input;
+mod model_choice;
 mod rendering;
 
 fn setup_app(

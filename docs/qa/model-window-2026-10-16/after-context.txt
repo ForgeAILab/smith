@@ -1,0 +1,40 @@
+● reasoning · thinking on · effort high · session override · applies to the next turn
+
+● /context
+  Context usage
+  example-model · usage unavailable until the first turn
+
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · □ □ □
+
+  Available capacity
+  ■ system instructions       ? (not counted yet)
+  ◆ tool schemas              ? (not counted yet)
+  · free input                123.9k
+  □ output/reasoning reserve  4k
+  model window                128k total · 123.9k input budget
+  counting                    waiting for first context plan
+  compaction                  enabled on overflow · 74.3k recovery target
+  tool context                offload above 8192 serialized bytes · artifact pages up to 2048 bytes
+  Input occupancy above is the last planned request, not cumulative session usage.
+  provider input (session)    ?
+  cache read (session)        ?
+  cache                       state unknown · CH ? · misses 0 · re-billed 0 · guarantee ? · maintenance calls 0
+  reasoning                   on · effort high · session override
+  reasoning controls          controllable · switch optional · efforts low, medium, high · configured model metadata
+                              from
+                              `/private/tmp/claude-501/-Volumes-Data-codes-ai-tui/2b916588-512e-4ee6-904b-7d9dc398a6bc/…
+                              key `models."remote/example-model".reasoning.dialect`
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                              remote/example-model · dev · ask · think on · effort high

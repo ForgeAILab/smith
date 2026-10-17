@@ -1,0 +1,40 @@
+● reasoning · thinking on · effort high · session override · applies to the next turn
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Choose reasoning effort · type to filter
+  provider default  clear the session effort override
+  low               applies to every request in the next turn
+  medium            applies to every request in the next turn
+❯ high              applies to every request in the next turn                                                  ✓ current
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                               remote/example-model · dev · ask · think on · effort high
+  ↑↓ choose · enter confirm · esc cancel

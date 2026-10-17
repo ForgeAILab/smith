@@ -244,6 +244,12 @@ impl SetupApp {
                 && let Some(index) = picker.entries.iter().position(|entry| &entry.id == id)
             {
                 picker.selected = index;
+            } else if self.step == Step::ModelChoice
+                && let Some(index) = picker.entries.iter().position(|entry| entry.active)
+            {
+                // Like `/model`, the default-model choice opens on the current
+                // model until this flow has remembered a choice of its own.
+                picker.selected = index;
             }
             self.picker = Some(picker);
         }

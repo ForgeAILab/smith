@@ -103,7 +103,18 @@ impl App {
         if let Some(query) = initial_query {
             picker.query = query.to_owned().into();
         }
-        if target == ResourceTarget::Model {
+        // Runtime selections open on their current choice, so Enter keeps it.
+        // Lists of actions or destinations (connect, resume, references, …)
+        // keep starting at their first row.
+        if matches!(
+            target,
+            ResourceTarget::Model
+                | ResourceTarget::Provider
+                | ResourceTarget::Profile
+                | ResourceTarget::Think
+                | ResourceTarget::Effort
+                | ResourceTarget::Advisor
+        ) {
             picker.selected = picker
                 .filtered_indices()
                 .iter()

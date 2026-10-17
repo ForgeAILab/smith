@@ -367,7 +367,8 @@ impl Screen for ResourcePicker {
 mod rendering;
 
 pub(crate) use rendering::{
-    PickerContext, compact_resource_picker_rows, draw_compact_resource_picker, draw_picker_context,
+    PickerContext, compact_picker_rows, compact_resource_picker_rows, draw_bottom_picker,
+    draw_compact_picker, draw_compact_resource_picker, draw_picker_context,
     draw_picker_with_context, indented_words, picker_content_height,
 };
 pub use rendering::{ScreenFooter, draw_inline_screen, draw_inline_surface, draw_resource_picker};

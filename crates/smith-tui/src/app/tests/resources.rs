@@ -237,6 +237,53 @@
         );
     }
 
+    #[test]
+    fn runtime_selection_pickers_open_on_their_current_choice() {
+        let mut app = app();
+        let mut resources = app.resources.clone();
+        resources.efforts[2] = resources.efforts[2].clone().active(true);
+        resources.thinking[1] = resources.thinking[1].clone().active(true);
+        resources.providers = vec![
+            ResourceEntry::new("acme", "acme", "openai-compatible · 2 models"),
+            ResourceEntry::new("local", "local", "openai-compatible · 1 model").active(true),
+        ];
+        resources.profiles = vec![
+            ResourceEntry::new("build", "build", "acme/big"),
+            ResourceEntry::new("work", "work", "local/model-2").active(true),
+        ];
+        resources.advisors = vec![
+            ResourceEntry::new("default", "configured default", "none configured"),
+            ResourceEntry::new("off", "off", "consult no advisor").active(true),
+        ];
+        resources.connections[2] = resources.connections[2].clone().active(true);
+        resources.sessions = vec![
+            ResourceEntry::new("session-7", "session-7", "2 turns"),
+            ResourceEntry::new("session-8", "session-8", "1 turn").active(true),
+        ];
+        app.set_resources(resources);
+        for (command, current) in [
+            ("/effort", "high"),
+            ("/think", "on"),
+            ("/provider", "local"),
+            ("/profile", "work"),
+            ("/advisor", "off"),
+            // Action and destination lists keep starting at their first row.
+            ("/connect", "local"),
+            ("/resume", "session-7"),
+        ] {
+            type_text(&mut app, command);
+            assert_eq!(app.on_key(key(KeyCode::Enter)), None, "{command}");
+            let selected = match &app.overlay {
+                Some(Overlay::ResourcePicker { picker, .. }) => picker
+                    .selected_entry()
+                    .map(|entry| entry.id.clone()),
+                other => panic!("{command} opened {other:?}"),
+            };
+            assert_eq!(selected.as_deref(), Some(current), "{command}");
+            app.on_key(key(KeyCode::Esc));
+        }
+    }
+
     fn advisor_app() -> App {
         let mut app = app();
         app.resources.advisors = vec![

@@ -18,8 +18,9 @@ use ratatui::widgets::Paragraph;
 use smith_client::compact_tokens;
 
 use crate::picker::{
-    PickerContext, PickerOutcome, ResourceEntry, ResourcePicker, ScreenFooter, draw_inline_screen,
-    draw_picker_context, indented_words, picker_content_height,
+    PickerContext, PickerOutcome, ResourceEntry, ResourcePicker, ScreenFooter, compact_picker_rows,
+    draw_bottom_picker, draw_compact_picker, draw_inline_screen, draw_picker_context,
+    indented_words, picker_content_height,
 };
 use crate::screen::{Screen, ScreenEvent, Step as ScreenStep};
 use crate::theme::{Theme, Tone};

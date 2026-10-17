@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Smith setup · Choose default model · type to filter
+  other-model    other · 200k context
+❯ example-model  remote · 128k context                                                                         ✓ current
+  124k input · 4k output ceiling · request 4k automatic · remote/example-model · user config · profiles dev
+  second-model   remote · 64k context
+
+  ↑↓ choose · enter confirm · esc back

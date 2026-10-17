@@ -6,8 +6,13 @@ use super::{
     SetupQuickStart, compact_tokens, plural, provider_descriptors, setup_endpoint_help,
 };
 
+/// Catalog choices for a provider being connected, in the `/model` row grammar.
+///
+/// `provider_name` is the local provider the connection writes, so a row
+/// reads as it will in `/model` once connected.
 pub(super) fn catalog_model_entries(
     context: &SetupContext,
+    provider_name: &str,
     catalog_provider: &str,
     label: &str,
 ) -> Result<(Vec<ResourceEntry>, BTreeMap<String, SetupModelLimits>)> {
@@ -32,18 +37,25 @@ pub(super) fn catalog_model_entries(
                 max_output_tokens: limits.max_output_tokens,
             },
         );
-        entries.push(ResourceEntry::new(
-            model.id.clone(),
-            model.name.clone(),
-            format!(
-                "{} · {} context · {} input · {} output{}",
-                model.id,
-                compact_tokens(u64::from(limits.context_tokens)),
-                compact_tokens(u64::from(limits.max_input_tokens)),
-                compact_tokens(u64::from(limits.max_output_tokens)),
-                if model.reasoning { " · reasoning" } else { "" }
-            ),
-        ));
+        let context_size = compact_tokens(u64::from(limits.context_tokens));
+        entries.push(
+            ResourceEntry::new(
+                model.id.clone(),
+                model.name.clone(),
+                format!(
+                    "{context_size} context · {} input · {} output ceiling · {provider_name}/{} · {} · models.dev/{catalog_provider} advertised",
+                    compact_tokens(u64::from(limits.max_input_tokens)),
+                    compact_tokens(u64::from(limits.max_output_tokens)),
+                    model.id,
+                    if model.reasoning {
+                        "tools+reasoning"
+                    } else {
+                        "tools"
+                    },
+                ),
+            )
+            .description(format!("{provider_name} · {context_size} context")),
+        );
     }
     if entries.is_empty() {
         anyhow::bail!("the {label} model catalog has no tool-capable text model with limits");
@@ -206,17 +218,18 @@ pub(super) fn provider_entries(inventory: &SelectionInventory) -> Vec<ResourceEn
         .collect()
 }
 
+/// Default-model choices, in the same rows `/model` shows.
+///
+/// Setup has always let any listed pair become the default, so a row `/model`
+/// would mark unavailable stays selectable here.
 pub(super) fn model_entries(inventory: &SelectionInventory) -> Vec<ResourceEntry> {
     inventory
         .models
         .iter()
         .map(|model| {
-            let profiles = if model.profiles.is_empty() {
-                "no profile".to_owned()
-            } else {
-                format!("profiles: {}", model.profiles.join(", "))
-            };
-            ResourceEntry::new(model.id(), model.id(), profiles).active(model.active)
+            let mut entry = crate::resources::model_entry(model.clone(), None);
+            entry.disabled_reason = None;
+            entry
         })
         .collect()
 }
