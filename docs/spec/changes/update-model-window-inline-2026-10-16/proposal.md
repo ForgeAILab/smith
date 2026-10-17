@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-17T00:11:27Z
-updated_at: 2026-10-17T00:48:48Z
+updated_at: 2026-10-17T06:23:25Z
 ---
 
 ## Why
@@ -47,12 +47,16 @@ their first row instead of the current choice
 Unchanged: what each chooser selects and writes, Escape going back a step in
 setup and cancelling elsewhere, and setup's ability to pick any listed pair
 as the default (a row `/model` marks unavailable stays selectable in setup,
-as before). Setup's other steps keep their top-left placement.
+as before). Setup's other steps keep their top-left placement (superseded
+by `update-model-window-followups-2026-10-17`, which puts every pre-session
+screen at the bottom).
 
 Considered and left alone: `/context` lists the active model's named context
 windows inside its usage report and switches with `/context NAME`. It has
 no picker, so giving it one would be a new interaction rather than a change
-in presentation. It is flagged for the owner instead.
+in presentation. It is flagged for the owner instead. (Superseded: the owner
+approved a `/context` picker, specified in
+`update-model-window-followups-2026-10-17`.)
 
 ## Impact
 
