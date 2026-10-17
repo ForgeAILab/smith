@@ -1,0 +1,40 @@
+● reasoning · thinking on · effort high · session override · applies to the next turn
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Choose advisor · type to filter                                                                                   1/15
+❯ configured default  advisor alt                                                                              ✓ current
+  on                  use the configured advisor
+  off                 consult no advisor in this session
+  alt                 other/other-model
+  other-model         other · 200k context
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                               remote/example-model · dev · ask · think on · effort high
+  ↑↓ choose · enter confirm · esc cancel

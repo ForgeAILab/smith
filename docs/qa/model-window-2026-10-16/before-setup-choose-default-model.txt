@@ -1,0 +1,40 @@
+  Smith setup · Choose default model · type to filter
+
+❯ other/other-model     profiles: alt
+  remote/example-model  profiles: dev                                                                          ✓ current
+  remote/second-model   no profile
+
+  ↑↓ choose · enter confirm · esc back
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

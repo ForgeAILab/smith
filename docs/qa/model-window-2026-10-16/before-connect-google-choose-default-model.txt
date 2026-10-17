@@ -1,0 +1,40 @@
+● /context
+  Context usage
+  available context windows   128k (active), 1m, 32k
+  window-model · usage unavailable until the first turn
+
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · □ □ □ □
+
+  Available capacity
+  ■ system instructions       ? (not counted yet)
+  ◆ tool schemas              ? (not counted yet)
+  · free input                119.8k
+  □ output/reasoning reserve  8.1k
+  model window                128k total · 119.8k input budget
+  counting                    waiting for first context plan
+  compaction                  enabled on overflow · 71.8k recovery target
+  tool context                offload above 8192 serialized bytes · artifact pages up to 2048 bytes
+  Input occupancy above is the last planned request, not cumulative session usage.
+  provider input (session)    ?
+  cache read (session)        ?
+  cache                       state unknown · CH ? · misses 0 · re-billed 0 · guarantee ? · maintenance calls 0
+  reasoning                   provider default · effort provider default · provider/model default
+  reasoning controls          unsupported · switch unavailable · efforts none · resolved model catalog (presence only)
+
+
+
+  Connect Google Gemini · Choose default model · type to filter                                                     1/21
+
+❯ Deep Research Max Preview (Apr-21-2026)  deep-research-max-preview-04-2026 · 131k context · 131k input · 65.5k output…
+  Deep Research Preview (Apr-21-2026)      deep-research-preview-04-2026 · 131k context · 131k input · 65.5k output ·…
+  Gemini 2.5 Computer Use Preview 10-2025  gemini-2.5-computer-use-preview-10-2025 · 128k context · 128k input · 64k…
+  Gemini 2.5 Flash                         gemini-2.5-flash · 1M context · 1M input · 65.5k output · reasoning
+  Gemini 2.5 Flash-Lite                    gemini-2.5-flash-lite · 1M context · 1M input · 65.5k output · reasoning
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ↑↓ choose · enter confirm · esc back                                           remote/window-model · wide · ask · 128k

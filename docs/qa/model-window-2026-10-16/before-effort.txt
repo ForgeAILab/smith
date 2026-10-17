@@ -1,0 +1,40 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Choose reasoning effort · type to filter
+❯ provider default  clear the session effort override                                                          ✓ current
+  low               applies to every request in the next turn
+  medium            applies to every request in the next turn
+  high              applies to every request in the next turn
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                        remote/example-model · dev · ask
+  ↑↓ choose · enter confirm · esc cancel

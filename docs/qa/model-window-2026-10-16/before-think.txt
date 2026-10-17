@@ -1,0 +1,40 @@
+● reasoning · thinking on · effort high · session override · applies to the next turn
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Choose thinking state · type to filter
+❯ provider default  clear the session thinking override                                                        ✓ current
+  on                enable thinking for the next turn
+  off               disable thinking for the…      unavailable: off requires this binding to advertise the `none` effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                               remote/example-model · dev · ask · think on · effort high
+  ↑↓ choose · enter confirm · esc cancel
