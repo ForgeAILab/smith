@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Smith setup · Choose default model · filter: opus
+❯ cli/claude-code/opus  other · 200k context
+  180k input · 32k output ceiling · request 32k automatic · other/cli/claude-code/opus · built-in · profiles cc
+
+  ↑↓ choose · enter confirm · esc back
