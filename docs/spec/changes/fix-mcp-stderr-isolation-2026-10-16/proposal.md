@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-17T00:09:41Z
-updated_at: 2026-10-17T00:09:41Z
+updated_at: 2026-10-17T01:11:34Z
 ---
 
 ## Why
@@ -39,6 +39,9 @@ server that fails to start explains why only on stderr.
   Healthy chatter adds nothing to the screen.
 - A headless or child run adds one diagnostic per server that failed to
   start, so `smith -p` users still learn why a server is missing.
+- Found in the live check: after a session rebind the footer started from a
+  fresh status and only updated on the next MCP change, so the failed count
+  vanished. The first loop pass after a rebind now renders it.
 
 ## Impact
 
