@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Smith setup · Choose default model · filter: opus
+❯ opus  Claude Code CLI · 200k context
+  limits from built-in · input 180k · output 32k [built-in] · ctx 200k · cli/claude-code/opus · agent runs its own tools
+
+  ↑↓ choose · enter confirm · esc back

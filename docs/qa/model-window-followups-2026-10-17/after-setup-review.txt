@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Smith setup · Review · nothing is written until you confirm
+
+  Action   Change default model
+  Default  remote/cli/claude-code/opus
+  Writes   ~/.smith/config.toml, then checks the configuration
+
+  enter confirm · esc back

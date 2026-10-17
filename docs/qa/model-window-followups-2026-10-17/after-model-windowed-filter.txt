@@ -1,0 +1,40 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Choose model · filter: window
+❯ wide-model    remote · 272k context
+  264k input · 8.1k output ceiling · request 8.1k automatic · remote/wide-model · user config · windows 272k/872k
+  window-model  remote · 128k context                                                                          ✓ current
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+       remote/window-model · wide · ask · 128k · /private/tmp/smith-fixture-tmp/mw-followups/project-after · unknown ctx
+  ↑↓ choose · enter confirm · esc cancel

@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Smith setup · Choose default model · filter: wide
+❯ wide-model    remote · 272k context
+  264k input · 8.1k output ceiling · request 8.1k automatic · remote/wide-model · user config · windows 272k/872k
+  window-model  remote · 128k context
+
+  ↑↓ choose · enter confirm · esc back
