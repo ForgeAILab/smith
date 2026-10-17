@@ -8,6 +8,10 @@
 //! a failure report quotes. Values Smith passed to the server through its
 //! environment are redacted before a line is stored or logged.
 
+// Only the Unix stdio transport produces output; elsewhere the type is the
+// connector trait's vocabulary alone.
+#![cfg_attr(not(unix), allow(dead_code))]
+
 use std::collections::VecDeque;
 use std::process::ExitStatus;
 use std::sync::Mutex;

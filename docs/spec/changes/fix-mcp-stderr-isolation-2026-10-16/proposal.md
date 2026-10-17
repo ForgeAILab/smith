@@ -51,7 +51,8 @@ server that fails to start explains why only on stderr.
   `crates/smith-runtime/src/mcp.rs`, `crates/smith-cli/src/mcp.rs`,
   `crates/smith-cli/src/local_command/mcp.rs`,
   `crates/smith-cli/src/runtime_host.rs`, `crates/smith-cli/src/logging.rs`,
-  `crates/smith-cli/src/main.rs`, `docs/extensions.md`
+  `crates/smith-cli/src/main.rs`, `crates/smith-cli/src/tui_driver.rs`
+  (footer), `docs/extensions.md`, `docs/headless-protocol.md`
 - `/mcp` keeps its one-line-per-server shape: the stderr lines follow the
   failure reason as ` · stderr: a | b | c`, so no TUI renderer changes.
 - The watchdog itself is unchanged; its contract tests keep their

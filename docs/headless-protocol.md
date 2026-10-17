@@ -215,8 +215,10 @@ It reports prior process-owned work and never claims that it restarted.
 
 `diagnostics` is omitted when empty. It is an array of bounded strings for
 problems that did not stop the turn, such as an installed coding agent that
-never connected to the tools Smith offered it, or a declared MCP server left
-stopped because it needs interactive trust. A turn that reports
+never connected to the tools Smith offered it, a declared MCP server left
+stopped because it needs interactive trust, or a declared MCP server that
+failed, with the last lines it wrote to stderr (a server's stderr itself
+never reaches Smith's terminal). A turn that reports
 diagnostics still has `status: "ok"`. Text mode writes each one to stderr
 with the `smith:` prefix.
 
