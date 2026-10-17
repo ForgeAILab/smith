@@ -1039,6 +1039,10 @@ mod plugins;
 #[path = "cli_contract/mcp_relay.rs"]
 mod mcp_relay;
 
+#[cfg(unix)]
+#[path = "cli_contract/mcp_stderr.rs"]
+mod mcp_stderr;
+
 #[path = "cli_contract/support.rs"]
 mod support;
 

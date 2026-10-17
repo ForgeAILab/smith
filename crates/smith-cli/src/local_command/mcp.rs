@@ -67,7 +67,9 @@ pub(crate) fn report(context: Option<&McpContext>) -> McpReport {
                     McpState::NeedsTrust(TrustStatus::Changed) => McpServerState::Changed,
                     McpState::NeedsTrust(TrustStatus::Denied) => McpServerState::Denied,
                     McpState::NeedsTrust(_) => McpServerState::Untrusted,
-                    McpState::Failed { reason } => McpServerState::Failed { reason },
+                    McpState::Failed { reason } => McpServerState::Failed {
+                        reason: crate::mcp::failure_detail(&reason, &report.stderr),
+                    },
                 },
                 rejected: report.rejected,
                 values,

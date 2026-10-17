@@ -152,6 +152,53 @@ async fn granting_trust_records_the_decision_and_leaves_the_session_running() {
     assert!(unknown.contains("not a declared MCP server"), "{unknown}");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_server_shows_its_last_stderr_lines_in_mcp() {
+    let (home, project) = mcp_project(
+        "[mcp.servers.broken]\ncommand = \"sh\"\nargs = [\"-c\", \"\
+         echo 'npm notice New major version' >&2; \
+         echo 'Error: Cannot find module server.js' >&2; exit 1\"]\n",
+    );
+    let context = mcp_context(home.path(), project.path());
+    assert!(matches!(
+        local_command::mcp::trust(Some(&context), "broken"),
+        smith_client::mcp_report::McpReport::Trusted { .. }
+    ));
+    context
+        .supervisor()
+        .settle(std::time::Duration::from_secs(10))
+        .await;
+
+    let listed =
+        smith_client::mcp_report::render_plain(&local_command::mcp::report(Some(&context)));
+    assert!(listed.contains("broken · stdio · failed · "), "{listed}");
+    assert!(
+        listed.contains(
+            " · stderr: npm notice New major version | Error: Cannot find module server.js"
+        ),
+        "{listed}"
+    );
+    assert_eq!(listed.lines().count(), 1, "one line per server: {listed}");
+    let notices = context.failure_notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        notices[0].starts_with("`broken` failed — ")
+            && notices[0].ends_with("Error: Cannot find module server.js"),
+        "{notices:?}"
+    );
+}
+
+#[test]
+fn a_quoted_stderr_line_is_bounded() {
+    let long = "x".repeat(500);
+    let detail = crate::mcp::failure_detail("did not start", &[long]);
+    assert!(detail.starts_with("did not start · stderr: "), "{detail}");
+    assert!(detail.ends_with('…'), "{detail}");
+    assert!(detail.chars().count() < 160, "{detail}");
+    assert_eq!(crate::mcp::failure_detail("plain", &[]), "plain");
+}
+
 #[tokio::test]
 async fn a_project_declaring_no_server_gets_no_supervisor_and_no_trust_file() {
     let (home, project) = mcp_project("");

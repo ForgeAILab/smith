@@ -44,8 +44,10 @@ use smith_config::resolve::{
 };
 use smith_config::trust::{TrustStatus, TrustStore};
 
+mod stderr;
 #[cfg(unix)]
 mod stdio;
+pub use stderr::McpStderr;
 #[cfg(unix)]
 pub use stdio::{kill_stdio_servers, shutdown_stdio_servers};
 
@@ -54,6 +56,9 @@ pub const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 30_000;
 
 /// The longest failure reason any surface will be asked to render.
 const MAX_REASON_CHARS: usize = 200;
+
+/// How many of a failed server's last stderr lines a report carries.
+const REPORTED_STDERR_LINES: usize = 3;
 
 /// Where one declared server has got to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,9 +101,10 @@ impl McpState {
 
 /// What a surface may say about one declared server.
 ///
-/// There is no field a credential value could occupy: an environment variable
-/// is named, never shown, and a failure reason is bounded and comes from the
-/// error taxonomy rather than from a formatted configuration.
+/// No field is filled from configuration values: an environment variable is
+/// named, never shown, and a failure reason is bounded and comes from the
+/// error taxonomy rather than from a formatted configuration. The server's own
+/// stderr is quoted only with every value Smith passed to it redacted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpServerReport {
     /// The declared name, which namespaces the server's tools.
@@ -111,6 +117,8 @@ pub struct McpServerReport {
     pub state: McpState,
     /// Tools the server advertised and Smith would not register, with reasons.
     pub rejected: Vec<String>,
+    /// The last lines a failed stdio server wrote to stderr; empty otherwise.
+    pub stderr: Vec<String>,
 }
 
 /// Everything the supervisor needs that does not come from configuration.
@@ -241,6 +249,13 @@ pub struct McpConnected {
 pub trait McpConnector: Send + Sync + std::fmt::Debug {
     /// Connects, lists, and binds one server's tools.
     async fn connect(&self, config: &McpServerConfig) -> Result<McpConnected, McpError>;
+
+    /// The stderr of the process most recently started for `server` (the
+    /// registry name [`connect`](Self::connect) was given), for a connector
+    /// that starts one.
+    fn stderr(&self, _server: &str) -> Option<Arc<McpStderr>> {
+        None
+    }
 }
 
 /// The production connector: the shared package's client.
@@ -250,11 +265,7 @@ pub struct ClientConnector;
 #[async_trait]
 impl McpConnector for ClientConnector {
     async fn connect(&self, config: &McpServerConfig) -> Result<McpConnected, McpError> {
-        WatchdogConnector {
-            smith_executable: None,
-        }
-        .connect(config)
-        .await
+        WatchdogConnector::new(None).connect(config).await
     }
 }
 
@@ -262,6 +273,18 @@ impl McpConnector for ClientConnector {
 struct WatchdogConnector {
     #[cfg_attr(not(unix), allow(dead_code))]
     smith_executable: Option<PathBuf>,
+    /// Each server's latest process stderr, by registry name.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    outputs: Mutex<BTreeMap<String, Arc<McpStderr>>>,
+}
+
+impl WatchdogConnector {
+    fn new(smith_executable: Option<PathBuf>) -> Self {
+        Self {
+            smith_executable,
+            outputs: Mutex::default(),
+        }
+    }
 }
 
 #[async_trait]
@@ -276,6 +299,10 @@ impl McpConnector for WatchdogConnector {
                             server: config.name.clone(),
                             reason: error.to_string(),
                         })?;
+                    self.outputs
+                        .lock()
+                        .expect("MCP stderr outputs")
+                        .insert(config.name.clone(), transport.stderr());
                     McpClient::new()
                         .connect_over(config.name.clone(), transport, config.startup_timeout)
                         .await?
@@ -306,6 +333,14 @@ impl McpConnector for WatchdogConnector {
             rejected,
             connection: Some(connection),
         })
+    }
+
+    fn stderr(&self, server: &str) -> Option<Arc<McpStderr>> {
+        self.outputs
+            .lock()
+            .expect("MCP stderr outputs")
+            .get(server)
+            .cloned()
     }
 }
 
@@ -349,9 +384,7 @@ impl McpSupervisor {
         trust: &TrustStore,
         options: McpOptions,
     ) -> Result<Arc<Self>, RuntimeError> {
-        let connector = Arc::new(WatchdogConnector {
-            smith_executable: options.smith_executable.clone(),
-        });
+        let connector = Arc::new(WatchdogConnector::new(options.smith_executable.clone()));
         Self::planned_with(mcp, trust, options, connector)
     }
 
@@ -385,6 +418,7 @@ impl McpSupervisor {
                         source: server.source.clone(),
                         state,
                         rejected: Vec::new(),
+                        stderr: Vec::new(),
                     },
                     declaration: admission.connects().then(|| server.clone()),
                     tools: Vec::new(),
@@ -523,6 +557,7 @@ impl McpSupervisor {
                 return;
             };
             slot.report.state = McpState::Connecting;
+            slot.report.stderr.clear();
             slot.declaration = Some(server.clone());
         }
         let supervisor = Arc::clone(self);
@@ -570,7 +605,7 @@ impl McpSupervisor {
         let config = match configured {
             Ok(config) => config,
             Err(reason) => {
-                self.record_failure(&server.name, reason);
+                self.record_failure(&server.name, reason, Vec::new());
                 return;
             }
         };
@@ -586,6 +621,7 @@ impl McpSupervisor {
                 if self.retired.is_cancelled() {
                     return;
                 }
+                let mut watched = None;
                 if let Some(slot) = servers.get_mut(&server.name) {
                     slot.report.state = McpState::Connected {
                         tools: connected.tools.len(),
@@ -595,14 +631,86 @@ impl McpSupervisor {
                         .iter()
                         .map(|error| bounded(error.to_string()))
                         .collect();
+                    slot.report.stderr.clear();
                     slot.tools = connected.tools;
                     slot.connection = connected.connection;
+                    watched = self
+                        .connector
+                        .stderr(&config.name)
+                        .map(|output| (output, slot.connection.clone()));
                 }
                 drop(servers);
                 self.publish();
+                if let Some((output, connection)) = watched {
+                    self.watch_exit(server.name, output, connection);
+                }
             }
-            Err(error) => self.record_failure(&server.name, bounded(error.to_string())),
+            Err(error) => {
+                // A server that could not start usually said why on stderr,
+                // in lines that arrive as its process ends.
+                let stderr = match self.connector.stderr(&config.name) {
+                    Some(output) => {
+                        output.drained().await;
+                        output.lines()
+                    }
+                    None => Vec::new(),
+                };
+                self.record_failure(&server.name, bounded(error.to_string()), stderr);
+            }
         }
+    }
+
+    /// Reports a connected server whose process goes away on its own.
+    ///
+    /// Without this a crashed server stays `connected` while every call to it
+    /// fails. Marking it failed also retires its tools at the next safe
+    /// boundary, because the registered tool set changes.
+    fn watch_exit(
+        self: &Arc<Self>,
+        name: String,
+        output: Arc<McpStderr>,
+        connection: Option<Arc<McpConnection>>,
+    ) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let supervisor = Arc::downgrade(self);
+        let retired = self.retired.clone();
+        handle.spawn(async move {
+            let reason = tokio::select! {
+                biased;
+                _ = retired.cancelled() => return,
+                reason = output.lost() => reason,
+            };
+            let (Some(reason), Some(supervisor)) = (reason, supervisor.upgrade()) else {
+                return;
+            };
+            if supervisor.retired.is_cancelled() {
+                return;
+            }
+            {
+                let mut servers = supervisor.servers.lock().expect("supervisor state");
+                let Some(slot) = servers.get_mut(&name) else {
+                    return;
+                };
+                let current = match (&slot.connection, &connection) {
+                    (Some(slot), Some(watched)) => Arc::ptr_eq(slot, watched),
+                    (None, None) => true,
+                    _ => false,
+                };
+                if !current || !matches!(slot.report.state, McpState::Connected { .. }) {
+                    return;
+                }
+                slot.report.state = McpState::Failed {
+                    reason: bounded(reason.clone()),
+                };
+                slot.report.stderr = output.last_lines(REPORTED_STDERR_LINES);
+                slot.tools.clear();
+                slot.connection = None;
+            }
+            log_failure(&name, &reason, &output.lines());
+            supervisor.publish();
+        });
     }
 
     /// Turns a declaration into the shared package's configuration, resolving
@@ -728,13 +836,16 @@ impl McpSupervisor {
         }
     }
 
-    fn record_failure(&self, name: &str, reason: String) {
+    fn record_failure(&self, name: &str, reason: String, stderr: Vec<String>) {
+        log_failure(name, &reason, &stderr);
         {
             let mut servers = self.servers.lock().expect("supervisor state");
             if let Some(slot) = servers.get_mut(name) {
                 slot.report.state = McpState::Failed {
                     reason: bounded(reason),
                 };
+                slot.report.stderr =
+                    stderr[stderr.len().saturating_sub(REPORTED_STDERR_LINES)..].to_vec();
                 slot.tools.clear();
                 slot.connection = None;
             }
@@ -759,6 +870,12 @@ impl McpSupervisor {
     fn publish(&self) {
         self.changes.send_modify(|generation| *generation += 1);
     }
+}
+
+/// Writes a failure, with the server's whole retained stderr, to the session
+/// log, which is where an operator looks past the few lines a report quotes.
+fn log_failure(name: &str, reason: &str, stderr: &[String]) {
+    tracing::warn!(server = %name, %reason, ?stderr, "MCP server failed");
 }
 
 /// Trims a reason to something a status line can hold.

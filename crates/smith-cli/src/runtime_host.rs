@@ -558,6 +558,14 @@ async fn start_host_with_modules(
             .map(|supervisor| supervisor.settle(budget)),
     )
     .await;
+    // A server's stderr never reaches the terminal, so a run without `/mcp`
+    // learns why one is missing here. An interactive session shows failures
+    // in its status and `/mcp` instead, and its short grace settles little.
+    if surface != HostSurface::Terminal
+        && let Some(context) = &mcp
+    {
+        mcp_trust_notices.extend(context.failure_notices());
+    }
     let host = Box::pin(smith_runtime::host::start_with_modules(
         request,
         command_modules,

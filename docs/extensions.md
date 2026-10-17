@@ -37,6 +37,21 @@ forced cleanup, while connections held by an in-flight call remain usable.
 Embeddings without an injected Smith executable start servers directly and
 warn once; those servers may outlive their host.
 
+A stdio server's stderr never reaches Smith's terminal, where it would paint
+over the TUI. Smith pipes the stderr of the watchdog, which passes it on to
+the server, so the server's output, its descendants', and the watchdog's own
+spawn errors share one pipe. Smith drains it continuously and keeps the last
+64 lines (at most 16 KiB) per server, with terminal escapes removed, only the
+last frame of a carriage-return redraw kept, and every environment value it
+gave the server redacted. Each line is written to the session log at `info`
+(`SMITH_LOG=info`). When a server fails to start, or exits on its own after
+connecting, Smith logs its retained stderr at `warn`, marks it failed, and
+quotes its last three lines after the reason in `/mcp`. A server that exits on
+its own also loses its tools at the next safe boundary. A headless run adds
+one `diagnostics` line per failed server. Healthy chatter adds nothing to the
+screen. A tool call to a dead server still returns the shared MCP client's
+error; server stderr is not passed to the model.
+
 The reserved process protocol maps tool, skill, command, redaction-safe
 observer, and declarative-panel contributions into bounded messages. It must
 broker cancellation, lifecycle, filesystem handles, endpoint-scoped network,

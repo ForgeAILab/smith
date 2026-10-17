@@ -757,6 +757,179 @@ async fn a_remote_server_this_build_can_reach_fails_loudly_rather_than_silently(
     );
 }
 
+/// Waits until `name`'s state satisfies `done`, failing loudly rather than
+/// hanging.
+#[cfg(unix)]
+async fn reported_when(
+    supervisor: &Arc<McpSupervisor>,
+    name: &str,
+    done: impl Fn(&smith_runtime::mcp::McpState) -> bool,
+) -> smith_runtime::mcp::McpServerReport {
+    let mut changes = supervisor.subscribe();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let report = supervisor.report(name).expect("a reported server");
+            if done(&report.state) {
+                return report;
+            }
+            changes.changed().await.expect("a live supervisor");
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{name} never reached the expected state"))
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stdio_server_that_cannot_start_is_reported_with_its_stderr() {
+    // The real connector, the real process: what the server says on stderr
+    // must reach the report instead of the terminal.
+    let mut fixture = McpFixture::new(
+        MCP_ASK_CONFIG,
+        r#"[mcp.servers.broken]
+command = "sh"
+args = ["-c", "echo 'npm notice New major version' >&2; echo 'Error: Cannot find module server.js' >&2; exit 1"]
+"#,
+    );
+    fixture.trust_all();
+    let supervisor = McpSupervisor::plan(
+        &fixture.fixture.config().mcp,
+        &fixture.trust,
+        smith_runtime::mcp::McpOptions::new(fixture.fixture.project.path()),
+    )
+    .expect("a planned supervisor");
+    supervisor.connect();
+    fixture.settled(&supervisor).await;
+
+    let report = supervisor.report("broken").expect("a reported server");
+    assert!(
+        matches!(report.state, smith_runtime::mcp::McpState::Failed { .. }),
+        "{report:?}"
+    );
+    assert_eq!(
+        report.stderr,
+        [
+            "npm notice New major version",
+            "Error: Cannot find module server.js"
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_connected_stdio_server_that_exits_is_reported_failed_and_withdrawn() {
+    // A minimal server: it answers the handshake and the tool listing, then
+    // dies on its own, as a crashing server would.
+    let mut fixture = McpFixture::new(
+        MCP_ASK_CONFIG,
+        r#"[mcp.servers.crashy]
+command = "sh"
+args = ["-c", '''
+read line
+version=$(printf '%s' "$line" | sed -n 's/.*"protocolVersion":"\([^"]*\)".*/\1/p')
+id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"%s","capabilities":{"tools":{}},"serverInfo":{"name":"crashy","version":"1"}}}\n' "$id" "$version"
+read _
+read line
+id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping","inputSchema":{"type":"object"}}]}}\n' "$id"
+echo 'npm notice harmless chatter' >&2
+sleep 0.3
+echo 'panic: lost the database' >&2
+exit 3
+''']
+"#,
+    );
+    fixture.trust_all();
+    let supervisor = McpSupervisor::plan(
+        &fixture.fixture.config().mcp,
+        &fixture.trust,
+        smith_runtime::mcp::McpOptions::new(fixture.fixture.project.path()),
+    )
+    .expect("a planned supervisor");
+    supervisor.connect();
+
+    let connected = reported_when(&supervisor, "crashy", |state| {
+        !matches!(state, smith_runtime::mcp::McpState::Connecting)
+    })
+    .await;
+    assert_eq!(
+        connected.state,
+        smith_runtime::mcp::McpState::Connected { tools: 1 },
+        "{connected:?}"
+    );
+    assert!(connected.stderr.is_empty(), "chatter is not a report");
+
+    let failed = reported_when(&supervisor, "crashy", |state| {
+        matches!(state, smith_runtime::mcp::McpState::Failed { .. })
+    })
+    .await;
+    assert_eq!(
+        failed.state,
+        smith_runtime::mcp::McpState::Failed {
+            reason: "exited unexpectedly (exit status: 3)".into()
+        }
+    );
+    assert_eq!(
+        failed.stderr,
+        ["npm notice harmless chatter", "panic: lost the database"]
+    );
+    assert!(
+        supervisor.tools().is_empty(),
+        "a dead server's tools are withdrawn"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stdio_server_smith_shuts_down_is_not_reported_failed() {
+    let mut fixture = McpFixture::new(
+        MCP_ASK_CONFIG,
+        r#"[mcp.servers.quiet]
+command = "sh"
+args = ["-c", '''
+read line
+version=$(printf '%s' "$line" | sed -n 's/.*"protocolVersion":"\([^"]*\)".*/\1/p')
+id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"%s","capabilities":{"tools":{}},"serverInfo":{"name":"quiet","version":"1"}}}\n' "$id" "$version"
+read _
+read line
+id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}\n' "$id"
+echo 'shutting down' >&2
+while read _; do :; done
+''']
+"#,
+    );
+    fixture.trust_all();
+    let supervisor = McpSupervisor::plan(
+        &fixture.fixture.config().mcp,
+        &fixture.trust,
+        smith_runtime::mcp::McpOptions::new(fixture.fixture.project.path()),
+    )
+    .expect("a planned supervisor");
+    supervisor.connect();
+    fixture.settled(&supervisor).await;
+    assert_eq!(
+        supervisor.report("quiet").unwrap().state,
+        smith_runtime::mcp::McpState::Connected { tools: 0 }
+    );
+    let generation = supervisor.generation();
+    supervisor.shutdown().await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let report = supervisor.report("quiet").unwrap();
+    assert!(
+        !matches!(report.state, smith_runtime::mcp::McpState::Failed { .. }),
+        "{report:?}"
+    );
+    assert!(report.stderr.is_empty());
+    assert_eq!(
+        supervisor.generation(),
+        generation + 1,
+        "only shutdown published"
+    );
+}
+
 // A one-pixel PNG, kept inline just like a connected server's screenshot.
 const SCREENSHOT: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
 

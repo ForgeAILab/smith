@@ -4,6 +4,11 @@
 //! SIGKILL, Ctrl-C, and terminal hangup) still reach them. Smith signals each
 //! watchdog by PID during exit cleanup. The watchdog also stops a busy server
 //! when Smith disappears without running cleanup.
+//!
+//! A server's stderr is piped, never inherited: Smith's own stderr is the
+//! terminal the TUI draws on. The watchdog passes its stderr to the server, so
+//! one pipe carries the server's output, its descendants', and the watchdog's
+//! own spawn errors into [`McpStderr`].
 
 use std::io;
 use std::path::Path;
@@ -18,6 +23,9 @@ use rmcp::RoleClient;
 use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::{Transport, async_rw::AsyncRwTransport};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::oneshot;
+
+use super::stderr::{self, McpStderr};
 
 const CLOSE_GRACE: Duration = Duration::from_secs(3);
 const EXIT_GRACE: Duration = Duration::from_millis(500);
@@ -42,10 +50,15 @@ fn processes() -> &'static Mutex<Processes> {
 struct ServerProcess {
     child: Mutex<Option<Child>>,
     supervised: bool,
+    output: Arc<McpStderr>,
+    /// Dropped with the process, which lets the stderr drain finish.
+    _drain_stop: oneshot::Sender<()>,
 }
 
 impl ServerProcess {
     fn signal(&self, signal: Signal) {
+        // Whatever follows a signal from Smith is a stop, not a failure.
+        self.output.mark_stopped();
         let child = self.child.lock().expect("MCP child");
         if let Some(pid) = child.as_ref().and_then(Child::id) {
             // Killing the watchdog itself would strand its server. Its TERM
@@ -65,8 +78,9 @@ impl ServerProcess {
             return true;
         };
         match running.try_wait() {
-            Ok(Some(_)) => {
+            Ok(Some(status)) => {
                 child.take();
+                self.output.record_status(status);
                 true
             }
             Ok(None) => false,
@@ -134,7 +148,9 @@ pub(super) fn spawn(
             .envs(env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            // Inherited, anything the server prints would land on Smith's
+            // terminal and over the TUI.
+            .stderr(Stdio::piped())
             .kill_on_drop(smith_executable.is_none());
         if let Some(cwd) = cwd {
             invocation.current_dir(cwd);
@@ -165,9 +181,19 @@ pub(super) fn spawn(
     };
     let stdout = child.stdout.take().expect("piped MCP stdout");
     let stdin = child.stdin.take().expect("piped MCP stdin");
+    let output = Arc::new(McpStderr::new(config.name.clone()));
+    let (drain_stop, drain_stopped) = oneshot::channel();
+    tokio::spawn(stderr::drain(
+        child.stderr.take().expect("piped MCP stderr"),
+        Arc::clone(&output),
+        env.values().cloned().collect(),
+        drain_stopped,
+    ));
     let process = Arc::new(ServerProcess {
         child: Mutex::new(Some(child)),
         supervised,
+        output,
+        _drain_stop: drain_stop,
     });
     processes.children.retain(|child| child.strong_count() > 0);
     processes.children.push(Arc::downgrade(&process));
@@ -175,6 +201,13 @@ pub(super) fn spawn(
         io: AsyncRwTransport::new(stdout, stdin),
         process,
     })
+}
+
+impl StdioTransport {
+    /// What this server writes to stderr, bounded and redacted.
+    pub(super) fn stderr(&self) -> Arc<McpStderr> {
+        Arc::clone(&self.process.output)
+    }
 }
 
 fn warn_direct_spawn() {
@@ -199,10 +232,29 @@ impl Transport<RoleClient> for StdioTransport {
     }
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleClient>> {
-        self.io.receive().await
+        let message = self.io.receive().await;
+        // The output closed. Unless Smith is stopping the server, it is gone
+        // on its own; reaping keeps its exit status for the report.
+        if message.is_none() && self.process.output.mark_lost() && !self.process.reap() {
+            let process = Arc::downgrade(&self.process);
+            tokio::spawn(async move {
+                let deadline = tokio::time::Instant::now() + REAP_BOUND;
+                // Never hold the process across a sleep: its drop is what
+                // stops a server whose connection is gone.
+                while let Some(process) = process.upgrade() {
+                    if process.reap() || tokio::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    drop(process);
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                }
+            });
+        }
+        message
     }
 
     async fn close(&mut self) -> io::Result<()> {
+        self.process.output.mark_stopped();
         let result = self.io.close().await;
         let deadline = tokio::time::Instant::now() + CLOSE_GRACE;
         while !self.process.reap() {
@@ -303,6 +355,85 @@ mod tests {
             .expect("close stdio transport");
 
         assert_reaped(&transport.process, pid);
+        assert_eq!(
+            transport.stderr().lost().await,
+            None,
+            "a server Smith closed did not fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn stderr_is_captured_redacted_and_a_server_exiting_alone_is_reported() {
+        let mut transport = spawn(
+            &McpServerConfig::new(
+                "stderr-test",
+                McpTransport::Stdio {
+                    command: "sh".into(),
+                    args: vec![
+                        "-c".into(),
+                        r#"printf 'npm notice \033[1mrun npx\033[0m\n' >&2
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}'
+echo "fatal: token $STDERR_TEST_TOKEN rejected" >&2
+exit 3"#
+                            .into(),
+                    ],
+                    env: [("STDERR_TEST_TOKEN".into(), "secret-token-value".into())].into(),
+                    cwd: None,
+                },
+            ),
+            None,
+        )
+        .expect("spawn stdio server");
+        let output = transport.stderr();
+        tokio::time::timeout(Duration::from_secs(5), transport.receive())
+            .await
+            .unwrap()
+            .expect("stdout still carries the protocol");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), transport.receive())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), output.lost())
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("exited unexpectedly (exit status: 3)")
+        );
+        assert_eq!(
+            output.lines(),
+            ["npm notice run npx", "fatal: token [redacted] rejected"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_chatty_server_never_blocks_on_its_stderr_pipe() {
+        // Far more than a pipe buffer: an undrained pipe would block the
+        // server before it ever answered.
+        let mut transport = spawn_shell(
+            r#"i=0; while [ $i -lt 4000 ]; do echo "chatter line $i padding padding padding" >&2; i=$((i+1)); done
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}'
+read _"#,
+        );
+        tokio::time::timeout(Duration::from_secs(10), transport.receive())
+            .await
+            .expect("a server writing to stderr must not block")
+            .expect("server notification");
+        let output = transport.stderr();
+        tokio::time::timeout(Duration::from_secs(5), transport.close())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(transport);
+        output.drained().await;
+        let lines = output.lines();
+        assert!(lines.len() <= 64, "{}", lines.len());
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some("chatter line 3999 padding padding padding")
+        );
     }
 
     #[tokio::test]

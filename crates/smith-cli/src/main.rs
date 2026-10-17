@@ -139,6 +139,8 @@ async fn execute(command: Command) -> Result<u8> {
 }
 
 async fn run_command(mut args: RunArgs) -> Result<u8> {
+    // Before any MCP server is spawned, so its startup lands in the log.
+    logging::start();
     let mut setup_notice = None;
     let configured_background_exit = match inspect_selection(&args.selection)? {
         ConfigReadiness::Ready(resolution) => Some(resolution.config.background.exit_policy.value),

@@ -128,6 +128,24 @@ impl McpContext {
             .collect()
     }
 
+    /// One line per server that failed, with its last stderr lines.
+    ///
+    /// For runs without `/mcp`: a server's stderr no longer reaches the
+    /// terminal, so this is where a headless caller learns why it is missing.
+    pub(super) fn failure_notices(&self) -> Vec<String> {
+        self.reports()
+            .into_iter()
+            .filter_map(|report| match &report.state {
+                McpState::Failed { reason } => Some(format!(
+                    "`{}` failed — {}",
+                    report.name,
+                    failure_detail(reason, &report.stderr)
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The resolved declaration used to name a server's credential references.
     pub(super) fn server(&self, name: &str) -> Option<&ResolvedMcpServer> {
         self.servers.get(name)
@@ -190,6 +208,30 @@ impl McpContext {
             }
         })
     }
+}
+
+/// The longest stderr line a one-line failure quotes, in characters.
+const QUOTED_STDERR_CHARS: usize = 120;
+
+/// A failure reason followed by the server's last stderr lines, on one line.
+pub(super) fn failure_detail(reason: &str, stderr: &[String]) -> String {
+    if stderr.is_empty() {
+        return reason.to_owned();
+    }
+    let quoted = stderr
+        .iter()
+        .map(|line| {
+            if line.chars().count() > QUOTED_STDERR_CHARS {
+                let mut kept: String = line.chars().take(QUOTED_STDERR_CHARS - 1).collect();
+                kept.push('…');
+                kept
+            } else {
+                line.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" | ");
+    format!("{reason} · stderr: {quoted}")
 }
 
 pub(super) fn trust_notice(server: &str) -> String {
