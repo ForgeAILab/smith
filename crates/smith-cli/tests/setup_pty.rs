@@ -28,6 +28,13 @@ max_input_tokens = 124000
 max_output_tokens = 4096
 "#;
 
+/// A terminal without the kitty keyboard protocol answers only the primary
+/// device-attributes half of the query, so Smith learns at once that it is
+/// absent instead of waiting out crossterm's two-second timeout.
+const LEGACY_TERMINAL: &str = r"\033\[?62;22c";
+/// A kitty-protocol terminal reports its current flags (none) first.
+const KITTY_TERMINAL: &str = r"\033\[?0u\033\[?62;22c";
+
 struct Fixture {
     home: tempfile::TempDir,
     project: tempfile::TempDir,
@@ -150,6 +157,21 @@ max_output_tokens = 4096
         rows: u16,
         columns: u16,
     ) -> Option<Output> {
+        self.run_expect_as(LEGACY_TERMINAL, smith_args, interaction, rows, columns)
+    }
+
+    /// Runs Smith under `expect`, which plays a terminal that answers Smith's
+    /// one keyboard-protocol query with `terminal_reply`, as a real terminal
+    /// does. Every interaction here enters the screen before it prints what
+    /// the script first waits for, so answering first consumes nothing.
+    fn run_expect_as(
+        &self,
+        terminal_reply: &str,
+        smith_args: &str,
+        interaction: &str,
+        rows: u16,
+        columns: u16,
+    ) -> Option<Output> {
         if !std::path::Path::new("/usr/bin/expect").is_file() {
             return None;
         }
@@ -162,6 +184,11 @@ max_output_tokens = 4096
         let script = format!(
             "set timeout 10\n\
              spawn -noecho /bin/sh -c {{{shell}}}\n\
+             expect {{\n\
+                 -exact \"\\033\\[?u\\033\\[c\" {{ send -- \"{terminal_reply}\" }}\n\
+                 timeout {{ exit 123 }}\n\
+                 eof {{ exit 125 }}\n\
+             }}\n\
              {interaction}\n\
              expect eof\n\
              set result [wait]\n\
@@ -762,8 +789,8 @@ expect {
     );
     assert!(screen.contains("local/example-model"), "{screen}");
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
-    // `expect` never answers the keyboard-protocol query, so this terminal
-    // counts as legacy-only and gets neither a push nor a pop.
+    // This terminal answers only device attributes, as one without the
+    // keyboard protocol does, so it gets neither a push nor a pop.
     assert!(
         screen.contains("\x1b[?u"),
         "the query was not sent: {screen}"
@@ -776,16 +803,9 @@ expect {
 fn a_kitty_protocol_terminal_gets_disambiguation_popped_before_the_shell_returns() {
     let fixture = Fixture::new();
     fixture.configure_fake();
-    // Answer the keyboard query (flags 0) and then device attributes, as a
-    // kitty-protocol terminal does. Shift+Enter then arrives as `CSI 13;2 u`,
-    // and Esc as `CSI 27 u`.
+    // The terminal answers the keyboard query as kitty does. Shift+Enter
+    // then arrives as `CSI 13;2 u`, and Esc as `CSI 27 u`.
     let interaction = r#"
-expect {
-    -exact "\033\[?u" {}
-    timeout { exit 124 }
-    eof { exit 125 }
-}
-send -- "\033\[?0u\033\[?62;22c"
 expect {
     -exact "Ask Smith to do anything" {}
     timeout { exit 124 }
@@ -798,7 +818,13 @@ expect {
     eof { exit 125 }
 }
 "#;
-    let Some(output) = fixture.run_expect("--no-color --no-motion", interaction) else {
+    let Some(output) = fixture.run_expect_as(
+        KITTY_TERMINAL,
+        "--no-color --no-motion",
+        interaction,
+        32,
+        100,
+    ) else {
         return;
     };
     let screen = String::from_utf8_lossy(&output.stdout);

@@ -5,12 +5,13 @@
 The composer SHALL insert a newline at the cursor, without submitting, for
 Ctrl+J in every terminal, and for Shift+Enter and Alt+Enter where the
 terminal reports them. Typing `\` and then Enter SHALL replace the backslash
-with a newline. The command palette SHALL treat these keys the same way, and
-MUST NOT run a command for them. Submitting a multi-line draft MUST send its
-newlines intact. While an idle draft is non-empty and no overlay is open, the
-hint row SHALL name a newline key. The shortcuts panel and `/help` SHALL list
-every newline key. When a draft is taller than the composer, the composer
-SHALL scroll so that the cursor row stays visible.
+with a newline. In the command palette, Ctrl+J, Shift+Enter and Alt+Enter
+SHALL also insert a newline and MUST NOT run a command. Submitting a
+multi-line draft MUST send its newlines intact. While an idle draft is
+non-empty and no overlay is open, the hint row SHALL name a newline key. The
+shortcuts panel and `/help` SHALL list every newline key. When a draft is
+taller than the composer, the composer SHALL scroll so that the cursor row
+stays visible.
 
 #### Scenario: Ctrl+J in a terminal without keyboard enhancements
 
@@ -25,6 +26,13 @@ SHALL scroll so that the cursor row stays visible.
   Ghostty (and cmux) or kitty
 - **WHEN** the user presses Shift+Enter in a non-empty draft
 - **THEN** a newline is inserted at the cursor and nothing is submitted
+
+#### Scenario: A newline key in the command palette
+
+- **GIVEN** the composer holds `/status` with the command palette open
+- **WHEN** the user presses Ctrl+J, Shift+Enter or Alt+Enter
+- **THEN** the draft becomes `/status` followed by a newline
+- **AND** no command runs and the palette stays open
 
 #### Scenario: Newline keys are discoverable
 
