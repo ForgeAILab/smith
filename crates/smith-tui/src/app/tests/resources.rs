@@ -52,6 +52,90 @@
         );
     }
 
+    fn windowed_app(windows: &[&str], current: &str) -> App {
+        let mut app = app();
+        app.set_resources(RuntimeResources {
+            context_windows: windows
+                .iter()
+                .map(|name| {
+                    ResourceEntry::new(*name, *name, "select this model context window")
+                        .active(*name == current)
+                })
+                .collect(),
+            context_window: Some(current.into()),
+            ..RuntimeResources::default()
+        });
+        app
+    }
+
+    #[test]
+    fn bare_context_keeps_the_report_and_opens_the_window_picker_on_the_current_window() {
+        let mut app = windowed_app(&["128k", "1m", "32k"], "128k");
+        type_text(&mut app, "/context");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Command(HostCommand::Context)),
+            "the usage report is still requested"
+        );
+        match &app.overlay {
+            Some(Overlay::ResourcePicker {
+                target: ResourceTarget::ContextWindow,
+                picker,
+                ..
+            }) => {
+                assert_eq!(picker.title, "Choose context window");
+                assert_eq!(picker.selected, 0);
+                assert!(picker.entries[picker.selected].active);
+            }
+            other => panic!("expected the context window picker, got {other:?}"),
+        }
+        assert_eq!(app.composer.text(), "");
+
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::ContextWindow(Some("1m".into()))
+            ))),
+            "Enter switches exactly as `/context 1m` does"
+        );
+        assert!(app.overlay.is_none());
+
+        // The picker opens on the current window wherever it sits.
+        let mut app = windowed_app(&["128k", "1m", "32k"], "32k");
+        type_text(&mut app, "/context");
+        app.on_key(key(KeyCode::Enter));
+        match &app.overlay {
+            Some(Overlay::ResourcePicker { picker, .. }) => assert_eq!(picker.selected, 2),
+            other => panic!("expected the context window picker, got {other:?}"),
+        }
+        assert_eq!(app.on_key(key(KeyCode::Esc)), None);
+        assert!(app.overlay.is_none(), "Escape leaves only the report");
+    }
+
+    #[test]
+    fn bare_context_shows_only_the_report_without_a_window_to_choose() {
+        for windows in [&[][..], &["128k"][..]] {
+            let mut app = windowed_app(windows, "128k");
+            type_text(&mut app, "/context");
+            assert_eq!(
+                app.on_key(key(KeyCode::Enter)),
+                Some(Action::Command(HostCommand::Context))
+            );
+            assert!(app.overlay.is_none(), "{windows:?}");
+        }
+
+        // A running turn would refuse the switch, so no picker is offered.
+        let mut app = windowed_app(&["128k", "1m"], "128k");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        type_text(&mut app, "/context");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Command(HostCommand::Context))
+        );
+        assert!(app.overlay.is_none());
+    }
+
     #[test]
     fn an_unknown_slash_command_fails_locally_and_names_help() {
         let mut app = app();

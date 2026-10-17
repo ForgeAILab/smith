@@ -98,6 +98,7 @@ impl App {
             ResourceTarget::Advisor => "Choose advisor",
             ResourceTarget::Reference => "Attach file or invoke agent",
             ResourceTarget::Account => "Choose account",
+            ResourceTarget::ContextWindow => "Choose context window",
         };
         let mut picker = ResourcePicker::new(title, entries, empty_guidance);
         if let Some(query) = initial_query {
@@ -114,6 +115,7 @@ impl App {
                 | ResourceTarget::Think
                 | ResourceTarget::Effort
                 | ResourceTarget::Advisor
+                | ResourceTarget::ContextWindow
         ) {
             picker.selected = picker
                 .filtered_indices()
@@ -169,6 +171,10 @@ impl App {
             ResourceTarget::Account => (
                 self.resources.accounts.clone(),
                 "This provider declares a single credential · add `credentials` to pool accounts",
+            ),
+            ResourceTarget::ContextWindow => (
+                self.resources.context_windows.clone(),
+                "The active model has no selectable context windows",
             ),
             ResourceTarget::Reference => {
                 let mut entries = self
@@ -294,6 +300,12 @@ impl App {
                 self.composer.clear();
                 Some(Action::Reconfigure(SessionControl::Reconfigure(
                     SelectionCommand::Effort((id != "default").then_some(id)),
+                )))
+            }
+            ResourceTarget::ContextWindow => {
+                self.composer.clear();
+                Some(Action::Reconfigure(SessionControl::Reconfigure(
+                    SelectionCommand::ContextWindow(Some(id)),
                 )))
             }
             ResourceTarget::Advisor => {
@@ -944,6 +956,19 @@ impl App {
                 Some(Action::Reconfigure(SessionControl::Reconfigure(
                     SelectionCommand::CapabilityAllow(pattern),
                 )))
+            }
+            Command::Host(local @ HostCommand::Context) => {
+                self.accept_composer_input();
+                // The usage report is unchanged. When there is a window to
+                // switch to, and the switch would not be refused for a running
+                // turn, the window picker opens beneath it as `/model`'s does.
+                if self.resources.context_windows.len() > 1
+                    && !self.is_busy()
+                    && !self.has_pending_input()
+                {
+                    self.open_target_picker(ResourceTarget::ContextWindow, restore);
+                }
+                Some(Action::Command(local))
             }
             Command::Host(local) => {
                 self.accept_composer_input();

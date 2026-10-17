@@ -385,6 +385,8 @@ pub enum ResourceTarget {
     Reference,
     /// Credential-pool member serving subsequent attempts.
     Account,
+    /// Named context window of the active model.
+    ContextWindow,
 }
 
 /// A temporary interactive surface. At most one exists at a time.
