@@ -167,14 +167,14 @@ dependencies = [
 
 [[package]]
 name = "smith-module-sdk"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "wit-bindgen",
 ]
 
 [[package]]
 name = "smith-wasm-module-hello"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "smith-module-sdk",
 ]

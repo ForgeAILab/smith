@@ -167,14 +167,14 @@ dependencies = [
 
 [[package]]
 name = "smith-module-sdk"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "wit-bindgen",
 ]
 
 [[package]]
 name = "smith-wasm-module-relay"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde_json",
  "smith-module-sdk",
