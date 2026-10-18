@@ -1,12 +1,12 @@
 [package]
 name = "smith-conformance-guest"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 publish = false
 [lib]
 crate-type = ["cdylib"]
 [dependencies]
-smith-module-sdk = { path = "../../../../smith-module-sdk", version = "0.7.1" }
+smith-module-sdk = { path = "../../../../smith-module-sdk", version = "0.7.2" }
 [features]
 context = []
 context-tools = []
