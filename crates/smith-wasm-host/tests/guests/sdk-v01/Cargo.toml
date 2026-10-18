@@ -1,6 +1,6 @@
 [package]
 name = "smith-module-sdk-v01"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 publish = false
 [target.'cfg(target_arch = "wasm32")'.dependencies]
