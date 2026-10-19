@@ -702,6 +702,13 @@ pub async fn wire_delegation_with_wait_policy(
             delegation_tool_names: vec![AGENT_TOOL_NAME.to_owned()],
             wait_default: wait_policy.runtime_default_timeout(),
             wait_max: wait_policy.runtime_max_timeout(),
+            // A delivered child reply follows the same inline rule as any
+            // tool result the parent reads, including `agent result`.
+            delivery_inline_bytes: delegation
+                .factory
+                .default_route
+                .tool_output_context
+                .inline_bytes as usize,
             ..DelegationConfig::default()
         },
     )?;

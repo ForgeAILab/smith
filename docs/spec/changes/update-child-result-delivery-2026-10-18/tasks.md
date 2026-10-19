@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-19T00:57:31Z
-updated_at: 2026-10-19T02:10:00Z
+updated_at: 2026-10-19T04:00:00Z
 completed_at:
 ---
 
@@ -51,18 +51,27 @@ Recorded in Agent Runtime as
 - [x] 2.6 The exact-format assertion in
   `tests/integration/external_agent/internal_turns.rs` needed no change: a
   short reply without artifacts keeps the old text.
-- [ ] 2.7 No checkpoint or session-state revision constant changed. Merge
-  PR #55 to `main` after CI.
+- [x] 2.7 No checkpoint or session-state revision constant changed. PR #55
+  merged to runtime `main` as `70c4f96` after CI passed (the macOS job's one
+  failure, `task_2_6_crash_matrix_accepted`, also fails on `main` and passed
+  on rerun).
 
 ## 3. Smith
 
-- [ ] 3.1 Pin the merged runtime revision; remove the local `[patch]`.
+- [x] 3.1 Pin runtime `70c4f96` (still version 0.7.0); no `[patch]` table.
+  The branch is stacked on `release/v0.7.5`, which moves the pin from
+  `e38809e` to `2b6c1e3`.
 - [x] 3.2 Pass the parent route's resolved inline bytes
   (`tool_output_context.inline_bytes`, from `context.tool_output_inline_bytes`)
   as the root coordinator's delivery budget. Children have no coordinator
   (one-level hierarchy), so only the root delivers.
 - [x] 3.3 All 30 `tests/delegation` tests pass against the runtime branch,
   including completion, parking, and no-double-delivery.
-- [ ] 3.4 Run the gate (`--no-fail-fast`, 1.88 clippy, CI's
-  `--no-default-features` steps) on the pinned revision, push the branch for
-  CI, then merge to `main`.
+- [x] 3.4 Gate on the pinned revision with `--locked`: fmt, clippy, 1.88
+  clippy, fixtures, `--no-default-features` build and tests, smoke, and deny
+  pass; 3,137 tests passed and 1 failed. The failure,
+  `interactive_rebind::metadata_adoption_waits_for_open_picker_and_active_turn_then_keeps_session_and_draft`,
+  passed 5 of 5 alone and in every later full run. The `smith-cli` test
+  binary also aborts with SIGABRT in some parallel runs (3 of 5 here, 2 of 6
+  on `release/v0.7.5` without this change), never single-threaded.
+- [ ] 3.5 Push the branch for CI; land on `main` after `release/v0.7.5`.

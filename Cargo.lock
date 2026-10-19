@@ -30,7 +30,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime"
 version = "0.7.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=2b6c1e351b24b1a4da40047592e460eaf8d5658e#2b6c1e351b24b1a4da40047592e460eaf8d5658e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=70c4f96ce8060c00d6176bc0724ee6d252b1426d#70c4f96ce8060c00d6176bc0724ee6d252b1426d"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-context",
@@ -56,7 +56,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-ability"
 version = "0.7.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=2b6c1e351b24b1a4da40047592e460eaf8d5658e#2b6c1e351b24b1a4da40047592e460eaf8d5658e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=70c4f96ce8060c00d6176bc0724ee6d252b1426d#70c4f96ce8060c00d6176bc0724ee6d252b1426d"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -68,7 +68,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-context"
 version = "0.7.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=2b6c1e351b24b1a4da40047592e460eaf8d5658e#2b6c1e351b24b1a4da40047592e460eaf8d5658e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=70c4f96ce8060c00d6176bc0724ee6d252b1426d#70c4f96ce8060c00d6176bc0724ee6d252b1426d"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -81,7 +81,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-core"
 version = "0.7.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=2b6c1e351b24b1a4da40047592e460eaf8d5658e#2b6c1e351b24b1a4da40047592e460eaf8d5658e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=70c4f96ce8060c00d6176bc0724ee6d252b1426d#70c4f96ce8060c00d6176bc0724ee6d252b1426d"
 dependencies = [
  "agent-runtime-registry",
  "async-trait",
@@ -99,7 +99,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-lcm"
 version = "0.7.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=2b6c1e351b24b1a4da40047592e460eaf8d5658e#2b6c1e351b24b1a4da40047592e460eaf8d5658e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=70c4f96ce8060c00d6176bc0724ee6d252b1426d#70c4f96ce8060c00d6176bc0724ee6d252b1426d"
 dependencies = [
  "agent-runtime-context",
  "agent-runtime-core",
@@ -113,7 +113,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-mcp"
 version = "0.7.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=2b6c1e351b24b1a4da40047592e460eaf8d5658e#2b6c1e351b24b1a4da40047592e460eaf8d5658e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=70c4f96ce8060c00d6176bc0724ee6d252b1426d#70c4f96ce8060c00d6176bc0724ee6d252b1426d"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-core",
@@ -130,7 +130,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-provider"
 version = "0.7.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=2b6c1e351b24b1a4da40047592e460eaf8d5658e#2b6c1e351b24b1a4da40047592e460eaf8d5658e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=70c4f96ce8060c00d6176bc0724ee6d252b1426d#70c4f96ce8060c00d6176bc0724ee6d252b1426d"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -150,7 +150,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-registry"
 version = "0.7.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=2b6c1e351b24b1a4da40047592e460eaf8d5658e#2b6c1e351b24b1a4da40047592e460eaf8d5658e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=70c4f96ce8060c00d6176bc0724ee6d252b1426d#70c4f96ce8060c00d6176bc0724ee6d252b1426d"
 dependencies = [
  "serde",
 ]
@@ -158,7 +158,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-testkit"
 version = "0.7.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=2b6c1e351b24b1a4da40047592e460eaf8d5658e#2b6c1e351b24b1a4da40047592e460eaf8d5658e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=70c4f96ce8060c00d6176bc0724ee6d252b1426d#70c4f96ce8060c00d6176bc0724ee6d252b1426d"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -475,7 +475,7 @@ dependencies = [
  "maybe-owned",
  "rustix",
  "rustix-linux-procfs",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
  "winx",
 ]
 
@@ -1072,7 +1072,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1166,7 +1166,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2473,7 +2473,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3094,7 +3094,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3455,7 +3455,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3522,7 +3522,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4168,7 +4168,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4323,7 +4323,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4356,7 +4356,7 @@ dependencies = [
  "parking_lot",
  "rustix",
  "signal-hook",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5463,7 +5463,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -149,6 +149,10 @@ async fn child_artifact_policy_case(lines: usize, inline_bytes: u32) {
     );
     assert!(delivery.contains(child.as_str()), "{delivery}");
     assert!(delivery.contains("child artifact ready"), "{delivery}");
+    assert!(
+        delivery.contains(transferred.id.as_str()),
+        "the parent must be told which artifact it received: {delivery}"
+    );
     assert_eq!(
         coordinator
             .task_outcome(&child)
