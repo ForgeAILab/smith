@@ -82,6 +82,8 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("background.max_children", ValueKind::Integer),
     ("background.max_monitors", ValueKind::Integer),
     ("cache.miss_notices", ValueKind::Flag),
+    ("model_sync.enabled", ValueKind::Flag),
+    ("model_sync.interval_hours", ValueKind::Integer),
     ("context.cache.maintenance", ValueKind::Text),
     ("context.cache.inactivity_limit_ms", ValueKind::Integer),
     ("context.cache.max_hold_while_child_ms", ValueKind::Integer),

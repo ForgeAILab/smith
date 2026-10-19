@@ -49,6 +49,7 @@ fn status_cost_names_the_priced_binding_and_labels_it_exact() {
     let price = PriceReference {
         provider: "openai".to_owned(),
         model: "gpt-5.3".to_owned(),
+        provenance: None,
         table: PriceTable {
             input: Some(2_000_000),
             output: None,

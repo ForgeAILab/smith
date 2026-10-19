@@ -1299,3 +1299,53 @@ async fn module_rebind_removes_contributions_and_restores_the_original_compositi
     assert!(rebound.app.module_status().is_empty());
     Box::pin(on.shutdown()).await.expect("shutdown");
 }
+
+#[tokio::test]
+async fn metadata_adoption_waits_for_open_picker_and_active_turn_then_keeps_session_and_draft() {
+    let fixture = Fixture::new();
+    let (host, mut resources) = Box::pin(fixture.start(None, Overrides::default())).await;
+    // The live immutable snapshot predates the staged on-disk seed.
+    Arc::make_mut(&mut resources.catalog).source_revision = "previous-live-revision".to_owned();
+    let previous = Box::pin(fixture.app(&host, &resources, None, None)).await;
+    let session = host.session().id().clone();
+    let model = host.runtime().policy().model.clone();
+    let mut app = previous.app;
+    app.composer.replace("draft across metadata refresh");
+    app.open_overlay(Overlay::Shortcuts);
+    let (exit, mut app) = Box::pin(crate::tui_driver::fold_scripted_catalog_frame(
+        &host,
+        fixture.project.path(),
+        &resources,
+        app,
+    ))
+    .await
+    .unwrap();
+    assert!(exit.is_none(), "an open picker retains its frozen snapshot");
+    assert!(app.overlay.is_some());
+    app.overlay = None;
+    app.apply(&event(RuntimeEvent::TurnStarted));
+    let (exit, mut app) = Box::pin(crate::tui_driver::fold_scripted_catalog_frame(
+        &host,
+        fixture.project.path(),
+        &resources,
+        app,
+    ))
+    .await
+    .unwrap();
+    assert!(exit.is_none(), "an active turn retains its frozen snapshot");
+    assert!(app.is_busy());
+    app.reset_live_turn();
+    let (exit, app) = Box::pin(crate::tui_driver::fold_scripted_catalog_frame(
+        &host,
+        fixture.project.path(),
+        &resources,
+        app,
+    ))
+    .await
+    .unwrap();
+    assert!(matches!(exit, Some(InteractiveExit::CatalogChanged(_))));
+    assert_eq!(app.composer.text(), "draft across metadata refresh");
+    assert_eq!(host.session().id(), &session);
+    assert_eq!(host.runtime().policy().model, model);
+    Box::pin(host.shutdown()).await.expect("shutdown");
+}

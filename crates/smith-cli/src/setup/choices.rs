@@ -223,3 +223,75 @@ pub(super) fn provider_entries(inventory: &SelectionInventory) -> Vec<ResourceEn
 pub(super) fn model_entries(inventory: &SelectionInventory) -> Vec<ResourceEntry> {
     crate::resources::default_model_entries(inventory, crate::resources::program_on_path)
 }
+
+/// Provider-scoped add-model discovery, with the same row grammar as `/model`.
+/// Existing explicit fields are resolved before limits are displayed or used.
+pub(super) fn provider_model_entries(
+    context: &SetupContext,
+    provider: &str,
+) -> (
+    Vec<ResourceEntry>,
+    BTreeMap<String, super::ResolvedModelLimits>,
+) {
+    let mut entries = BTreeMap::new();
+    let mut limits_by_model = BTreeMap::new();
+    for model in context
+        .inventory
+        .models
+        .iter()
+        .filter(|model| model.provider == provider)
+    {
+        let mut entry = crate::resources::model_entry(model.clone(), None);
+        entry.id = model.model.clone();
+        // Existing records remain editable even when their runtime metadata
+        // needs manual recovery.
+        entry.disabled_reason = None;
+        entries.insert(model.model.clone(), entry);
+    }
+    if let Some(section) = super::model_limits::configured_provider_section(context, provider)
+        && let Some(binding) = section.kind.as_deref().and_then(|kind| {
+            context
+                .catalog
+                .bound_provider(provider, kind, section.base_url.as_deref())
+        })
+    {
+        for model in binding.provider.models.values() {
+            let resolved = super::model_limits::prepared_model_limits(context, provider, &model.id);
+            let detail = resolved.as_ref().map_or_else(
+                || "limits incomplete · manual recovery available".to_owned(),
+                |limits| {
+                    format!(
+                        "{} context · {} input · {} output ceiling",
+                        compact_tokens(u64::from(limits.context_tokens)),
+                        compact_tokens(u64::from(limits.max_input_tokens)),
+                        compact_tokens(u64::from(limits.max_output_tokens)),
+                    )
+                },
+            );
+            let mut entry = ResourceEntry::new(
+                model.id.clone(),
+                model.name.clone(),
+                format!(
+                    "{detail} · {provider}/{} · {} advertised · revision {} · retrieved {} ms Unix",
+                    model.id, binding.source, binding.revision, binding.retrieved_at_ms
+                ),
+            )
+            .description(format!("{provider} · {detail}"));
+            // Missing declarations can be recovered manually. Malformed
+            // advertisements remain visible with their validation failure.
+            if let Some(reason) = &model.disabled_reason
+                && !(model.limits.is_none()
+                    && reason.contains("no complete context/output limit declaration"))
+            {
+                entry = entry.disabled(reason);
+            }
+            entries.insert(model.id.clone(), entry);
+        }
+    }
+    for id in entries.keys() {
+        if let Some(limits) = super::model_limits::prepared_model_limits(context, provider, id) {
+            limits_by_model.insert(id.clone(), limits);
+        }
+    }
+    (entries.into_values().collect(), limits_by_model)
+}

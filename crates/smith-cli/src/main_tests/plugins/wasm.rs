@@ -900,6 +900,7 @@ async fn module_complete_uses_current_route_and_accounts_module_usage() {
     status.set_price(Some(smith_client::status::PriceReference {
         provider: config.provider.name.value.clone(),
         model: config.model.value.clone(),
+        provenance: None,
         table: smith_client::status::PriceTable {
             input: Some(1_000_000),
             output: Some(2_000_000),

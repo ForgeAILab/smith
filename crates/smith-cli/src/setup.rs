@@ -4,7 +4,7 @@
 //! user-config and credential effects, rolls both back on failed preflight,
 //! and never starts a session or sends a provider request.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -115,6 +115,7 @@ struct SetupContext {
     project: PathBuf,
     inventory: SelectionInventory,
     catalog: Arc<smith_config::catalog::CatalogSnapshot>,
+    discovery_attempted: BTreeSet<String>,
     unconfigured: bool,
 }
 
@@ -214,7 +215,7 @@ pub(crate) async fn run_surface(
     no_motion: bool,
     title: Option<&str>,
 ) -> Result<SurfaceOutcome> {
-    let context = setup_context(selection, &mode).await?;
+    let mut context = setup_context(selection, &mode).await?;
     let providers = provider_entries(&context.inventory);
     let catalog_connection = match &mode {
         SetupMode::Provider {
@@ -283,21 +284,25 @@ pub(crate) async fn run_surface(
     }
     let mut messages = Vec::new();
     loop {
-        let effect = match session
-            .run(
-                &mut app,
-                ScreenContext {
-                    draw: Some("drawing guided setup"),
-                    input: "reading a guided-setup terminal event",
-                },
-            )
-            .await?
-        {
-            ScreenResult::Outcome(()) | ScreenResult::InputEnded => {
-                return Ok(SurfaceOutcome::cancelled());
+        let effect = if let Some(effect) = app.take_pending_effect() {
+            effect
+        } else {
+            match session
+                .run(
+                    &mut app,
+                    ScreenContext {
+                        draw: Some("drawing guided setup"),
+                        input: "reading a guided-setup terminal event",
+                    },
+                )
+                .await?
+            {
+                ScreenResult::Outcome(()) | ScreenResult::InputEnded => {
+                    return Ok(SurfaceOutcome::cancelled());
+                }
+                ScreenResult::Effect(effect) => effect,
+                ScreenResult::Completed(never) => match never {},
             }
-            ScreenResult::Effect(effect) => effect,
-            ScreenResult::Completed(never) => match never {},
         };
         match effect {
             SetupEffect::None => {}
@@ -331,6 +336,51 @@ pub(crate) async fn run_surface(
                     smith_tui::FlowOutcome::Back => app.back_from_chatgpt(),
                 }
             }
+            SetupEffect::DiscoverModels { provider } => {
+                session.draw(&app).context("drawing model discovery")?;
+                let cancellation = EffectCancellation::default();
+                let discovered = session
+                    .wait_effect(
+                        &app,
+                        crate::model_sync::sync_one_provider(&context.user_dir, &provider, false),
+                        &cancellation,
+                        ScreenContext {
+                            draw: Some("drawing model discovery"),
+                            input: "reading model discovery input",
+                        },
+                    )
+                    .await?;
+                if cancellation.requested() {
+                    return Ok(SurfaceOutcome::cancelled());
+                }
+                context.discovery_attempted.insert(provider.clone());
+                // Discovery failure leaves frozen last-good/explicit choices
+                // available; the final row always permits manual recovery.
+                if let Ok(Some(catalog)) = discovered {
+                    Arc::make_mut(&mut context.catalog)
+                        .endpoint_catalogs
+                        .insert(provider.clone(), catalog);
+                }
+                // A configured project can override endpoint, authentication,
+                // or account headers after the user-owned listing was fetched.
+                // Reuse normal effective-request authorization before its
+                // metadata becomes a setup choice.
+                let (_, prepared) = crate::config_command::resolution_request_with_catalog(
+                    &context.selection,
+                    Some(context.catalog.clone()),
+                )?;
+                context.catalog = prepared.catalog.clone().expect("setup freezes a catalog");
+                if let ConfigReadiness::Ready(resolution) = inspect(&prepared) {
+                    context.inventory = smith_config::inventory::local_inventory_with_catalog(
+                        &resolution,
+                        AVAILABLE_ADAPTER_KINDS,
+                        Some(&context.catalog),
+                    )
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                }
+                let (entries, limits) = provider_model_entries(&context, &provider);
+                app.apply_discovered_models(entries, limits);
+            }
             SetupEffect::ResolveModelLimits { request } => {
                 // One bounded, non-inference read; the surface stays busy
                 // until it completes or a recorded cancellation can return safely.
@@ -352,7 +402,13 @@ pub(crate) async fn run_surface(
                 if cancellation.requested() {
                     return Ok(SurfaceOutcome::cancelled());
                 }
+                let known = request.provider.as_deref().map(|provider| {
+                    model_limits::known_model_ceilings(&context, provider, &request.model)
+                });
                 app.apply_resolved_limits(resolved);
+                if let Some((input, output)) = known {
+                    app.apply_known_ceilings(input, output);
+                }
             }
             SetupEffect::Submit {
                 submission,
@@ -431,7 +487,7 @@ mod transaction;
 use checkpoint::run_checkpoint_key_setup;
 #[cfg(test)]
 use checkpoint::{protected_checkpoint_exists, refuse_unsafe_checkpoint_rotation};
-use choices::{catalog_model_entries, model_entries, provider_entries};
+use choices::{catalog_model_entries, model_entries, provider_entries, provider_model_entries};
 use context::{canonical_start, setup_context};
 #[cfg(test)]
 use model_limits::configured_probe_target;

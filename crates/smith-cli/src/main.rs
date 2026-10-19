@@ -23,6 +23,7 @@ mod login_progress;
 mod mcp;
 mod mcp_relay;
 mod mcp_watchdog;
+mod model_sync;
 mod modules;
 mod plugin_command;
 mod plugins;
@@ -134,6 +135,9 @@ async fn execute(command: Command) -> Result<u8> {
             plugin_command::run(action)?;
             Ok(0)
         }
+        Command::ModelsSync { provider, force } => {
+            model_sync::run(provider.as_deref(), force).await
+        }
         Command::Run(args) => run_command(args).await,
     }
 }
@@ -142,8 +146,14 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
     // Before any MCP server is spawned, so its startup lands in the log.
     logging::start();
     let mut setup_notice = None;
+    let mut model_sync = None;
     let configured_background_exit = match inspect_selection(&args.selection)? {
-        ConfigReadiness::Ready(resolution) => Some(resolution.config.background.exit_policy.value),
+        ConfigReadiness::Ready(resolution) => {
+            model_sync = Some(model_sync::BackgroundSync::start(
+                resolution.layout.user_dir.clone(),
+            ));
+            Some(resolution.config.background.exit_policy.value)
+        }
         ConfigReadiness::Invalid(error) => {
             return Err(anyhow::anyhow!("{error}")).context("resolving Smith configuration");
         }
@@ -170,6 +180,15 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
             None
         }
     };
+
+    if model_sync.is_none() {
+        let prepared = config_command::prepare(&args.selection)?;
+        model_sync = Some(model_sync::BackgroundSync::start(
+            prepared.resolution.layout.user_dir,
+        ));
+    }
+    // Keep ownership through the complete run, including safe host rebuilds.
+    let _model_sync = model_sync;
 
     if args.resume_requested && args.resume.is_none() {
         if args.prompt.is_some() {

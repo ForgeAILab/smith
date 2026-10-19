@@ -387,8 +387,10 @@ pub struct Status {
     module_usage: BTreeMap<String, Vec<BindingUsage>>,
     advisor_totals: BTreeMap<CounterKind, u64>,
     advisor_price: Option<PriceReference>,
+    advisor_bindings: Vec<BindingUsage>,
     vision_totals: BTreeMap<CounterKind, u64>,
     vision_price: Option<PriceReference>,
+    vision_bindings: Vec<BindingUsage>,
     /// Turns that produced provider usage this session.
     turns: u32,
     /// The active provider/model's catalog price, resolved once by
@@ -426,8 +428,10 @@ impl Status {
             module_usage: BTreeMap::new(),
             advisor_totals: BTreeMap::new(),
             advisor_price: None,
+            advisor_bindings: Vec::new(),
             vision_totals: BTreeMap::new(),
             vision_price: None,
+            vision_bindings: Vec::new(),
             turns: 0,
             price: None,
         }
@@ -546,12 +550,37 @@ impl Status {
             return;
         }
         let separate_totals = match record.provenance.purpose.as_deref() {
-            Some(ADVISOR_USAGE_PURPOSE) => Some(&mut self.advisor_totals),
-            Some(VISION_USAGE_PURPOSE) => Some(&mut self.vision_totals),
+            Some(ADVISOR_USAGE_PURPOSE) => Some((
+                &mut self.advisor_totals,
+                &mut self.advisor_bindings,
+                &self.advisor_price,
+            )),
+            Some(VISION_USAGE_PURPOSE) => Some((
+                &mut self.vision_totals,
+                &mut self.vision_bindings,
+                &self.vision_price,
+            )),
             _ => None,
         };
-        if let Some(totals) = separate_totals {
+        if let Some((totals, bindings, price)) = separate_totals {
             self.usage_reported |= !record.delta.is_empty();
+            let provider = price.as_ref().map(|price| price.provider.clone());
+            let model = price
+                .as_ref()
+                .map_or("earlier models", |price| price.model.as_str());
+            let index = bindings.iter().position(|binding| {
+                binding.provider == provider && binding.model == model && binding.price == *price
+            });
+            let binding = match index {
+                Some(index) => &mut bindings[index],
+                None => {
+                    bindings.push(BindingUsage::new(provider, model, price.clone()));
+                    bindings.last_mut().expect("inserted side-route binding")
+                }
+            };
+            // Side-route accounting forwards provider counters in semantic
+            // summaries; that wrapper does not turn them into estimates.
+            binding.record(&record.delta, true);
             for (kind, value) in record.delta.iter() {
                 *totals.entry(kind).or_default() += value;
             }
@@ -580,6 +609,7 @@ impl Status {
         let mut usage = self.session_usage();
         usage.reconcile_advisor_records(records);
         self.advisor_totals = usage.advisor_totals;
+        self.advisor_bindings = usage.advisor_bindings;
         self.usage_reported = usage.reported;
     }
 
@@ -589,6 +619,7 @@ impl Status {
         let mut usage = self.session_usage();
         usage.reconcile_vision_records(records);
         self.vision_totals = usage.vision_totals;
+        self.vision_bindings = usage.vision_bindings;
         self.usage_reported = usage.reported;
     }
 
@@ -656,8 +687,10 @@ impl Status {
             delegated_module_usage: BTreeMap::new(),
             advisor_totals: self.advisor_totals.clone(),
             advisor_price: self.advisor_price.clone(),
+            advisor_bindings: self.advisor_bindings.clone(),
             vision_totals: self.vision_totals.clone(),
             vision_price: self.vision_price.clone(),
+            vision_bindings: self.vision_bindings.clone(),
             synthetic_totals: self.synthetic_totals.clone(),
             synthetic_by_purpose: self.synthetic_by_purpose.clone(),
             compactions: self.capabilities.compactions,
@@ -672,6 +705,12 @@ impl Status {
     /// Keeps live binding attribution across host rebuilds only when the
     /// durable root rollup agrees, avoiding duplicate or invented usage.
     pub fn retain_usage_bindings(&mut self, previous: &SessionUsage) {
+        if previous.advisor_totals == self.advisor_totals {
+            self.advisor_bindings = previous.advisor_bindings.clone();
+        }
+        if previous.vision_totals == self.vision_totals {
+            self.vision_bindings = previous.vision_bindings.clone();
+        }
         let mut root = previous.clone();
         root.delegated_module_usage.clear();
         if root.module_totals() == self.session_usage().module_totals() {
@@ -700,10 +739,17 @@ impl Status {
     pub fn set_price(&mut self, price: Option<PriceReference>) {
         let price =
             price.filter(|_| smith_config::cli_agents::parse_cli_model_id(&self.model).is_none());
-        if let Some(binding) = &mut self.active_binding {
-            if !binding.has_usage() {
-                binding.price = price.clone();
-            }
+        if self
+            .active_binding
+            .as_ref()
+            .is_some_and(|binding| binding.has_usage() && binding.price != price)
+        {
+            let previous = self.active_binding.take().expect("active binding exists");
+            let provider = self.provider.clone().or_else(|| previous.provider.clone());
+            self.bindings.push(previous);
+            self.active_binding = Some(BindingUsage::new(provider, &self.model, price.clone()));
+        } else if let Some(binding) = &mut self.active_binding {
+            binding.price = price.clone();
         } else if self.totals.is_empty()
             && self.synthetic_totals.is_empty()
             && let Some(price) = &price
@@ -909,5 +955,6 @@ mod tests;
 mod accounting;
 
 pub use accounting::{
-    BindingUsage, CostLabel, PriceReference, PriceTable, SessionCost, SessionUsage, counter_label,
+    BindingUsage, CostLabel, PriceProvenance, PriceReference, PriceTable, SessionCost,
+    SessionUsage, counter_label,
 };

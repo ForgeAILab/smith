@@ -26,6 +26,9 @@ impl SetupApp {
             provider_entries,
             model_entries,
             catalog_model_limits: BTreeMap::new(),
+            discovered_model_entries: Vec::new(),
+            discovered_model_limits: BTreeMap::new(),
+            pending_effect: None,
             quick_start,
             action: None,
             provider_kind: SetupProviderKind::OpenAiCompatible,
@@ -71,7 +74,7 @@ impl SetupApp {
             } => {
                 app.action = Some(SetupAction::AddModel);
                 app.provider = provider;
-                app.enter(Step::ModelName, false);
+                app.pending_effect = Some(app.begin_model_discovery(false));
             }
             SetupMode::AddModel { provider: None } => {
                 app.action = Some(SetupAction::AddModel);
@@ -108,6 +111,32 @@ impl SetupApp {
         self.catalog_model_limits = limits;
         self.configure_picker();
         self
+    }
+
+    /// Takes the initial bounded discovery requested by a preselected provider.
+    /// Subsequent provider choices return their effect from `on_key` normally.
+    pub fn take_pending_effect(&mut self) -> Option<SetupEffect> {
+        self.pending_effect.take()
+    }
+
+    /// Installs one frozen set of discovery choices supplied by the driver.
+    /// The manual-ID escape remains available even if discovery was empty.
+    pub fn apply_discovered_models(
+        &mut self,
+        entries: Vec<ResourceEntry>,
+        limits: BTreeMap<String, ResolvedModelLimits>,
+    ) {
+        self.pending_effect = None;
+        self.busy_note = None;
+        self.discovered_model_entries = entries;
+        self.discovered_model_limits = limits;
+        // Busy is an effect boundary, never an editable Back destination.
+        if let Some(previous) = self.history.pop() {
+            self.step = previous;
+            self.enter(Step::ModelChoice, true);
+        } else {
+            self.enter(Step::ModelChoice, false);
+        }
     }
 
     /// Whether setup is waiting for an external persistence/preflight effect.
@@ -151,6 +180,15 @@ impl SetupApp {
                 self.enter(next, true);
                 self.history.push(Step::ContextTokens);
             }
+        }
+    }
+
+    /// Retains explicit ceilings when only a missing context window needs
+    /// manual recovery. They must never be overwritten by derived defaults.
+    pub fn apply_known_ceilings(&mut self, input: Option<u32>, output: Option<u32>) {
+        if self.step == Step::ContextTokens {
+            self.max_input_tokens = input;
+            self.max_output_tokens = output;
         }
     }
 

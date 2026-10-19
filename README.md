@@ -409,6 +409,38 @@ stale snapshot schedules a bounded credential-free refresh from exactly
 is atomic, and a successful refresh is visible only to a later host rebuild.
 Deleting the cache safely restores the embedded seed.
 
+Custom OpenAI-compatible providers also discover models through their own
+authenticated `GET <base_url>/models` listing. Smith caches validated IDs,
+limits, modalities, capabilities, and any published prices under
+`~/.smith/cache/provider-models-v1/`. Metadata stays scoped to the provider,
+endpoint, and account; an alias such as `selected-large` never inherits another
+vendor's price. Missing prices remain unknown.
+
+Smith refreshes enabled sources every 24 hours while running and catches up
+on startup. Offline or failed refreshes retain the last-good cache. Updates
+join the model picker at an idle rebuild without changing the selected model,
+an active request, or historical usage prices. No system scheduler is installed.
+An immediate refresh is also available:
+
+```sh
+smith models sync
+smith models sync --provider xiaoge --force
+```
+
+To disable automatic refresh or change its interval, use owner-controlled
+`~/.smith/config.toml`:
+
+```toml
+[model_sync]
+enabled = true
+interval_hours = 24 # 1 through 168
+```
+
+`smith setup add-model --provider xiaoge` offers discovered models before manual
+entry, prefills their published limits, and asks only for missing context.
+Explicit model overrides keep precedence; a derived request output budget
+does not replace a published or explicit output ceiling.
+
 Catalog rows show display name, provider-qualified ID, enforceable limits,
 capabilities, revision/age, and `advertised` provenance. Deprecated rows are
 omitted; entries without text output, tool calling, valid limits, or a usable

@@ -480,6 +480,109 @@ fn unchanged_resolved_context_preserves_published_ceilings() {
 }
 
 #[test]
+fn add_model_discovers_before_typed_id_and_skips_numbers_for_complete_metadata() {
+    let mut app = setup_app(
+        SetupMode::AddModel {
+            provider: Some("xiaoge".into()),
+        },
+        Vec::new(),
+        Vec::new(),
+    );
+    assert!(app.is_busy());
+    assert!(
+        matches!(app.take_pending_effect(), Some(SetupEffect::DiscoverModels { provider })
+        if provider == "xiaoge")
+    );
+    assert!(app.take_pending_effect().is_none());
+    app.apply_discovered_models(
+        vec![ResourceEntry::new(
+            "selected-large",
+            "Selected Large",
+            "provider listing",
+        )],
+        BTreeMap::from([(
+            "selected-large".into(),
+            ResolvedModelLimits {
+                context_tokens: 1_048_576,
+                max_input_tokens: 1_048_576,
+                max_output_tokens: 256_000,
+                source: "endpoint /models listing · revision A · retrieved 100 ms Unix".into(),
+            },
+        )]),
+    );
+    assert_eq!(app.step, Step::ModelChoice);
+    choose(&mut app, "selected-large");
+    assert_eq!(app.step, Step::DefaultChoice);
+    assert_eq!(app.max_output_tokens, Some(256_000));
+    choose(&mut app, "no");
+    let review = app.review_lines().join("\n");
+    assert!(review.contains("revision A"), "{review}");
+    assert!(review.contains("256k output"), "{review}");
+    assert!(
+        review.contains("separate from the request output budget"),
+        "{review}"
+    );
+    assert!(
+        matches!(app.on_key(key(KeyCode::Enter)), SetupEffect::Submit {
+        submission: SetupSubmission::AddModel { limits, .. }, allow_collisions: false,
+    } if limits.max_output_tokens == 256_000)
+    );
+}
+
+#[test]
+fn discovery_has_manual_recovery_and_preserves_known_output_when_context_is_missing() {
+    let mut app = setup_app(
+        SetupMode::AddModel {
+            provider: Some("xiaoge".into()),
+        },
+        Vec::new(),
+        Vec::new(),
+    );
+    app.take_pending_effect();
+    app.apply_discovered_models(Vec::new(), BTreeMap::new());
+    choose(&mut app, "\u{0}manual-model-id");
+    assert_eq!(app.step, Step::ModelName);
+    app.on_paste("selected-large");
+    assert!(matches!(
+        app.on_key(key(KeyCode::Enter)),
+        SetupEffect::ResolveModelLimits { .. }
+    ));
+    app.apply_resolved_limits(None);
+    app.apply_known_ceilings(None, Some(256_000));
+    app.on_paste("1048576");
+    app.on_key(key(KeyCode::Enter));
+    assert_eq!(app.step, Step::DefaultChoice);
+    assert_eq!(app.max_input_tokens, Some(1_048_576));
+    assert_eq!(app.max_output_tokens, Some(256_000));
+    assert!(
+        app.limits_source
+            .as_deref()
+            .is_some_and(|source| source.contains("preserved"))
+    );
+}
+
+#[test]
+fn provider_selection_discovers_and_back_returns_to_the_provider_picker() {
+    let mut app = setup_app(
+        SetupMode::AddModel { provider: None },
+        vec![ResourceEntry::new(
+            "xiaoge",
+            "Xiaoge",
+            "configured provider",
+        )],
+        Vec::new(),
+    );
+    assert!(
+        matches!(app.on_key(key(KeyCode::Enter)), SetupEffect::DiscoverModels { provider }
+        if provider == "xiaoge")
+    );
+    app.apply_discovered_models(Vec::new(), BTreeMap::new());
+    assert_eq!(app.step, Step::ModelChoice);
+    app.on_key(key(KeyCode::BackTab));
+    assert_eq!(app.step, Step::ProviderChoice);
+}
+
+#[test]
 fn escape_on_first_step_cancels_without_an_effectful_submission() {
     let mut app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
     assert!(matches!(app.on_key(key(KeyCode::Esc)), SetupEffect::Cancel));

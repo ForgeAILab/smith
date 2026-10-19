@@ -25,7 +25,7 @@ use smith_runtime::factory::{
 };
 use smith_runtime::host::{HostSession, HostSessionError, HostSessionRequest};
 use smith_runtime::journal::DefaultRedactor;
-use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
+use smith_runtime::model_catalog::runtime_catalog_source;
 use smith_runtime::pool::CredentialPool;
 use smith_runtime::pool_state::ActiveAccounts;
 use smith_runtime::rotation::SharedPool;
@@ -105,6 +105,9 @@ fn preflight_with_modules(
     sessions: &crate::modules::ModuleSessions,
 ) -> Result<RuntimeRequest> {
     let workspace = ProjectWorkspace::new(project).map_err(|error| anyhow::anyhow!("{error}"))?;
+    let catalog = catalog
+        .map(|snapshot| crate::model_sync::catalog_for_resolution(resolution, snapshot))
+        .transpose()?;
     let mut request = RuntimeRequest {
         // The runtime warns when a turn needs the missing Smith executable.
         smith_executable: std::env::current_exe().ok(),
@@ -184,7 +187,16 @@ async fn start_host_with_modules(
     web_search_session: Arc<smith_runtime::factory::WebSearchSession>,
 ) -> Result<StartedHost> {
     let had_frozen_catalog = frozen_catalog.is_some();
-    let prepared = prepare_with_catalog(selection, frozen_catalog)?;
+    let mut prepared = prepare_with_catalog(selection, frozen_catalog)?;
+    let active_catalog = crate::model_sync::prepare_active_cache(
+        &prepared.resolution,
+        prepared.catalog.clone(),
+        had_frozen_catalog,
+    )
+    .await?;
+    if !Arc::ptr_eq(&active_catalog, &prepared.catalog) {
+        prepared = prepare_with_catalog(selection, Some(active_catalog))?;
+    }
     let project = prepared.project;
     let resolution = prepared.resolution;
     let cache_miss_notices = resolution.cache_miss_notices.value;
@@ -193,23 +205,6 @@ async fn start_host_with_modules(
         resolution.config.web.search.backend.value,
     );
     let catalog = prepared.catalog;
-    if !had_frozen_catalog
-        && smith_config::catalog::catalog_provider_for(
-            &resolution.config.provider.kind.value,
-            resolution
-                .config
-                .provider
-                .base_url
-                .as_ref()
-                .map(|value| value.value.as_str()),
-        )
-        .is_some()
-    {
-        CatalogLoader::production(&resolution.layout.user_dir)
-            .map_err(|error| anyhow::anyhow!("{error}"))
-            .context("preparing the provider model catalog")?
-            .refresh_if_stale(&catalog);
-    }
     let inventory =
         local_inventory_with_catalog(&resolution, AVAILABLE_ADAPTER_KINDS, Some(&catalog))
             .map_err(|error| anyhow::anyhow!("{error}"))
@@ -764,6 +759,7 @@ async fn run_interactive_hosts(
 ) -> Result<u8> {
     let mut resume = args.resume.take();
     let mut frozen_catalog = None;
+    let mut catalog_change = None;
     let mut reasoning_notice = None;
     // The advisor in effect before a pending `/advisor` change, restored if
     // the rebuilt session cannot start with the new one.
@@ -802,7 +798,18 @@ async fn run_interactive_hosts(
         )
         .await
         {
-            Ok(started) => started,
+            Ok(started) => {
+                catalog_change = None;
+                started
+            }
+            Err(_) if catalog_change.is_some() => {
+                frozen_catalog = catalog_change.take();
+                host_notice = Some(
+                    "model metadata adoption deferred · keeping the current runtime snapshot"
+                        .to_owned(),
+                );
+                continue;
+            }
             Err(error) if plugin_change.is_some() => {
                 let (committed, _) = plugin_change.take().expect("pending plugin edit");
                 committed
@@ -974,6 +981,16 @@ async fn run_interactive_hosts(
                     return Ok(1);
                 }
                 return Ok(0);
+            }
+            InteractiveExit::CatalogChanged(next) => {
+                // Snapshot adoption does not choose a model, including when
+                // the session was originally selected through a default.
+                args.selection.provider = Some(host.runtime().policy().provider_name.clone());
+                args.selection.model = Some(host.runtime().policy().model.as_str().to_owned());
+                resume = Some(current_session);
+                catalog_change = Some(catalog);
+                frozen_catalog = Some(next);
+                continue;
             }
             // Keep the selection and identity while recomposing tools after
             // a connection change or an account-disabled search rejection.

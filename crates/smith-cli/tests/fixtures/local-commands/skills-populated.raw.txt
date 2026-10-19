@@ -8,6 +8,7 @@ built-in
   smith.configuration.complete-example · active · Smith configuration reference, section "Complete example". Policy tables may be top-level or profile-scoped as shown.
   smith.configuration.discovery-and-precedence · active · Smith configuration reference, section "Discovery and precedence". nearest `.smith/` directory.
   smith.configuration.image-generation · active · Smith configuration reference, section "Image generation". `https://api.openai.com/v1`.
+  smith.configuration.model-discovery-and-daily-synchronization · active · Smith configuration reference, section "Model discovery and daily synchronization". authenticated `/models` listing.
   smith.configuration.policy-keys-and-defaults · active · Smith configuration reference, section "Policy keys and defaults". instructions may take together.
   smith.configuration.project-instructions-and-context-identity · active · Smith configuration reference, section "Project instructions and context identity". headless host examines exactly `<project>/AGENTS.md`.
   smith.configuration.prompt-cache-miss-notices · active · Smith configuration reference, section "Prompt-cache miss notices". `cache.miss_notices`.

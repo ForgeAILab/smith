@@ -296,9 +296,45 @@ pub struct ConfigFile {
     /// Local cache-miss notice policy: `[cache]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheSection>,
+    /// User-owned automatic model-catalog refresh policy: `[model_sync]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_sync: Option<ModelSyncSection>,
     /// Model Context Protocol servers: `[mcp.servers.<name>]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpSection>,
+}
+
+/// User-owned process-local model metadata synchronization policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSyncSection {
+    /// Whether Smith schedules automatic refresh while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Hours since successful validation before refreshing, from 1 through 168.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_model_sync_interval"
+    )]
+    pub interval_hours: Option<u32>,
+}
+
+fn deserialize_model_sync_interval<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let invalid = || {
+        serde::de::Error::custom(
+            "`model_sync.interval_hours` must be an integer from 1 through 168",
+        )
+    };
+    let value = i64::deserialize(deserializer).map_err(|_| invalid())?;
+    u32::try_from(value)
+        .ok()
+        .filter(|value| (1..=168).contains(value))
+        .map(Some)
+        .ok_or_else(invalid)
 }
 
 /// The Model Context Protocol servers one layer declares.

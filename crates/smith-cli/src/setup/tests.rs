@@ -18,6 +18,8 @@ use agent_runtime_core::store::Secret;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use smith_config::credential::{CredentialEnrollmentBackend, KeychainError};
 
+mod discovery;
+
 fn setup_key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -72,6 +74,8 @@ fn default_choice_inventory() -> SelectionInventory {
         reasoning: None,
         structured_output: None,
         catalog_provider: None,
+        catalog_source: None,
+        catalog_cost: None,
         catalog_revision: None,
         catalog_retrieved_at_ms: None,
         profiles: Vec::new(),
@@ -525,6 +529,77 @@ async fn a_gateway_spelled_claude_fable_alias_resolves_from_the_embedded_catalog
 }
 
 #[tokio::test]
+async fn a_configured_inline_key_authenticates_automatic_model_limit_detection() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let home = tempfile::tempdir().expect("home");
+    let project = tempfile::tempdir().expect("project");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listing server");
+    let endpoint = format!("http://{}/v1", listener.local_addr().expect("address"));
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "[providers.custom]\nkind = \"openai-compatible\"\nbase_url = {endpoint:?}\napi_key = \"test-listing-key\"\n"
+        ),
+    )
+    .expect("config");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("listing request");
+        let mut request = Vec::new();
+        let mut buffer = [0; 1024];
+        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+            let count = stream.read(&mut buffer).await.expect("request bytes");
+            assert!(count > 0 && request.len() + count <= 8192);
+            request.extend_from_slice(&buffer[..count]);
+        }
+        let request = String::from_utf8(request).expect("HTTP headers");
+        assert!(request.starts_with("GET /v1/models HTTP/1.1\r\n"));
+        let authenticated = request.lines().any(|line| {
+            line.split_once(':').is_some_and(|(name, value)| {
+                name.eq_ignore_ascii_case("authorization")
+                    && value.trim() == "Bearer test-listing-key"
+            })
+        });
+        let (status, body) = if authenticated {
+            (
+                "200 OK",
+                r#"{"data":[{"id":"custom-model-test-only","limits":{"context":1048576,"input":1000000,"output":256000}}]}"#,
+            )
+        } else {
+            ("401 Unauthorized", r#"{"error":"authentication required"}"#)
+        };
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("listing response");
+    });
+    let context = setup_context_for(home.path().to_path_buf(), project.path().to_path_buf());
+    let request = ResolveModelLimits {
+        use_endpoint_listing: true,
+        endpoint: None,
+        bearer: None,
+        environment_variable: None,
+        provider: Some("custom".to_owned()),
+        model: "custom-model-test-only".to_owned(),
+    };
+    let result = resolve_model_limits(&context, &request).await;
+    server.await.expect("listing server completed");
+    let resolved = result.expect("authenticated endpoint metadata skips manual limit entry");
+    assert_eq!(resolved.context_tokens, 1_048_576);
+    assert_eq!(resolved.max_input_tokens, 1_000_000);
+    assert_eq!(resolved.max_output_tokens, 256_000);
+    assert_eq!(resolved.source, "endpoint /models listing");
+}
+
+#[tokio::test]
 async fn a_configured_non_openai_compatible_provider_is_not_probed() {
     let home = tempfile::tempdir().expect("home");
     let project = tempfile::tempdir().expect("project");
@@ -556,6 +631,7 @@ fn setup_context_for(user_dir: PathBuf, project: PathBuf) -> SetupContext {
             serde_json::from_str(smith_runtime::model_catalog::EMBEDDED_MODELS_DEV_SEED)
                 .expect("embedded catalog"),
         ),
+        discovery_attempted: Default::default(),
         unconfigured: true,
     }
 }

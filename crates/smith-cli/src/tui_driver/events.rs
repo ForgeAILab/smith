@@ -315,6 +315,21 @@ impl TuiLoop<'_> {
         {
             return Ok(Some(InteractiveExit::CapabilitiesChanged));
         }
+        if self.catalog_update_pending
+            && self.pending_module_switch.is_none()
+            && self.pending_plugin_switch.is_none()
+            && !self.app.is_busy()
+            && !self.app.has_pending_input()
+            && !self.app.has_pending_prompt()
+            && self.app.overlay.is_none()
+        {
+            self.catalog_update_pending = false;
+            if let Some(snapshot) =
+                super::prepared_catalog_adoption(self.host, self.project, self.catalog).await
+            {
+                return Ok(Some(InteractiveExit::CatalogChanged(snapshot)));
+            }
+        }
         if let Some(exit) = super::module_switch_exit(&self.app, &mut self.pending_module_switch) {
             return Ok(Some(exit));
         }

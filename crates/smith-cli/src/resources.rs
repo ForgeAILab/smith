@@ -314,11 +314,17 @@ pub(crate) fn model_entry(
         model.catalog_revision.as_deref(),
         model.catalog_retrieved_at_ms,
     ) {
-        (Some(provider), Some(revision), Some(retrieved)) => format!(
-            " · models.dev/{provider} advertised · rev {} · {} old",
-            bounded_text(revision, 12),
-            catalog_age(retrieved)
-        ),
+        (Some(provider), Some(revision), Some(retrieved)) => {
+            let source = match model.catalog_source.as_deref() {
+                None | Some("models.dev") => format!("models.dev/{provider}"),
+                Some(source) => bounded_text(source, 96),
+            };
+            format!(
+                " · {source} advertised · rev {} · {} old",
+                bounded_text(revision, 12),
+                catalog_age(retrieved)
+            )
+        }
         _ => String::new(),
     };
     let window_detail = if model.context_windows.len() > 1 {
@@ -342,11 +348,45 @@ pub(crate) fn model_entry(
     } else {
         String::new()
     };
+    let prices = model.catalog_cost.map_or_else(
+        || {
+            if model
+                .catalog_source
+                .as_deref()
+                .is_some_and(|source| source != "models.dev")
+            {
+                " · price unknown".to_owned()
+            } else {
+                String::new()
+            }
+        },
+        |cost| {
+            let rates = [
+                ("input", cost.input),
+                ("output", cost.output),
+                ("cache read", cost.cache_read),
+                ("cache write", cost.cache_write),
+            ]
+            .into_iter()
+            .filter_map(|(name, value)| {
+                let value = value?;
+                let decimal = format!("{}.{:06}", value / 1_000_000, value % 1_000_000);
+                let decimal = decimal.trim_end_matches('0').trim_end_matches('.');
+                Some(format!("{name} ${decimal}"))
+            })
+            .collect::<Vec<_>>();
+            if rates.is_empty() {
+                String::new()
+            } else {
+                format!(" · USD/M tokens: {}", rates.join(", "))
+            }
+        },
+    );
     let entry = ResourceEntry::new(
                 id.clone(),
                 model.label,
                 format!(
-                    "{} context · {} input · {} output ceiling · request {} · {id}{source_detail}{capabilities}{provenance}{profiles}{window_detail}",
+                    "{} context · {} input · {} output ceiling · request {} · {id}{source_detail}{capabilities}{provenance}{profiles}{window_detail}{prices}",
                     render_picker_limit(model.context_tokens.as_ref(), &limit_source),
                     render_picker_limit(model.max_input_tokens.as_ref(), &limit_source),
                     render_picker_limit(model.max_output_tokens.as_ref(), &limit_source),

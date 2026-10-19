@@ -677,6 +677,9 @@ supplies xAI's limits, and the same is true for OpenAI, OpenRouter, and the
 Z.AI Coding Plan at their exact published endpoints. Declare `[models]` only
 for a model the catalog does not carry, or to override what it says.
 
+Custom endpoint metadata and daily refresh are described under
+[Model discovery and daily synchronization](#model-discovery-and-daily-synchronization).
+
 A catalog entry is bound to an exact adapter kind *and* endpoint pair. A
 provider you happen to name `xai` pointing somewhere else inherits nothing,
 because a catalog describes a model as one deployment serves it. Extra headers are sent unchanged, but authorization
@@ -1064,6 +1067,36 @@ unaffected either way.
 
 `SMITH_REASONING_EFFORT` addresses the same setting from the environment, one
 layer lower; a flag on the same run wins.
+
+## Model discovery and daily synchronization
+
+Custom OpenAI-compatible endpoints can supply cached metadata through their
+authenticated `/models` listing. `smith setup add-model --provider NAME` offers
+discovered IDs and uses their published limits before asking for manual input.
+Incomplete advertisements ask only for missing context, retaining any known
+input/output ceilings. An unchanged cached choice needs no generated model
+table; explicit overrides retain precedence.
+
+Sources refresh every 24 hours while Smith runs and catch up at startup.
+`smith models sync --provider NAME --force` refreshes immediately.
+Owner-controlled `~/.smith/config.toml` can change the policy:
+
+```toml
+[model_sync]
+enabled = true
+interval_hours = 24 # integer from 1 through 168
+```
+
+Project files cannot set this policy. Background refresh reuses available
+credentials; an inactive locked account waits for a normal connection or an
+explicit sync instead of opening an unlock prompt. No system scheduler is
+installed.
+
+Cache failures retain last-good data. Prices stay unknown when the serving
+endpoint publishes none, or when a rotating credential pool cannot attribute
+usage to one account's advertised rates. Per-account rates remain cached;
+reviewed public catalog rates remain usable. Updates join an idle host rebuild,
+keeping active requests and previously recorded price references intact.
 
 ## Policy keys and defaults
 

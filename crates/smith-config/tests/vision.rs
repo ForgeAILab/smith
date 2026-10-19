@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use smith_config::catalog::{
     CATALOG_SCHEMA_REVISION, CatalogModality, CatalogModel, CatalogProvider, CatalogSnapshot,
+    EndpointCatalog,
 };
 use smith_config::model::{ConfigFile, KIND_COMMAND_JSONL, ProfileUse, VisionSelection};
 use smith_config::resolve::{
@@ -96,6 +97,7 @@ fn catalog() -> CatalogSnapshot {
         content_digest: "content".to_owned(),
         source_revision: "vision-test".to_owned(),
         retrieved_at_ms: 0,
+        endpoint_catalogs: BTreeMap::new(),
         providers: BTreeMap::from([(
             "google".to_owned(),
             CatalogProvider {
@@ -129,6 +131,72 @@ fn endpoint_catalog() -> CatalogSnapshot {
         );
     }
     snapshot
+}
+
+#[test]
+fn exact_endpoint_modalities_resolve_with_endpoint_revision_and_explicit_precedence() {
+    let fixture = Fixture::new("", "", "");
+    let mut snapshot = catalog();
+    let mut entry = catalog_model(&[CatalogModality::Text, CatalogModality::Image]);
+    entry.id = "working-model".to_owned();
+    snapshot.endpoint_catalogs.insert(
+        "acme".to_owned(),
+        EndpointCatalog {
+            binding_digest: String::new(),
+            unadvertised_capabilities: Default::default(),
+            kind: "openai-compatible".to_owned(),
+            base_url: "https://custom.example.test/v1/".to_owned(),
+            source: "endpoint/acme".to_owned(),
+            revision: "acme-r7".to_owned(),
+            retrieved_at_ms: 7_000,
+            partial_limits: BTreeMap::new(),
+            catalog: CatalogProvider {
+                id: "acme".to_owned(),
+                name: "Acme".to_owned(),
+                models: BTreeMap::from([("working-model".to_owned(), entry)]),
+            },
+        },
+    );
+    let request = fixture.request().with_catalog(Arc::new(snapshot.clone()));
+    let resolution = resolve(&request).expect("endpoint metadata");
+    assert_eq!(
+        resolution.config.model_image_input.value,
+        ImageInput::Accepts
+    );
+    assert!(
+        resolution
+            .config
+            .model_image_input
+            .source
+            .key
+            .contains("acme@acme-r7 source=endpoint/acme")
+    );
+    assert!(
+        resolution
+            .config
+            .model_image_input
+            .source
+            .key
+            .contains("retrieved_at_ms=7000")
+    );
+    fixture.write_user("[models.\"acme/working-model\"]\ninput_modalities = [\"text\"]\n");
+    let resolution = resolve(&request).expect("explicit modality wins");
+    assert_eq!(
+        resolution.config.model_image_input.value,
+        ImageInput::TextOnly
+    );
+    assert_eq!(
+        resolution.config.model_image_input.source.layer,
+        Layer::UserFile
+    );
+    snapshot.endpoint_catalogs.get_mut("acme").unwrap().base_url =
+        "https://another.example/v1".to_owned();
+    fixture.write_user("");
+    let resolution = resolve(&fixture.request().with_catalog(Arc::new(snapshot))).unwrap();
+    assert_eq!(
+        resolution.config.model_image_input.value,
+        ImageInput::Unknown
+    );
 }
 
 fn model(provider: &str, model: &str) -> VisionTarget {

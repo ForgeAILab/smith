@@ -1,4 +1,260 @@
 use super::*;
+use smith_config::catalog::{CatalogModelCost, EndpointCatalog, PartialCatalogLimits};
+
+#[test]
+fn endpoint_inventory_adds_new_ids_and_retains_per_field_source_precedence() {
+    let fixture = Fixture::new();
+    fixture.write_user(&format!(
+        r#"{READY}
+[providers.xiaoge]
+kind = "openai-compatible"
+base_url = "https://gateway.example/v1/"
+credential = "env:XIAOGE_API_KEY"
+[providers.unrelated]
+kind = "openai-compatible"
+base_url = "https://other.example/v1"
+credential = "env:OTHER_API_KEY"
+[models."xiaoge/selected-large"]
+max_output_tokens = 128000
+"#
+    ));
+    let resolution = resolve(&fixture.request()).expect("ready config");
+    let mut snapshot = catalog_snapshot();
+    let mut model = snapshot.providers["openrouter"].models["vendor/model"].clone();
+    model.id = "selected-large".to_owned();
+    model.name = "Selected Large".to_owned();
+    model.limits = Some(CatalogLimits {
+        context_tokens: 1_048_576,
+        max_input_tokens: 1_048_576,
+        max_output_tokens: 256_000,
+    });
+    model.cost = Some(CatalogModelCost {
+        input: Some(0),
+        output: Some(1_250_000),
+        cache_read: None,
+        cache_write: None,
+    });
+    snapshot.endpoint_catalogs.insert(
+        "xiaoge".to_owned(),
+        EndpointCatalog {
+            binding_digest: String::new(),
+            unadvertised_capabilities: Default::default(),
+            kind: "openai-compatible".to_owned(),
+            base_url: "https://gateway.example/v1".to_owned(),
+            source: "endpoint/xiaoge".to_owned(),
+            revision: "xiaoge-r2".to_owned(),
+            retrieved_at_ms: 2_000,
+            partial_limits: BTreeMap::new(),
+            catalog: CatalogProvider {
+                id: "xiaoge".to_owned(),
+                name: "Xiaoge".to_owned(),
+                models: BTreeMap::from([("selected-large".to_owned(), model)]),
+            },
+        },
+    );
+    let inventory =
+        local_inventory_with_catalog(&resolution, &["fake", "openai-compatible"], Some(&snapshot))
+            .expect("composed inventory");
+    let model = inventory
+        .resolve_model("xiaoge/selected-large", None)
+        .unwrap();
+    assert_eq!(model.context_tokens.as_ref().unwrap().value, 1_048_576);
+    assert_eq!(model.max_input_tokens.as_ref().unwrap().value, 1_048_576);
+    assert_eq!(model.max_output_tokens.as_ref().unwrap().value, 128_000);
+    assert!(matches!(&model.max_output_tokens.as_ref().unwrap().origin,
+        ModelLimitOrigin::Configured(source) if source.layer == Layer::UserFile));
+    assert!(matches!(&model.context_tokens.as_ref().unwrap().origin,
+        ModelLimitOrigin::Catalog {catalog, revision, retrieved_at_ms}
+        if catalog == "endpoint/xiaoge" && revision == "xiaoge-r2" && *retrieved_at_ms == 2_000));
+    assert_eq!(model.catalog_source.as_deref(), Some("endpoint/xiaoge"));
+    assert_eq!(model.catalog_provider.as_deref(), Some("xiaoge"));
+    assert_eq!(model.catalog_revision.as_deref(), Some("xiaoge-r2"));
+    assert_eq!(model.catalog_retrieved_at_ms, Some(2_000));
+    assert_eq!(model.catalog_cost.unwrap().input, Some(0));
+    assert!(
+        !inventory
+            .models
+            .iter()
+            .any(|entry| entry.provider == "unrelated")
+    );
+    assert!(
+        !inventory
+            .models
+            .iter()
+            .any(|entry| entry.model == "vendor/model")
+    );
+}
+
+#[test]
+fn endpoint_partial_output_is_preserved_when_explicit_context_completes_metadata() {
+    let fixture = Fixture::new();
+    fixture.write_user(&format!(
+        r#"{READY}
+[providers.xiaoge]
+kind = "openai-compatible"
+base_url = "https://gateway.example/v1"
+credential = "env:XIAOGE_API_KEY"
+[models."xiaoge/selected-large"]
+context_tokens = 1048576
+max_input_tokens = 1048576
+"#
+    ));
+    let resolution = resolve(&fixture.request()).unwrap();
+    let mut snapshot = catalog_snapshot();
+    let mut model = snapshot.providers["openrouter"].models["vendor/model"].clone();
+    model.id = "selected-large".to_owned();
+    model.limits = None;
+    model.disabled_reason =
+        Some("endpoint model has no complete context/output limit declaration".to_owned());
+    snapshot.endpoint_catalogs.insert(
+        "xiaoge".to_owned(),
+        EndpointCatalog {
+            binding_digest: String::new(),
+            unadvertised_capabilities: Default::default(),
+            kind: "openai-compatible".to_owned(),
+            base_url: "https://gateway.example/v1".to_owned(),
+            source: "endpoint/xiaoge".to_owned(),
+            revision: "partial-r1".to_owned(),
+            retrieved_at_ms: 2_000,
+            catalog: CatalogProvider {
+                id: "xiaoge".to_owned(),
+                name: "Xiaoge".to_owned(),
+                models: BTreeMap::from([("selected-large".to_owned(), model)]),
+            },
+            partial_limits: BTreeMap::from([(
+                "selected-large".to_owned(),
+                PartialCatalogLimits {
+                    max_output_tokens: Some(256_000),
+                    ..PartialCatalogLimits::default()
+                },
+            )]),
+        },
+    );
+    let inventory =
+        local_inventory_with_catalog(&resolution, &["fake", "openai-compatible"], Some(&snapshot))
+            .unwrap();
+    let row = inventory
+        .resolve_model("xiaoge/selected-large", None)
+        .unwrap();
+    assert_eq!(row.max_output_tokens.as_ref().unwrap().value, 256_000);
+    assert!(matches!(&row.max_output_tokens.as_ref().unwrap().origin,
+        ModelLimitOrigin::Catalog{catalog, revision,..} if catalog == "endpoint/xiaoge" && revision == "partial-r1"));
+    snapshot
+        .endpoint_catalogs
+        .get_mut("xiaoge")
+        .unwrap()
+        .partial_limits
+        .get_mut("selected-large")
+        .unwrap()
+        .max_output_tokens = Some(2_000_000);
+    let inventory =
+        local_inventory_with_catalog(&resolution, &["fake", "openai-compatible"], Some(&snapshot))
+            .unwrap();
+    let row = inventory
+        .models
+        .iter()
+        .find(|row| row.id() == "xiaoge/selected-large")
+        .unwrap();
+    assert!(
+        !row.selectable,
+        "effective invalid constraints remain disabled"
+    );
+}
+
+#[test]
+fn unknown_endpoint_capabilities_preserve_only_complete_explicit_models() {
+    let fixture = Fixture::new();
+    fixture.write_user(&format!(
+        r#"{READY}
+[providers.xiaoge]
+kind = "openai-compatible"
+base_url = "https://gateway.example/v1"
+credential = "env:XIAOGE_API_KEY"
+[models."xiaoge/configured"]
+context_tokens = 128000
+max_input_tokens = 100000
+max_output_tokens = 16000
+[models."xiaoge/denied"]
+context_tokens = 128000
+max_input_tokens = 100000
+max_output_tokens = 16000
+[models."xiaoge/invalid"]
+context_tokens = 128000
+max_output_tokens = 16000
+"#
+    ));
+    let resolution = resolve(&fixture.request()).unwrap();
+    let mut snapshot = catalog_snapshot();
+    let unknown = |id: &str| {
+        let mut row = snapshot.providers["openrouter"].models["vendor/model"].clone();
+        row.id = id.to_owned();
+        row.tool_call = false;
+        row.output_modalities.clear();
+        row
+    };
+    let mut invalid = unknown("invalid");
+    invalid.limits = None;
+    invalid.disabled_reason =
+        Some("endpoint model has a zero, malformed, or out-of-range limit".to_owned());
+    snapshot.endpoint_catalogs.insert(
+        "xiaoge".to_owned(),
+        EndpointCatalog {
+            binding_digest: String::new(),
+            kind: "openai-compatible".to_owned(),
+            base_url: "https://gateway.example/v1".to_owned(),
+            source: "endpoint/xiaoge".to_owned(),
+            revision: "unknown-r1".to_owned(),
+            retrieved_at_ms: 2_000,
+            catalog: CatalogProvider {
+                id: "xiaoge".to_owned(),
+                name: "Xiaoge".to_owned(),
+                models: BTreeMap::from([
+                    ("configured".to_owned(), unknown("configured")),
+                    ("discovered".to_owned(), unknown("discovered")),
+                    ("denied".to_owned(), unknown("denied")),
+                    ("invalid".to_owned(), invalid),
+                ]),
+            },
+            partial_limits: BTreeMap::from([(
+                "invalid".to_owned(),
+                PartialCatalogLimits {
+                    context_tokens: Some(128_000),
+                    max_input_tokens: None,
+                    max_output_tokens: Some(16_000),
+                },
+            )]),
+            unadvertised_capabilities: ["configured", "discovered", "invalid"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        },
+    );
+    let inventory =
+        local_inventory_with_catalog(&resolution, &["fake", "openai-compatible"], Some(&snapshot))
+            .unwrap();
+    let configured = inventory.resolve_model("xiaoge/configured", None).unwrap();
+    assert_eq!(configured.tool_call, None, "absence remains unknown");
+    for id in ["discovered", "denied", "invalid"] {
+        let row = inventory
+            .models
+            .iter()
+            .find(|row| row.id() == format!("xiaoge/{id}"))
+            .unwrap();
+        assert!(!row.selectable, "{id} must remain disabled");
+    }
+    let invalid = inventory
+        .models
+        .iter()
+        .find(|row| row.model == "invalid")
+        .unwrap();
+    assert!(
+        invalid
+            .disabled_reason
+            .as_deref()
+            .unwrap()
+            .contains("zero, malformed")
+    );
+}
 
 #[test]
 fn local_inventory_keeps_models_provider_qualified_and_deterministic() {

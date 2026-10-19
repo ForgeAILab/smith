@@ -23,7 +23,7 @@ use smith_config::catalog::{
     CATALOG_SCHEMA_REVISION, CatalogLimits, CatalogModality, CatalogModel, CatalogModelCost,
     CatalogProvider, CatalogReasoningControls, CatalogSnapshot, GOOGLE_CATALOG_PROVIDER,
     MODELS_DEV_SOURCE_URL, OPENAI_CATALOG_PROVIDER, OPENROUTER_CATALOG_PROVIDER,
-    XAI_CATALOG_PROVIDER, ZAI_CODING_PLAN_CATALOG_PROVIDER, catalog_provider_for,
+    XAI_CATALOG_PROVIDER, ZAI_CODING_PLAN_CATALOG_PROVIDER,
 };
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;

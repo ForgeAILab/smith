@@ -33,6 +33,11 @@ pub(crate) enum Command {
         /// The project whose session partition to inspect.
         selection: Selection,
     },
+    /// Synchronize configured provider model metadata without inference.
+    ModelsSync {
+        provider: Option<String>,
+        force: bool,
+    },
     /// Manage user-owned plugin bundles without starting a session.
     Plugin(PluginAction),
     /// Enter guided user-scoped provider/model setup.
@@ -266,6 +271,7 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command,
         Some("config") => parse_config(args),
         Some("sessions") => parse_sessions(args),
         Some("setup") => parse_setup(args),
+        Some("models") => parse_models(args),
         _ => parse_run(args),
     }
 }
@@ -320,6 +326,43 @@ fn parse_mcp_watchdog(mut args: VecDeque<OsString>) -> Result<Command, ParseErro
         program,
         args: args.into(),
     })
+}
+
+fn parse_models(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
+    args.pop_front();
+    if args.front().is_some_and(|arg| is_help(arg.to_str())) {
+        return Ok(Command::Help);
+    }
+    let action = required_text(args.pop_front(), "`sync` after `models`")?;
+    if action != "sync" {
+        return Err(ParseError::new(
+            "expected `smith models sync [--provider NAME] [--force]`",
+        ));
+    }
+    let mut provider = None;
+    let mut force = false;
+    while let Some(raw) = args.pop_front() {
+        let (flag, inline) = flag(raw)?;
+        match flag.as_str() {
+            "help" | "--help" | "-h" => return Ok(Command::Help),
+            "--provider" => {
+                let parsed = text_value(&flag, inline, &mut args)?;
+                set_once(&mut provider, parsed, &flag)?;
+            }
+            "--force" if inline.is_none() && !force => force = true,
+            "--force" => {
+                return Err(ParseError::new(
+                    "`--force` takes no value and may be supplied once",
+                ));
+            }
+            _ => {
+                return Err(ParseError::new(format!(
+                    "unknown models sync option `{flag}`"
+                )));
+            }
+        }
+    }
+    Ok(Command::ModelsSync { provider, force })
 }
 
 fn parse_setup(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
@@ -732,6 +775,7 @@ USAGE:
   smith config explain <KEY> [SELECTION OPTIONS]
   smith config modules [SELECTION OPTIONS]
   smith sessions list [SELECTION OPTIONS]
+  smith models sync [--provider <NAME>] [--force]
   smith plugin add <SOURCE> [--yes]
   smith plugin list
   smith plugin update [NAME] [--yes]
@@ -1207,6 +1251,34 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn models_sync_is_typed_and_rejects_ambiguous_flags() {
+        assert_eq!(
+            command(&["models", "sync"]),
+            Command::ModelsSync {
+                provider: None,
+                force: false
+            }
+        );
+        assert_eq!(
+            command(&["models", "sync", "--provider=xiaoge", "--force"]),
+            Command::ModelsSync {
+                provider: Some("xiaoge".into()),
+                force: true
+            }
+        );
+        for args in [
+            vec!["models"],
+            vec!["models", "list"],
+            vec!["models", "sync", "--force=true"],
+            vec!["models", "sync", "--force", "--force"],
+            vec!["models", "sync", "--provider"],
+            vec!["models", "sync", "--project", "/tmp"],
+        ] {
+            assert!(parse(args.into_iter().map(OsString::from)).is_err());
+        }
     }
 
     #[test]

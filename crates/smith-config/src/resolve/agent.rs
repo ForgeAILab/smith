@@ -914,6 +914,7 @@ pub(super) fn extract(
         persistence,
         approval,
         background,
+        model_sync: super::load::resolve_model_sync(provenance)?,
         mcp,
         image_generation,
         web: super::web::resolve_web(provenance)?,

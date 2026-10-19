@@ -8,12 +8,12 @@ pub(super) async fn setup_context(
     mode: &SetupMode,
 ) -> Result<SetupContext> {
     let start = canonical_start(selection.project.as_deref())?;
-    let request = crate::plugins::with_known_plugins(
+    let request = crate::config_command::request_catalog(crate::plugins::with_known_plugins(
         ResolveRequest::new(&start)
             .with_known_modules(crate::modules::known_modules())
             .with_env(std::env::vars())
             .with_cli(selection.overrides()),
-    )?;
+    )?)?;
     let (layout, resolution) = match inspect(&request) {
         ConfigReadiness::Ready(resolution) => (resolution.layout.clone(), Some(*resolution)),
         ConfigReadiness::Unconfigured(context) => (context.layout, None),
@@ -74,6 +74,7 @@ pub(super) async fn setup_context(
         project,
         inventory,
         catalog,
+        discovery_attempted: Default::default(),
         unconfigured: resolution.is_none(),
     })
 }

@@ -34,6 +34,7 @@ fn price() -> PriceReference {
     PriceReference {
         provider: "openai".to_owned(),
         model: "gpt-5.3".to_owned(),
+        provenance: None,
         table: PriceTable {
             input: Some(2_000_000),
             output: Some(8_000_000),
@@ -191,6 +192,7 @@ fn cost_lines_show_each_binding_even_when_the_last_root_price_is_unknown() {
     status.set_price(Some(PriceReference {
         provider: "google".into(),
         model: "gemini-3.8-flash".into(),
+        provenance: None,
         table: PriceTable {
             input: Some(1_000_000),
             ..price().table

@@ -198,6 +198,7 @@ fn xai_catalog_snapshot() -> CatalogSnapshot {
         content_digest: format!("sha256:{}", "2".repeat(64)),
         source_revision: "fixture-r1".to_owned(),
         retrieved_at_ms: 1_000,
+        endpoint_catalogs: BTreeMap::new(),
         providers: BTreeMap::from([(
             smith_config::catalog::XAI_CATALOG_PROVIDER.to_owned(),
             CatalogProvider {

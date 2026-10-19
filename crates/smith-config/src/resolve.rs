@@ -15,7 +15,10 @@ mod types;
 mod vision;
 mod web;
 
-pub use load::{env_name, inspect, resolve};
+pub use load::{
+    endpoint_discovery_authorized, env_name, inspect, resolve, resolve_model_sync_request,
+    resolve_user_model_sync, resolve_user_provider,
+};
 pub use plugins::{PluginSelection, resolve_plugin_selection};
 pub use provenance::*;
 pub use types::*;

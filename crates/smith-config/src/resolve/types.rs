@@ -293,6 +293,8 @@ pub struct ResolvedConfig {
     pub approval: ResolvedApproval,
     /// Background-work policy.
     pub background: ResolvedBackground,
+    /// User-owned automatic model-catalog refresh policy.
+    pub model_sync: ResolvedModelSync,
     /// Declared Model Context Protocol servers.
     pub mcp: ResolvedMcp,
     /// Every known module, with selection provenance and build availability.
@@ -1074,6 +1076,15 @@ pub struct ResolvedBackground {
     pub max_children: Sourced<u32>,
     /// Monitors allowed at once.
     pub max_monitors: Sourced<u32>,
+}
+
+/// User-owned model metadata refresh policy for the running host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedModelSync {
+    /// Whether automatic refresh is enabled.
+    pub enabled: Sourced<bool>,
+    /// Refresh interval in hours, from 1 through 168.
+    pub interval_hours: Sourced<u32>,
 }
 
 /// The result of resolving one run's configuration.

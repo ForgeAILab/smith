@@ -1,7 +1,7 @@
 //! Image-input metadata before runtime defaults, and early vision validation.
 
 use crate::catalog::{
-    CatalogModality, CatalogModel, CatalogSnapshot, modality_catalog_provider_for,
+    CatalogBinding, CatalogModality, CatalogModel, CatalogSnapshot, modality_catalog_provider_for,
 };
 use crate::model::KIND_COMMAND_JSONL;
 
@@ -84,11 +84,25 @@ pub(super) fn model_input(
         })
         .transpose()?;
     let base_url = text(provenance, &format!("{scope}.base_url"))?;
-    let catalog_provider =
-        modality_catalog_provider_for(kind_value, base_url.as_ref().map(|url| url.value.as_str()));
-    let catalog_model = catalog_provider
-        .and_then(|provider| catalog?.provider(provider))
-        .and_then(|provider| provider.models.get(model));
+    let endpoint = base_url.as_ref().map(|url| url.value.as_str());
+    let binding = catalog.and_then(|snapshot| {
+        snapshot
+            .bound_provider(provider, kind_value, endpoint)
+            .or_else(|| {
+                // These reviewed modality-only bindings intentionally inherit no
+                // API prices, limits, or inventory (for example ChatGPT).
+                let public_provider = modality_catalog_provider_for(kind_value, endpoint)?;
+                Some(CatalogBinding {
+                    provider: snapshot.provider(public_provider)?,
+                    partial_limits: None,
+                    unadvertised_capabilities: None,
+                    source: "models.dev",
+                    revision: snapshot.revision(),
+                    retrieved_at_ms: snapshot.retrieved_at_ms,
+                })
+            })
+    });
+    let catalog_model = binding.and_then(|binding| binding.provider.models.get(model));
     let image = image_input(
         explicit.as_ref().map(|value| value.value.as_slice()),
         catalog_model,
@@ -96,14 +110,13 @@ pub(super) fn model_input(
     );
     let catalog_modalities = catalog_model
         .filter(|entry| !entry.input_modalities.is_empty())
-        .zip(catalog)
-        .zip(catalog_provider)
-        .map(|((entry, catalog), provider)| {
+        .zip(binding)
+        .map(|(entry, binding)| {
             Sourced::new(
                 entry.input_modalities.clone(),
                 Source::built_in(format!(
-                    "catalog {provider}@{} models.\"{provider}/{model}\".input_modalities",
-                    catalog.revision(),
+                    "catalog {}@{} source={} retrieved_at_ms={} models.\"{provider}/{model}\".input_modalities",
+                    binding.provider.id, binding.revision, binding.source, binding.retrieved_at_ms,
                 )),
             )
         });

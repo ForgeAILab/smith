@@ -135,6 +135,7 @@ fn advisor_usage_has_separate_totals_and_uses_its_own_model_prices() {
 
     let mut status = Status::new("main", "/repo");
     let main_price = PriceReference {
+        provenance: None,
         provider: "main-provider".into(),
         model: "main".into(),
         table: PriceTable {
@@ -145,6 +146,7 @@ fn advisor_usage_has_separate_totals_and_uses_its_own_model_prices() {
         },
     };
     let advisor_price = PriceReference {
+        provenance: None,
         provider: "advisor-provider".into(),
         model: "reviewer".into(),
         table: PriceTable {
@@ -201,6 +203,12 @@ fn advisor_usage_has_separate_totals_and_uses_its_own_model_prices() {
     );
     usage.advisor_price = None;
     assert_eq!(
+        SessionCost::compute(&usage, &main_price).micro_usd,
+        1_020,
+        "clearing the active reference does not erase previously frozen rates"
+    );
+    usage.advisor_bindings.clear();
+    assert_eq!(
         SessionCost::compute(&usage, &main_price),
         SessionCost {
             micro_usd: 100,
@@ -215,6 +223,7 @@ fn vision_usage_has_separate_totals_and_uses_its_own_model_prices() {
 
     let mut status = Status::new("main", "/repo");
     let main_price = PriceReference {
+        provenance: None,
         provider: "main-provider".into(),
         model: "main".into(),
         table: PriceTable {
@@ -225,6 +234,7 @@ fn vision_usage_has_separate_totals_and_uses_its_own_model_prices() {
         },
     };
     let vision_price = PriceReference {
+        provenance: None,
         provider: "vision-provider".into(),
         model: "eyes".into(),
         table: PriceTable {
@@ -286,6 +296,12 @@ fn vision_usage_has_separate_totals_and_uses_its_own_model_prices() {
     );
     usage.vision_price = None;
     assert_eq!(
+        SessionCost::compute(&usage, &main_price).micro_usd,
+        1_020,
+        "clearing the active reference does not erase previously frozen rates"
+    );
+    usage.vision_bindings.clear();
+    assert_eq!(
         SessionCost::compute(&usage, &main_price),
         SessionCost {
             micro_usd: 100,
@@ -298,6 +314,7 @@ fn vision_usage_has_separate_totals_and_uses_its_own_model_prices() {
 fn vision_only_usage_retains_a_price_when_the_main_model_is_unpriced() {
     let mut status = Status::new("main", "/repo");
     status.set_vision_price(Some(PriceReference {
+        provenance: None,
         provider: "vision-provider".into(),
         model: "eyes".into(),
         ..priced(10_000_000, 20_000_000, 1_000_000, 20_000_000)
@@ -420,6 +437,7 @@ fn synthetic_bindings_keep_their_prices_across_switches_and_reconciliation() {
     ] {
         let mut status = bound_status("zai", "glm-5.3", 0);
         status.set_price(Some(PriceReference {
+            provenance: None,
             provider: "zai".into(),
             model: "glm-5.3".into(),
             ..priced(0, 0, 2_000_000, 0)
@@ -435,6 +453,7 @@ fn synthetic_bindings_keep_their_prices_across_switches_and_reconciliation() {
         status.record_usage_record(&glm);
         status.switch_model(Some("google".into()), "gemini-3.8-flash");
         status.set_price(Some(PriceReference {
+            provenance: None,
             provider: "google".into(),
             model: "gemini-3.8-flash".into(),
             ..priced(0, 0, 1_000_000, 0)
@@ -501,6 +520,7 @@ fn unpriced_keepalive_is_estimated_and_never_borrows_the_last_bindings_rate() {
     );
     status.switch_model(Some("google".into()), "unused");
     status.set_price(Some(PriceReference {
+        provenance: None,
         provider: "google".into(),
         model: "unused".into(),
         ..priced(0, 0, 10_000_000, 0)
@@ -700,6 +720,7 @@ fn catalog_conversion_preserves_missing_and_zero_prices() {
 
 fn priced(input: u64, output: u64, cache_read: u64, cache_write: u64) -> PriceReference {
     PriceReference {
+        provenance: None,
         provider: "openai".to_owned(),
         model: "gpt-5.3".to_owned(),
         table: PriceTable {
@@ -939,6 +960,7 @@ fn bound_status(provider: &str, model: &str, input_rate: u64) -> Status {
     let mut status = Status::new(model, "project");
     status.switch_model(Some(provider.to_owned()), model);
     status.set_price(Some(PriceReference {
+        provenance: None,
         provider: provider.to_owned(),
         model: model.to_owned(),
         ..priced(input_rate, 0, 0, 0)
@@ -952,6 +974,7 @@ fn root_bindings_keep_their_prices_across_switches_and_rebuilds() {
     status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 11_000));
     status.switch_model(Some("google".into()), "gemini-3.8-flash");
     status.set_price(Some(PriceReference {
+        provenance: None,
         provider: "google".into(),
         model: "gemini-3.8-flash".into(),
         ..priced(1_000_000, 0, 0, 0)
@@ -1012,6 +1035,7 @@ fn harness_usage_omits_the_profile_provider_and_stays_unpriced() {
         let mut status = Status::new(model, "project");
         status.switch_model(Some(provider.to_owned()), model);
         let reference = PriceReference {
+            provenance: None,
             provider: provider.to_owned(),
             model: model.to_owned(),
             ..priced(2_000_000, 8_000_000, 0, 0)
@@ -1044,6 +1068,7 @@ fn harness_usage_keeps_native_child_and_advisor_prices_separate() {
     status.switch_model(Some("zai".into()), "cli/claude-code/haiku");
     status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000_000));
     let native = PriceReference {
+        provenance: None,
         provider: "zai".into(),
         model: "glm-5.3".into(),
         ..priced(2_000_000, 0, 0, 0)
@@ -1091,6 +1116,7 @@ fn binding_confidence_survives_a_new_models_provider_report() {
     });
     status.switch_model(Some("google".into()), "gemini-3.8-flash");
     status.set_price(Some(PriceReference {
+        provenance: None,
         provider: "google".into(),
         model: "gemini-3.8-flash".into(),
         ..priced(1_000_000, 0, 0, 0)
@@ -1121,6 +1147,7 @@ fn module_usage_is_attributed_priced_and_retained_across_model_switches() {
     use agent_runtime_core::usage::{Provenance, UsageSource};
     let mut status = Status::new("worker", "/repo");
     let price = PriceReference {
+        provenance: None,
         provider: "local".into(),
         model: "worker".into(),
         table: PriceTable {
@@ -1194,4 +1221,113 @@ fn module_cli_usage_is_unpriced_and_hosted_search_is_not_a_token() {
     let cost = SessionCost::compute(&usage, &reference);
     assert_eq!(cost.micro_usd, 0);
     assert_eq!(cost.label, CostLabel::Estimated);
+}
+
+#[test]
+fn a_price_refresh_freezes_root_synthetic_advisor_vision_and_module_revisions() {
+    use agent_runtime_core::usage::Provenance;
+
+    let revision = |name: &str, rate| {
+        PriceReference::from_catalog(
+            "gateway",
+            "same-model",
+            &PriceTable {
+                input: Some(rate),
+                output: Some(rate),
+                cache_read: Some(rate),
+                cache_write: None,
+            },
+        )
+        .with_provenance("endpoint:account-a", name, if name == "A" { 1 } else { 2 })
+    };
+    let a = revision("A", 1_000_000);
+    let b = revision("B", 3_000_000);
+    let mut status = Status::new("same-model", "project");
+    status.switch_model(Some("gateway".into()), "same-model");
+    for price in [&a, &b] {
+        status.set_price(Some(price.clone()));
+        status.set_advisor_price(Some(price.clone()));
+        status.set_vision_price(Some(price.clone()));
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000));
+        status.record_synthetic_usage(
+            ProviderAttemptPurpose::CacheKeepalive,
+            &UsageDelta::new().with(CounterKind::InputCached, 1_000),
+        );
+        for purpose in ["advisor", "vision", "module:review/module"] {
+            status.record_usage_record(&UsageRecord {
+                source: UsageSource::ProviderAttempt,
+                provenance: Provenance {
+                    purpose: Some(purpose.into()),
+                    ..Provenance::default()
+                },
+                delta: UsageDelta::new().with(CounterKind::InputUncached, 1_000),
+            });
+        }
+    }
+    let usage = status.session_usage();
+    for bindings in [
+        &usage.bindings,
+        &usage.advisor_bindings,
+        &usage.vision_bindings,
+        &usage.module_usage["review/module"],
+    ] {
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].price.as_ref(), Some(&a));
+        assert_eq!(bindings[1].price.as_ref(), Some(&b));
+    }
+    let cost = SessionCost::compute(&usage, &b);
+    assert_eq!(cost.micro_usd, 20_000);
+    assert_eq!(cost.label, CostLabel::Exact);
+    // Host rebuilds replay the canonical counters before retaining live rates.
+    let mut rebuilt = Status::new("same-model", "project");
+    rebuilt.switch_model(Some("gateway".into()), "same-model");
+    rebuilt.set_price(Some(b.clone()));
+    rebuilt.set_advisor_price(Some(b.clone()));
+    rebuilt.set_vision_price(Some(b.clone()));
+    rebuilt.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 2_000));
+    for purpose in ["advisor", "vision", "module:review/module"] {
+        rebuilt.record_usage_record(&UsageRecord {
+            source: UsageSource::ProviderAttempt,
+            provenance: Provenance {
+                purpose: Some(purpose.into()),
+                ..Provenance::default()
+            },
+            delta: UsageDelta::new().with(CounterKind::InputUncached, 2_000),
+        });
+    }
+    rebuilt.record_synthetic_usage(
+        ProviderAttemptPurpose::CacheKeepalive,
+        &UsageDelta::new().with(CounterKind::InputCached, 2_000),
+    );
+    rebuilt.retain_usage_bindings(&usage);
+    assert_eq!(SessionCost::compute(&rebuilt.session_usage(), &b), cost);
+}
+
+#[test]
+fn unobserved_advisor_attempts_do_not_borrow_the_newest_price() {
+    use agent_runtime_core::usage::Provenance;
+    let mut status = Status::new("root", "project");
+    let old = priced(1_000_000, 0, 0, 0).with_provenance("models.dev", "A", 1);
+    status.set_advisor_price(Some(old.clone()));
+    let record = |tokens| UsageRecord {
+        source: UsageSource::ProviderAttempt,
+        provenance: Provenance {
+            purpose: Some("advisor".into()),
+            ..Provenance::default()
+        },
+        delta: UsageDelta::new().with(CounterKind::InputUncached, tokens),
+    };
+    status.record_usage_record(&record(1_000));
+    status.set_advisor_price(Some(priced(3_000_000, 0, 0, 0).with_provenance(
+        "models.dev",
+        "B",
+        2,
+    )));
+    status.reconcile_advisor_records(&[record(1_000), record(2_000)]);
+    let usage = status.session_usage();
+    let cost = SessionCost::compute(&usage, &old);
+    assert_eq!(cost.micro_usd, 1_000);
+    assert_eq!(cost.label, CostLabel::Estimated);
+    assert_eq!(usage.advisor_bindings[0].price, Some(old));
+    assert!(usage.advisor_bindings[1].price.is_none());
 }

@@ -152,6 +152,7 @@ pub(super) fn normalize_remote(
         .unwrap_or(&source_digest)
         .to_owned();
     let snapshot = CatalogSnapshot {
+        endpoint_catalogs: BTreeMap::new(),
         schema_revision: CATALOG_SCHEMA_REVISION,
         source_url: MODELS_DEV_SOURCE_URL.to_owned(),
         source_digest,

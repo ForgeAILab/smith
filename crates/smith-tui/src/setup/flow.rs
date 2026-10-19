@@ -203,6 +203,19 @@ impl SetupApp {
                 ],
                 "Choose a credential method.",
             )),
+            Step::ModelChoice if self.action == Some(SetupAction::AddModel) => {
+                let mut entries = self.discovered_model_entries.clone();
+                entries.push(ResourceEntry::new(
+                    "\u{0}manual-model-id",
+                    "Enter model ID manually",
+                    "Use a model not listed here; only missing limits need manual input",
+                ));
+                Some(ResourcePicker::new(
+                    "Choose provider model",
+                    entries,
+                    "Enter a model ID manually to continue",
+                ))
+            }
             Step::ModelChoice => Some(ResourcePicker::new(
                 "Choose default model",
                 self.model_entries.clone(),
@@ -339,7 +352,7 @@ impl SetupApp {
             }
             Step::ProviderChoice => {
                 self.provider = id;
-                self.enter(Step::ModelName, true);
+                return self.begin_model_discovery(true);
             }
             Step::CredentialMethod => match id.as_str() {
                 "keychain" => {
@@ -366,7 +379,27 @@ impl SetupApp {
                 _ => {}
             },
             Step::ModelChoice => {
-                if self.catalog_models {
+                if self.action == Some(SetupAction::AddModel) {
+                    if id == "\u{0}manual-model-id" {
+                        self.enter(Step::ModelName, true);
+                    } else {
+                        if self.model != id {
+                            self.context_tokens = None;
+                            self.max_input_tokens = None;
+                            self.max_output_tokens = None;
+                            self.limits_source = None;
+                        }
+                        self.model = id;
+                        let Some(resolved) = self.discovered_model_limits.get(&self.model).cloned()
+                        else {
+                            return self.resolve_selected_model();
+                        };
+                        // Reuse the same resolution continuation as typed IDs,
+                        // without issuing a second endpoint request.
+                        self.enter(Step::Busy, true);
+                        self.apply_resolved_limits(Some(resolved));
+                    }
+                } else if self.catalog_models {
                     let Some(limits) = self.catalog_model_limits.get(&id).copied() else {
                         self.error =
                             Some("the selected catalog model has no enforceable limits".to_owned());
@@ -401,6 +434,21 @@ impl SetupApp {
         SetupEffect::None
     }
 
+    pub(super) fn begin_model_discovery(&mut self, remember: bool) -> SetupEffect {
+        self.model.clear();
+        self.context_tokens = None;
+        self.max_input_tokens = None;
+        self.max_output_tokens = None;
+        self.limits_source = None;
+        self.discovered_model_entries.clear();
+        self.discovered_model_limits.clear();
+        self.busy_note = Some(format!("Discovering models for {}…", self.provider));
+        self.enter(Step::Busy, remember);
+        SetupEffect::DiscoverModels {
+            provider: self.provider.clone(),
+        }
+    }
+
     pub(super) fn needs_response_behavior(&self) -> bool {
         self.action == Some(SetupAction::AddProvider)
             && self.provider_kind == SetupProviderKind::OpenAiCompatible
@@ -417,6 +465,41 @@ impl SetupApp {
             Step::Review
         } else {
             Step::ModelName
+        }
+    }
+
+    fn resolve_selected_model(&mut self) -> SetupEffect {
+        self.busy_note =
+            Some("Resolving model limits from the endpoint and trusted catalog…".into());
+        self.enter(Step::Busy, true);
+        SetupEffect::ResolveModelLimits {
+            request: ResolveModelLimits {
+                use_endpoint_listing: self.action != Some(SetupAction::AddProvider)
+                    || self.provider_kind == SetupProviderKind::OpenAiCompatible,
+                endpoint: if self.action == Some(SetupAction::AddProvider)
+                    && self.provider_kind == SetupProviderKind::OpenAiCompatible
+                    && !self.endpoint.is_empty()
+                {
+                    Some(self.endpoint.clone())
+                } else {
+                    None
+                },
+                bearer: match self.credential_method {
+                    Some(method) if method.takes_secret() && !self.secret.is_empty() => {
+                        Some(self.secret.secret())
+                    }
+                    _ => None,
+                },
+                environment_variable: if self.credential_method
+                    == Some(CredentialMethod::Environment)
+                {
+                    Some(self.environment_variable.clone())
+                } else {
+                    None
+                },
+                provider: (!self.provider.is_empty()).then(|| self.provider.clone()),
+                model: self.model.clone(),
+            },
         }
     }
 
@@ -465,50 +548,18 @@ impl SetupApp {
                 if value.is_empty() || value.chars().any(char::is_control) {
                     self.error = Some("Enter the provider's exact model ID.".into());
                 } else {
+                    if self.model != value {
+                        self.context_tokens = None;
+                        self.max_input_tokens = None;
+                        self.max_output_tokens = None;
+                        self.limits_source = None;
+                    }
                     self.model = value;
                     if matches!(
                         self.action,
                         Some(SetupAction::AddProvider | SetupAction::AddModel)
                     ) {
-                        // Custom models are the only ones whose limits nobody
-                        // has reviewed yet, so they are the only ones worth a
-                        // bounded read of the endpoint's own advertisement.
-                        self.busy_note = Some(
-                            "Resolving model limits from the endpoint and trusted catalog…".into(),
-                        );
-                        self.enter(Step::Busy, true);
-                        return SetupEffect::ResolveModelLimits {
-                            request: ResolveModelLimits {
-                                use_endpoint_listing: self.action != Some(SetupAction::AddProvider)
-                                    || self.provider_kind == SetupProviderKind::OpenAiCompatible,
-                                endpoint: if self.action == Some(SetupAction::AddProvider)
-                                    && self.provider_kind == SetupProviderKind::OpenAiCompatible
-                                    && !self.endpoint.is_empty()
-                                {
-                                    Some(self.endpoint.clone())
-                                } else {
-                                    None
-                                },
-                                bearer: match self.credential_method {
-                                    Some(method)
-                                        if method.takes_secret() && !self.secret.is_empty() =>
-                                    {
-                                        Some(self.secret.secret())
-                                    }
-                                    _ => None,
-                                },
-                                environment_variable: if self.credential_method
-                                    == Some(CredentialMethod::Environment)
-                                {
-                                    Some(self.environment_variable.clone())
-                                } else {
-                                    None
-                                },
-                                provider: (!self.provider.is_empty())
-                                    .then(|| self.provider.clone()),
-                                model: self.model.clone(),
-                            },
-                        };
+                        return self.resolve_selected_model();
                     }
                     self.enter(Step::ContextTokens, true);
                 }
@@ -517,13 +568,37 @@ impl SetupApp {
                 Ok(value) => {
                     let unchanged_resolution =
                         self.context_tokens == Some(value) && self.limits_source.is_some();
+                    let existing_ceilings = self.context_tokens.is_none();
+                    if existing_ceilings
+                        && (self.max_input_tokens.is_some_and(|limit| limit > value)
+                            || self.max_output_tokens.is_some_and(|limit| limit > value))
+                    {
+                        self.error = Some(
+                            "Context must include the existing or published input and output ceilings."
+                                .into(),
+                        );
+                        return SetupEffect::None;
+                    }
                     self.context_tokens = Some(value);
                     if !unchanged_resolution {
-                        self.max_input_tokens = Some(value);
-                        self.max_output_tokens =
-                            Some(smith_runtime::probe::derived_output_ceiling(value));
-                        self.limits_source =
-                            Some("context entered manually · ceilings derived".into());
+                        let has_explicit = existing_ceilings
+                            && (self.max_input_tokens.is_some()
+                                || self.max_output_tokens.is_some());
+                        if !existing_ceilings || self.max_input_tokens.is_none() {
+                            self.max_input_tokens = Some(value);
+                        }
+                        if !existing_ceilings || self.max_output_tokens.is_none() {
+                            self.max_output_tokens =
+                                Some(smith_runtime::probe::derived_output_ceiling(value));
+                        }
+                        self.limits_source = Some(
+                            if has_explicit {
+                                "context entered manually · existing or published ceilings preserved"
+                            } else {
+                                "context entered manually · ceilings derived"
+                            }
+                            .into(),
+                        );
                     }
                     if self.needs_response_behavior() {
                         self.enter(Step::ResponseBehavior, true);

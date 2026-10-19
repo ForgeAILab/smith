@@ -108,10 +108,14 @@ pub struct SessionUsage {
     pub delegated_module_usage: BTreeMap<String, Vec<BindingUsage>>,
     /// Independently resolved advisor rates; absence leaves its spend unpriced.
     pub advisor_price: Option<PriceReference>,
+    /// Advisor counters frozen at the price revision used for each attempt.
+    pub advisor_bindings: Vec<BindingUsage>,
     /// Vision provider counters, disjoint from ordinary root and child work.
     pub vision_totals: BTreeMap<CounterKind, u64>,
     /// Independently resolved vision rates; absence leaves its spend unpriced.
     pub vision_price: Option<PriceReference>,
+    /// Vision counters frozen at the price revision used for each attempt.
+    pub vision_bindings: Vec<BindingUsage>,
     /// Context compactions observed.
     pub compactions: u32,
     /// Tokens those compactions reclaimed.
@@ -142,9 +146,15 @@ impl SessionUsage {
     ) -> Option<&'a PriceReference> {
         if self.bindings.is_empty() {
             return active.or_else(|| {
-                self.vision_price
-                    .as_ref()
-                    .filter(|_| !self.vision_totals.is_empty())
+                self.advisor_bindings
+                    .iter()
+                    .chain(&self.vision_bindings)
+                    .find_map(|binding| binding.price.as_ref())
+                    .or_else(|| {
+                        self.vision_price
+                            .as_ref()
+                            .filter(|_| !self.vision_totals.is_empty())
+                    })
                     .or_else(|| {
                         self.module_usage
                             .values()
@@ -169,9 +179,15 @@ impl SessionUsage {
                     .find_map(|binding| binding.price.as_ref())
             })
             .or_else(|| {
-                self.advisor_price
-                    .as_ref()
-                    .filter(|_| !self.advisor_totals.is_empty())
+                self.advisor_bindings
+                    .iter()
+                    .chain(&self.vision_bindings)
+                    .find_map(|binding| binding.price.as_ref())
+                    .or_else(|| {
+                        self.advisor_price
+                            .as_ref()
+                            .filter(|_| !self.advisor_totals.is_empty())
+                    })
             })
             .or_else(|| {
                 self.vision_price
@@ -260,6 +276,7 @@ impl SessionUsage {
                 }
             }
         }
+        reconcile_binding_totals(&mut self.advisor_bindings, &self.advisor_totals);
     }
 
     /// Replaces vision counters from the durable ledger after shutdown.
@@ -273,6 +290,7 @@ impl SessionUsage {
                 }
             }
         }
+        reconcile_binding_totals(&mut self.vision_bindings, &self.vision_totals);
     }
 
     /// Aggregates each module's separately attributed counters across bindings.
@@ -547,8 +565,8 @@ pub use smith_config::catalog::CatalogModelCost as PriceTable;
 /// `CounterKind::Reasoning` always resolves to `None`. Reasoning tokens
 /// are billed separately from output tokens, not folded into them —
 /// `agent_runtime_core::usage::CounterKind::Reasoning`'s own doc says so
-/// — and Models.dev, the catalog's only source, publishes no distinct
-/// reasoning price. Charging reasoning tokens at the output rate would
+/// — and the reviewed catalog price schemas carry no distinct reasoning
+/// price. Charging reasoning tokens at the output rate would
 /// present a price the source never published as if it had: exactly
 /// what `usage-accounting`'s "Labelled cost calculation" forbids
 /// ("Smith SHALL calculate cost only from a versioned price reference
@@ -566,13 +584,24 @@ fn price_for(table: &PriceTable, kind: CounterKind) -> Option<u64> {
     }
 }
 
+/// Immutable provenance retained with the rates used by a serving binding.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PriceProvenance {
+    /// Secret-free source identity, including an endpoint's account scope.
+    pub source: String,
+    /// Immutable normalized catalog content revision.
+    pub revision: String,
+    /// Time this source revision was retrieved, in Unix milliseconds.
+    pub retrieved_at_ms: u64,
+}
+
 /// One binding's catalog price, retained with the counters it produced.
 ///
-/// Resolved once by `crates/smith-cli` at startup (and on a provider/model
-/// change) and stored on [`Status`], so `/status` and the exit report price
-/// from the identical reference instead of each re-deriving it — the same
-/// discipline [`Status::switch_model`] already applies to cache evidence.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Resolved at host composition and frozen before usage arrives, so `/status`,
+/// exit reports, and resume all use the same rates after a catalog refresh.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PriceReference {
     /// The serving provider's name, so a rendered cost can say where the
     /// price came from.
@@ -581,6 +610,9 @@ pub struct PriceReference {
     pub model: String,
     /// Per-counter micro-USD-per-million prices.
     pub table: PriceTable,
+    /// Absent for legacy/manual references that predate versioned catalog prices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<PriceProvenance>,
 }
 
 impl PriceReference {
@@ -594,7 +626,23 @@ impl PriceReference {
             provider: provider.into(),
             model: model.into(),
             table: *cost,
+            provenance: None,
         }
+    }
+
+    /// Retains catalog provenance instead of consulting a newer snapshot later.
+    pub fn with_provenance(
+        mut self,
+        source: impl Into<String>,
+        revision: impl Into<String>,
+        retrieved_at_ms: u64,
+    ) -> Self {
+        self.provenance = Some(PriceProvenance {
+            source: source.into(),
+            revision: revision.into(),
+            retrieved_at_ms,
+        });
+        self
     }
 
     /// Names every model reference contributing to the displayed session cost.
@@ -638,21 +686,44 @@ impl PriceReference {
                 .collect::<Vec<_>>()
                 .join(" · ")
         };
-        if !usage.advisor_totals.is_empty() {
-            match &usage.advisor_price {
-                Some(advisor) => sources.push_str(&format!(
-                    " · advisor {}/{}",
-                    advisor.provider, advisor.model
-                )),
-                None => sources.push_str(" · advisor price unknown"),
+        for (label, totals, bindings, active) in [
+            (
+                "advisor",
+                &usage.advisor_totals,
+                &usage.advisor_bindings,
+                &usage.advisor_price,
+            ),
+            (
+                "vision",
+                &usage.vision_totals,
+                &usage.vision_bindings,
+                &usage.vision_price,
+            ),
+        ] {
+            if totals.is_empty() {
+                continue;
             }
-        }
-        if !usage.vision_totals.is_empty() {
-            match &usage.vision_price {
-                Some(vision) => {
-                    sources.push_str(&format!(" · vision {}/{}", vision.provider, vision.model))
+            if bindings.is_empty() {
+                match active {
+                    Some(price) => {
+                        sources.push_str(&format!(" · {label} {}/{}", price.provider, price.model))
+                    }
+                    None => sources.push_str(&format!(" · {label} price unknown")),
                 }
-                None => sources.push_str(" · vision price unknown"),
+                continue;
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for binding in bindings {
+                if binding.totals.is_empty() {
+                    continue;
+                }
+                let source = match &binding.price {
+                    Some(price) => format!("{}/{}", price.provider, price.model),
+                    None => "price unknown".into(),
+                };
+                if seen.insert(source.clone()) {
+                    sources.push_str(&format!(" · {label} {source}"));
+                }
             }
         }
         for (module, bindings) in usage
@@ -782,30 +853,49 @@ impl SessionCost {
                 }
             }
         }
-        for (kind, tokens) in &usage.advisor_totals {
-            if let Some(advisor_price) = &usage.advisor_price {
-                accumulate_price(
-                    *kind,
-                    *tokens,
-                    &advisor_price.table,
-                    &mut micro_usd,
-                    &mut all_priced,
-                );
-            } else if *tokens > 0 {
-                all_priced = false;
+        for (totals, bindings, active) in [
+            (
+                &usage.advisor_totals,
+                &usage.advisor_bindings,
+                usage.advisor_price.as_ref(),
+            ),
+            (
+                &usage.vision_totals,
+                &usage.vision_bindings,
+                usage.vision_price.as_ref(),
+            ),
+        ] {
+            if !bindings.is_empty() {
+                for binding in bindings {
+                    all_reported &= binding.reported;
+                    for (kind, tokens) in &binding.totals {
+                        if let Some(price) = &binding.price {
+                            accumulate_price(
+                                *kind,
+                                *tokens,
+                                &price.table,
+                                &mut micro_usd,
+                                &mut all_priced,
+                            );
+                        } else if *tokens > 0 {
+                            all_priced = false;
+                        }
+                    }
+                }
+                continue;
             }
-        }
-        for (kind, tokens) in &usage.vision_totals {
-            if let Some(vision_price) = &usage.vision_price {
-                accumulate_price(
-                    *kind,
-                    *tokens,
-                    &vision_price.table,
-                    &mut micro_usd,
-                    &mut all_priced,
-                );
-            } else if *tokens > 0 {
-                all_priced = false;
+            for (kind, tokens) in totals {
+                if let Some(price) = active {
+                    accumulate_price(
+                        *kind,
+                        *tokens,
+                        &price.table,
+                        &mut micro_usd,
+                        &mut all_priced,
+                    );
+                } else if *tokens > 0 {
+                    all_priced = false;
+                }
             }
         }
         for binding in usage
@@ -847,6 +937,38 @@ impl SessionCost {
             CostLabel::Exact => amount,
             CostLabel::Estimated => format!("~{amount}"),
         }
+    }
+}
+
+/// Canonical reconciliation may recover attempts the live stream did not see.
+/// Retain known revisions and keep only newly recovered counters unpriced.
+fn reconcile_binding_totals(bindings: &mut Vec<BindingUsage>, totals: &BTreeMap<CounterKind, u64>) {
+    let mut known = BTreeMap::<CounterKind, u64>::new();
+    for binding in bindings.iter() {
+        for (kind, value) in &binding.totals {
+            let total = known.entry(*kind).or_default();
+            *total = total.saturating_add(*value);
+        }
+    }
+    if known == *totals {
+        return;
+    }
+    let retain = known
+        .iter()
+        .all(|(kind, value)| totals.get(kind).copied().unwrap_or(0) >= *value);
+    if !retain {
+        bindings.clear();
+        known.clear();
+    }
+    let mut recovered = BindingUsage::new(None, "earlier models", None);
+    for (kind, value) in totals {
+        let missing = value.saturating_sub(known.get(kind).copied().unwrap_or(0));
+        if missing > 0 {
+            recovered.totals.insert(*kind, missing);
+        }
+    }
+    if recovered.has_usage() {
+        bindings.push(recovered);
     }
 }
 

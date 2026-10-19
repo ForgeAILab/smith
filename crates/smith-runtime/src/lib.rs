@@ -46,6 +46,7 @@ mod private_storage;
 pub mod probe;
 pub mod project_instructions;
 pub mod prompt;
+pub mod provider_models;
 pub mod reasoning;
 pub(crate) mod renewable;
 pub(crate) mod response;

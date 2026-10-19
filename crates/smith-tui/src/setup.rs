@@ -351,6 +351,12 @@ pub enum SetupEffect {
     Cancel,
     /// Hand off to Smith's ChatGPT OAuth connection using the host's screen runner.
     ConnectChatGpt,
+    /// Prepare one configured provider's current model choices before asking
+    /// for an exact identifier. Enumeration itself remains a pure operation.
+    DiscoverModels {
+        /// Configured provider whose authorized listing may be refreshed.
+        provider: String,
+    },
     /// Run the bounded automatic limit resolution and feed it back through
     /// [`SetupApp::apply_resolved_limits`].
     ResolveModelLimits {
@@ -453,6 +459,9 @@ pub struct SetupApp {
     provider_entries: Vec<ResourceEntry>,
     model_entries: Vec<ResourceEntry>,
     catalog_model_limits: BTreeMap<String, SetupModelLimits>,
+    discovered_model_entries: Vec<ResourceEntry>,
+    discovered_model_limits: BTreeMap<String, ResolvedModelLimits>,
+    pending_effect: Option<SetupEffect>,
     quick_start: SetupQuickStart,
     action: Option<SetupAction>,
     provider_kind: SetupProviderKind,
