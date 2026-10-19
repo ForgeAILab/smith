@@ -508,6 +508,49 @@ The key is never written to project configuration. Unset
 `SMITH_LIVE_API_KEY` after the run. Other OpenAI-compatible endpoints can use
 the same test with their documented model limits.
 
+### Live provider conformance
+
+`live_conformance` is an ignored, quota-spending suite for the routes in your
+real `~/.smith/config.toml`. It runs sequentially through two-read tool turns,
+session continuation, SIGKILL after a successful tool result and resume, every
+ordered pair of distinct routes, and optional hosted-search-plus-tool turns.
+Routes split at the first `/` into `--provider` and `--model`; model names may
+contain further slashes. For example:
+
+```sh
+mkdir -p /private/tmp/smith-fixture-tmp
+CARGO_TARGET_DIR=/private/tmp/smith-conformance-target \
+TMPDIR=/private/tmp/smith-fixture-tmp \
+SMITH_LIVE_CONFORMANCE_MODELS=google/gemini-4-argon,chatgpt/gpt-5.6-luna \
+SMITH_LIVE_CONFORMANCE_SEARCH=google/gemini-4-argon \
+cargo test -p smith-cli --test live_conformance -- --ignored --nocapture
+```
+
+`SMITH_LIVE_CONFORMANCE_MODELS` is required even with `--ignored`; an unset or
+empty value does no work. `SMITH_LIVE_CONFORMANCE_SEARCH` is an optional subset
+of those routes with hosted search. `SMITH_LIVE_CONFORMANCE_BINARY` optionally
+selects a binary instead of Cargo's built `smith`.
+`SMITH_LIVE_CONFORMANCE_REPORT_DIR` defaults to `target/live-conformance` at the
+workspace root; relative overrides also resolve from that root.
+
+The suite keeps your HOME, credentials, and profiles, creates fixtures beneath
+the system temporary directory, uses headless `--approval deny` (read-only
+workspace tools work; authority-bearing tools are denied), and bounds each
+process to 180 seconds. Child-process automatic approval rules are cleared so
+they cannot override `deny`. Project persistence overrides are rejected by the host,
+so it queries the binary's configured session store and removes only files for
+session IDs reported by its own runs. Persistence and mid-turn durability must
+be available in your real configuration for resume scenarios to pass.
+
+`report.json` preserves per-turn answers, token usage and provenance, optional
+cache-read percentages, session IDs, timings, and failure diagnostics.
+`report.md` contains a table and full errors with the last 20 stderr lines
+(lines containing `api_key` are dropped), and is printed with `--nocapture`.
+Multiple turns appear in execution order; interrupted turns have no final
+envelope, so their usage is unavailable. Cache percentages are never asserted.
+Failures are collected before the test fails; unselected search routes and
+cross-provider checks with fewer than two routes are reported as skips.
+
 The live direct ChatGPT Responses smoke test is ignored by default because it
 requires explicitly injected test credentials and may spend provider quota. It
 never reads Smith's Keychain entry. Have a secret-safe test runner inject
