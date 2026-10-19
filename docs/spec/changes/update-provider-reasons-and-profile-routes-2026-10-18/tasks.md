@@ -8,7 +8,7 @@ updated_at: 2026-10-19T00:05:00Z
 - [x] 1.1 Read the reason from an SSE-framed error body; label with a string
   `code` when there is no `status`.
 - [x] 1.2 Drop a reason that echoes the bare token of a sent header value.
-- [ ] 1.3 Move to Agent Runtime v0.7.0 so the reason survives the adapters and
+- [x] 1.3 Move to Agent Runtime v0.7.0 so the reason survives the adapters and
   a rejection displays as `Provider:`.
 
 ## 2. Profile routes
@@ -23,5 +23,6 @@ updated_at: 2026-10-19T00:05:00Z
 
 - [x] 3.1 `live_conformance`: tool turn, continuation, SIGKILL after a tool
   result then resume, every ordered pair of routes, hosted search plus tool.
-- [ ] 3.2 Run it against the owner's routes before release and record the
-  report.
+- [x] 3.2 Run it against the owner's routes before release and record the
+  report: Gemini, ChatGPT luna and zai pass every scenario and pair; the
+  Anthropic route's account ran out of credit mid-run.
