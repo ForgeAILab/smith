@@ -44,6 +44,7 @@ pub(crate) fn wrap_lines(lines: &[Line<'static>], width: u16) -> Vec<Line<'stati
 }
 
 /// The number of rows `lines` occupy once wrapped to `width`.
+#[cfg(test)]
 pub(crate) fn wrapped_row_count(lines: &[Line<'static>], width: u16) -> usize {
     if lines.is_empty() {
         return 0;

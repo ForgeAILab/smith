@@ -345,6 +345,7 @@ async fn approval_confirmation_questionnaire_prompts_share_one_fifo() {
     assert!(
         matches!(&app.overlay, Some(Overlay::Questionnaire { state }) if state.form().request_id == "last-question")
     );
+    clock.advance(500);
     app.on_key(key(KeyCode::Esc));
     assert!(
         matches!(app.take_questionnaire_resolution(), Some((id, QuestionnaireResolution::Cancelled)) if id == "last-question")

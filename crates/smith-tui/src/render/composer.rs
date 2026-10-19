@@ -470,19 +470,23 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
             })
         }
         Some(Overlay::Questionnaire { state }) => {
-            let queued = app.queued_prompt_count();
-            let answer = if state.question().choices.is_empty() {
-                "type answer".to_owned()
-            } else if state.question().allows_free_form {
-                "↑↓ choose · space stage · type other".to_owned()
+            let enter = if state.is_review() {
+                "enter confirm"
+            } else if state.has_review() {
+                "enter select"
             } else {
-                "↑↓ choose · space stage".to_owned()
+                "enter submit"
             };
-            Some(if queued == 0 {
-                format!("{answer} · tab actions · esc cancel")
-            } else {
-                format!("{answer} · tab actions · esc cancel · {queued} queued")
-            })
+            let mut hint = format!("{enter} · ↑↓ choose");
+            if state.has_review() {
+                hint.push_str(" · ←→ switch");
+            }
+            hint.push_str(" · esc cancel");
+            let queued = app.queued_prompt_count();
+            if queued > 0 {
+                hint.push_str(&format!(" · {queued} queued"));
+            }
+            Some(hint)
         }
         Some(Overlay::Palette { .. }) => None,
         Some(Overlay::ResourcePicker { picker, .. }) => Some(picker.footer().hint(u16::MAX)),

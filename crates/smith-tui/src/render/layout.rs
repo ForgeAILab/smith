@@ -21,6 +21,7 @@ use crate::transcript::MAX_LOCAL_RESULT_BYTES;
 use super::approval::{approval_scroll_limit, draw_approval};
 use super::composer::*;
 use super::modal::*;
+use super::questionnaire::{draw_questionnaire, questionnaire_rows};
 use super::transcript::*;
 
 /// The smallest terminal Smith will draw a working surface in. Below this a
@@ -252,6 +253,9 @@ fn draw_surface(frame: &mut Frame<'_>, app: &App, theme: Theme) {
             Some(Overlay::HistorySearch { query, matched, .. }) => {
                 draw_history_search(frame, compact, query, matched.as_deref(), theme);
             }
+            Some(Overlay::Questionnaire { state }) => {
+                draw_questionnaire(frame, compact, state, theme);
+            }
             _ => unreachable!("compact rows require a compact interaction"),
         }
     }
@@ -272,11 +276,9 @@ fn draw_surface(frame: &mut Frame<'_>, app: &App, theme: Theme) {
 
     match &app.overlay {
         Some(Overlay::Approval { .. }) => draw_approval(frame, area, app, theme),
-        Some(Overlay::Questionnaire { state }) => {
-            draw_questionnaire(frame, area, state, theme);
-        }
         Some(
-            Overlay::Palette { .. }
+            Overlay::Questionnaire { .. }
+            | Overlay::Palette { .. }
             | Overlay::ResourcePicker { .. }
             | Overlay::HistorySearch { .. }
             | Overlay::Shortcuts,
@@ -375,6 +377,7 @@ fn desired_compact_rows(app: &App, width: u16) -> u16 {
         }) => desired_palette_rows(app, *selected, error.as_deref()),
         Some(Overlay::ResourcePicker { picker, .. }) => compact_resource_picker_rows(picker),
         Some(Overlay::HistorySearch { .. }) => 2,
+        Some(Overlay::Questionnaire { state }) => questionnaire_rows(state, width),
         _ => 0,
     }
 }

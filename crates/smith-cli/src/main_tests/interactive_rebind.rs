@@ -991,6 +991,8 @@ fn reconfigure_is_refused_while_busy_or_a_prompt_is_pending() {
     assert_eq!(app.queued_prompt_count(), 1);
     assert_eq!(app.pending_questionnaire_count(), 2);
     assert_eq!(app.composer.text(), "draft");
+    // Keys inside the question's input guard are dropped.
+    std::thread::sleep(std::time::Duration::from_millis(600));
     app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
         matches!(&app.overlay, Some(Overlay::Questionnaire { state })

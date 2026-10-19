@@ -138,7 +138,7 @@ impl App {
 
         let ignore_prompt_key = matches!(
             self.overlay,
-            Some(Overlay::Approval { .. } | Overlay::Confirm(_))
+            Some(Overlay::Approval { .. } | Overlay::Confirm(_) | Overlay::Questionnaire { .. })
         ) && self.prompt_input_guard.ignore_key();
 
         // Ctrl+C is checked before overlays: two consecutive presses must

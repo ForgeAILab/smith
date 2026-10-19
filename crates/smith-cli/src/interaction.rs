@@ -333,8 +333,9 @@ mod tests {
         let notice = surface.next_notice().await.expect("presentation");
         surface.apply_notice(&mut app, notice);
 
-        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        // Keys inside the question's input guard are dropped; Enter then
+        // answers the highlighted first choice.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         surface.drain_answers(&mut app);
 

@@ -4,7 +4,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::app::{App, ConfirmDialog};
 use crate::commands;
-use crate::questionnaire::{QuestionnaireFocus, QuestionnaireState};
 use crate::theme::{Theme, Tone, glyph};
 use agent_runtime_core::clock::Deadline;
 use agent_runtime_core::security::SecurityResource;
@@ -17,164 +16,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Padding, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::helpers::*;
 use super::layout::*;
 use super::lists::{detail_line, list_row};
-use super::transcript::rendered_rows;
 
 /// Command completion keeps the transcript visible by reserving at most five
 /// choices for the selected window, plus its optional argument detail line.
 const MAX_VISIBLE_PALETTE_ROWS: usize = 5;
-
-pub(super) fn draw_questionnaire(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    state: &QuestionnaireState,
-    theme: Theme,
-) {
-    let form = state.form();
-    let question = state.question();
-    let mut head = vec![Line::from(vec![
-        Span::styled(
-            format!("{} answer required  ", glyph::APPROVAL),
-            theme.style(Tone::Heading),
-        ),
-        Span::styled(question.header.clone(), theme.style(Tone::Heading)),
-    ])];
-    head.extend(
-        wrap_text(&question.prompt, usize::from(MIN_WIDTH.saturating_sub(4)))
-            .into_iter()
-            .map(Line::from),
-    );
-
-    let mut detail = vec![Line::from(Span::styled(
-        format!(
-            "question {} of {}",
-            state.current_index() + 1,
-            form.questions.len()
-        ),
-        theme.style(Tone::Accent),
-    ))];
-    if form.restored {
-        detail.push(Line::from(Span::styled(
-            "restored pending question",
-            theme.style(Tone::Warning),
-        )));
-    }
-    if let Some(error) = state.error() {
-        detail.push(Line::from(Span::styled(
-            format!("{} {error}", glyph::ERROR),
-            theme.style(Tone::Danger),
-        )));
-    }
-    detail.extend([
-        Line::from(vec![
-            Span::styled("deadline  ", theme.style(Tone::Dim)),
-            Span::raw(deadline_text(form.deadline)),
-        ]),
-        Line::default(),
-    ]);
-
-    let mut body = Vec::new();
-    for (index, choice) in question.choices.iter().enumerate() {
-        let staged = state.staged_choice() == Some(choice.id.as_str());
-        let cursor = state.focus() == QuestionnaireFocus::Answer && state.choice_cursor() == index;
-        body.push(Line::from(vec![
-            Span::styled(
-                if cursor { "› " } else { "  " },
-                theme.style(if cursor { Tone::Accent } else { Tone::Dim }),
-            ),
-            Span::styled(
-                if staged { "[x] " } else { "[ ] " },
-                theme.style(if staged { Tone::Success } else { Tone::Dim }),
-            ),
-            Span::styled(
-                format!("{} {}", index + 1, choice.label),
-                theme.style(if cursor { Tone::Accent } else { Tone::Default }),
-            ),
-        ]));
-        if let Some(description) = &choice.description {
-            body.push(Line::from(Span::styled(
-                format!("      {description}"),
-                theme.style(Tone::Dim),
-            )));
-        }
-    }
-    if question.allows_free_form {
-        let draft = state.displayed_draft();
-        let value = if draft.is_empty() {
-            "type another answer".to_owned()
-        } else if question.sensitive {
-            format!("{draft} (masked)")
-        } else {
-            draft
-        };
-        body.push(Line::from(vec![
-            Span::styled("  other  ", theme.style(Tone::Dim)),
-            Span::styled(
-                value,
-                theme.style(if state.focus() == QuestionnaireFocus::Answer {
-                    Tone::Accent
-                } else {
-                    Tone::Default
-                }),
-            ),
-        ]));
-    }
-
-    let mut controls = Vec::new();
-    if state.current_index() > 0 {
-        controls.push((QuestionnaireFocus::Back, "Back"));
-    }
-    if state.current_index() + 1 < form.questions.len() {
-        controls.push((QuestionnaireFocus::Next, "Next"));
-    }
-    controls.extend([
-        (QuestionnaireFocus::Submit, "Submit"),
-        (QuestionnaireFocus::Decline, "Decline"),
-    ]);
-    let mut action_spans = vec![Span::styled("tab actions  ", theme.style(Tone::Dim))];
-    for (index, (focus, label)) in controls.into_iter().enumerate() {
-        if index > 0 {
-            action_spans.push(Span::styled("  ", theme.style(Tone::Dim)));
-        }
-        action_spans.push(Span::styled(
-            format!("[{label}]"),
-            if state.focus() == focus {
-                theme
-                    .style(Tone::Accent)
-                    .add_modifier(Modifier::BOLD | Modifier::REVERSED)
-            } else {
-                theme.style(Tone::Dim)
-            },
-        ));
-    }
-    let foot = vec![
-        Line::from(action_spans),
-        Line::from(vec![
-            Span::styled("enter", theme.style(Tone::Success)),
-            Span::styled(" activate   ", theme.style(Tone::Dim)),
-            Span::styled("esc", theme.style(Tone::Danger)),
-            Span::styled(" cancel", theme.style(Tone::Dim)),
-        ]),
-    ];
-
-    let content = ModalContent {
-        head,
-        detail,
-        body,
-        elided: 0,
-        foot,
-    };
-    draw_modal(
-        frame,
-        area,
-        "questionnaire",
-        content.fit(area, theme),
-        theme,
-        Tone::Accent,
-    );
-}
 
 pub(super) fn security_resource_text(resource: &SecurityResource) -> String {
     match resource {
@@ -282,97 +129,6 @@ pub(super) fn deadline_text(deadline: Deadline) -> String {
         }
     };
     format!("{absolute} · {status}")
-}
-
-/// A modal's content, grouped by what it is willing to lose first.
-///
-/// A modal is capped at 60% of the terminal's height (`DESIGN.md` §2), so on a
-/// short terminal something has to go. The order is not cosmetic: an approval
-/// whose keys or whose subject scrolled out of view cannot be answered, and
-/// there is no default action to fall back on.
-pub(super) struct ModalContent {
-    /// Title and subject. Dropped last, and only if even the keys do not fit.
-    head: Vec<Line<'static>>,
-    /// Secondary facts: change shape, write scope, the separating blank.
-    detail: Vec<Line<'static>>,
-    /// The diff, or the raw arguments.
-    body: Vec<Line<'static>>,
-    /// Body lines that were never built, counted into the elision notice.
-    elided: usize,
-    /// The action bar, which is never dropped.
-    foot: Vec<Line<'static>>,
-}
-
-impl ModalContent {
-    /// Assembles the content to fit the box it will be drawn in, announcing
-    /// whatever it had to leave out — a silently truncated diff is
-    /// indistinguishable from a complete one.
-    fn fit(self, area: Rect, theme: Theme) -> Vec<Line<'static>> {
-        let inner = usize::from(modal_width(area).saturating_sub(2)).max(1);
-        let rows = usize::from(modal_max_height(area).saturating_sub(2));
-
-        let budget = rows.saturating_sub(wrapped_rows(&self.foot, inner));
-        let (head, _) = fit_rows(self.head, inner, budget);
-        let budget = budget.saturating_sub(wrapped_rows(&head, inner));
-
-        // A row is held back for the body, so a modal never spends its last
-        // row on a blank separator while the detail it exists to show is gone.
-        let reserved = usize::from(!self.body.is_empty());
-        let (detail, _) = fit_rows(self.detail, inner, budget.saturating_sub(reserved));
-        let budget = budget.saturating_sub(wrapped_rows(&detail, inner));
-
-        let mut hidden = self.elided;
-        let body = if hidden == 0 && wrapped_rows(&self.body, inner) <= budget {
-            self.body
-        } else {
-            // One more row is held back for the notice, which is worth more
-            // than the line it replaces.
-            let (kept, dropped) = fit_rows(self.body, inner, budget.saturating_sub(1));
-            hidden += dropped;
-            kept
-        };
-
-        let mut lines = head;
-        lines.extend(detail);
-        lines.extend(body);
-        if hidden > 0 && budget > 0 {
-            lines.push(Line::from(Span::styled(
-                format!("{} {hidden} more lines not shown", glyph::ELIDED),
-                theme.style(Tone::Warning),
-            )));
-        }
-        lines.extend(self.foot);
-        lines
-    }
-}
-
-/// Keeps whole lines from the front while they fit, reporting how many it
-/// dropped.
-pub(super) fn fit_rows(
-    lines: Vec<Line<'static>>,
-    width: usize,
-    budget: usize,
-) -> (Vec<Line<'static>>, usize) {
-    let mut used = 0;
-    let mut kept = Vec::new();
-    let mut dropped = 0;
-    for line in lines {
-        let rows = wrapped_rows(std::slice::from_ref(&line), width);
-        // Once one line is dropped the rest go too, so the survivors stay a
-        // prefix and the reader is never shown a gap they cannot see.
-        if dropped > 0 || used + rows > budget {
-            dropped += 1;
-            continue;
-        }
-        used += rows;
-        kept.push(line);
-    }
-    (kept, dropped)
-}
-
-/// Rows `lines` occupy once wrapped to `width` columns.
-pub(super) fn wrapped_rows(lines: &[Line<'static>], width: usize) -> usize {
-    rendered_rows(lines, u16::try_from(width).unwrap_or(u16::MAX))
 }
 
 pub(super) fn draw_palette(
@@ -668,42 +424,4 @@ pub(super) fn modal_width(area: Rect) -> u16 {
 /// more than the viewport, so an overlay cannot spill off screen.
 pub(super) fn modal_max_height(area: Rect) -> u16 {
     (area.height.saturating_mul(3) / 5).max(3).min(area.height)
-}
-
-pub(super) fn draw_modal(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    title: &str,
-    lines: Vec<Line<'static>>,
-    theme: Theme,
-    accent: Tone,
-) {
-    let width = modal_width(area);
-    let inner = usize::from(width.saturating_sub(2)).max(1);
-    let wanted = u16::try_from(wrapped_rows(&lines, inner) + 2).unwrap_or(u16::MAX);
-    let height = wanted.min(modal_max_height(area)).max(3);
-    let modal = Rect {
-        x: area.x + (area.width.saturating_sub(width)) / 2,
-        y: area.y + (area.height.saturating_sub(height)) / 2,
-        width,
-        height,
-    };
-
-    frame.render_widget(Clear, modal);
-    frame.render_widget(
-        Paragraph::new(super::wrap::wrap_lines(
-            &lines,
-            modal.width.saturating_sub(2),
-        ))
-        .block(
-            WidgetBlock::default()
-                .borders(Borders::ALL)
-                .border_style(theme.style(accent))
-                .title(Span::styled(
-                    format!(" {title} "),
-                    Style::default().add_modifier(Modifier::BOLD),
-                )),
-        ),
-        modal,
-    );
 }

@@ -163,24 +163,29 @@
     }
 
     #[test]
-    fn questionnaire_requires_explicit_submit_and_resolves_once() {
+    fn questionnaire_answers_on_enter_after_the_guard_and_resolves_once() {
         let mut app = app();
         app.present_questionnaire(questionnaire_form("question-1", Deadline::never()));
 
+        // A keystroke already in flight when the question appears is dropped.
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
-        assert!(
-            app.take_questionnaire_resolution().is_none(),
-            "Enter on an answer stages it; it must not submit the form"
-        );
+        assert!(app.take_questionnaire_resolution().is_none());
         assert!(matches!(app.overlay, Some(Overlay::Questionnaire { .. })));
 
-        app.on_key(key(KeyCode::Tab));
+        elapse_prompt_guard(&mut app);
+        app.on_key(key(KeyCode::Down));
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
         let (request_id, resolution) = app
             .take_questionnaire_resolution()
-            .expect("explicit Submit resolves the request");
+            .expect("Enter answers a single question");
         assert_eq!(request_id, "question-1");
-        assert!(matches!(resolution, QuestionnaireResolution::Submitted(_)));
+        let QuestionnaireResolution::Submitted(answers) = resolution else {
+            panic!("expected a submission");
+        };
+        assert_eq!(
+            answers[0].value,
+            crate::questionnaire::QuestionnaireAnswerValue::Choice("complete".to_owned())
+        );
         assert!(app.take_questionnaire_resolution().is_none());
         assert!(app.overlay.is_none());
     }
@@ -210,9 +215,8 @@
         question_first
             .present_questionnaire(questionnaire_form("first-question", Deadline::never()));
         question_first.present_approval(approval);
-        question_first.on_key(key(KeyCode::Tab));
-        question_first.on_key(key(KeyCode::Tab));
-        question_first.on_key(key(KeyCode::Enter));
+        elapse_prompt_guard(&mut question_first);
+        question_first.on_key(key(KeyCode::Esc));
         assert!(matches!(
             question_first.overlay,
             Some(Overlay::Approval { .. })
@@ -221,7 +225,7 @@
             question_first.take_questionnaire_resolution(),
             Some((
                 request_id,
-                QuestionnaireResolution::Declined
+                QuestionnaireResolution::Cancelled
             )) if request_id == "first-question"
         ));
         elapse_prompt_guard(&mut question_first);
@@ -278,6 +282,7 @@
                 )
         )));
         assert!(matches!(app.overlay, Some(Overlay::Questionnaire { .. })));
+        elapse_prompt_guard(&mut app);
         app.on_key(key(KeyCode::Esc));
         assert!(matches!(
             app.take_questionnaire_resolution(),

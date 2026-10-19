@@ -719,6 +719,7 @@
         .expect("valid questionnaire")
         .restored(true);
         app.present_questionnaire(form);
+        app.settle_prompt_input();
         for character in "supersecret".chars() {
             app.on_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
         }
@@ -727,11 +728,13 @@
         insta_like(
             &normal,
             &[
-                "answer required",
+                "Credential",
                 "Which secret token should be used?",
-                "restored pending question",
+                "1. Configured token",
+                "2. ***********",
                 "(masked)",
-                "[Submit]",
+                "restored pending question",
+                "enter submit",
                 "esc cancel",
             ],
         );
@@ -740,12 +743,7 @@
         let narrow = render(&app, MIN_WIDTH, MIN_HEIGHT, Theme::new().without_color());
         insta_like(
             &narrow,
-            &[
-                "answer required",
-                "Which secret token should be used?",
-                "Submit",
-                "cancel",
-            ],
+            &["Credential", "(masked)", "enter submit", "esc cancel"],
         );
         assert!(!narrow.contains("supersecret"), "{narrow}");
         assert!(

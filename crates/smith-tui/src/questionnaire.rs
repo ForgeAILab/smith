@@ -324,27 +324,19 @@ impl fmt::Debug for QuestionnaireResolution {
     }
 }
 
-/// Which control owns keyboard input inside the overlay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuestionnaireFocus {
-    /// Choice list or free-form editor.
-    Answer,
-    /// Navigate to the prior question.
-    Back,
-    /// Navigate to the next question.
-    Next,
-    /// Submit every staged answer.
-    Submit,
-    /// Decline the entire questionnaire.
-    Decline,
-}
-
 /// Pure reducer state for one questionnaire.
+///
+/// Mirrors Claude Code's question picker: one question per tab, a list whose
+/// last row (when allowed) is a free-form "Type something" field, Enter or a
+/// number picks the highlighted row and moves on, and a multi-question form
+/// ends on a review tab that submits or declines. A single question submits
+/// as soon as it is answered.
 pub struct QuestionnaireState {
     form: QuestionnaireForm,
+    /// Visible tab; `questions.len()` is the review tab.
     current: usize,
-    choice_cursor: usize,
-    focus: QuestionnaireFocus,
+    /// Highlighted row per tab, review tab last.
+    cursors: Vec<usize>,
     staged: BTreeMap<String, QuestionnaireAnswerValue>,
     drafts: BTreeMap<String, Composer>,
     error: Option<String>,
@@ -356,21 +348,23 @@ impl fmt::Debug for QuestionnaireState {
             .debug_struct("QuestionnaireState")
             .field("request_id", &self.form.request_id)
             .field("current", &self.current)
-            .field("focus", &self.focus)
             .field("staged_answers", &self.staged.len())
             .field("restored", &self.form.restored)
             .finish_non_exhaustive()
     }
 }
 
+/// Rows on the review tab, in order.
+pub const REVIEW_ROWS: [&str; 2] = ["Submit answers", "Decline to answer"];
+
 impl QuestionnaireState {
-    /// Starts with no implicit answer or action selected.
+    /// Starts on the first question with its first row highlighted.
     pub fn new(form: QuestionnaireForm) -> Self {
+        let tabs = form.questions.len() + 1;
         Self {
             form,
             current: 0,
-            choice_cursor: 0,
-            focus: QuestionnaireFocus::Answer,
+            cursors: vec![0; tabs],
             staged: BTreeMap::new(),
             drafts: BTreeMap::new(),
             error: None,
@@ -382,24 +376,36 @@ impl QuestionnaireState {
         &self.form
     }
 
-    /// The visible question.
-    pub fn question(&self) -> &QuestionnaireQuestion {
-        &self.form.questions[self.current]
+    /// Whether the form has a review tab (more than one question).
+    pub fn has_review(&self) -> bool {
+        self.form.questions.len() > 1
     }
 
-    /// Zero-based question position.
+    /// Whether the review tab is visible.
+    pub fn is_review(&self) -> bool {
+        self.current == self.form.questions.len()
+    }
+
+    /// The visible question, or the last one while reviewing.
+    pub fn question(&self) -> &QuestionnaireQuestion {
+        &self.form.questions[self.current.min(self.form.questions.len() - 1)]
+    }
+
+    /// Zero-based visible tab; equals the question count on the review tab.
     pub fn current_index(&self) -> usize {
         self.current
     }
 
-    /// Highlighted choice position.
-    pub fn choice_cursor(&self) -> usize {
-        self.choice_cursor
+    /// Highlighted row on the visible tab.
+    pub fn cursor(&self) -> usize {
+        self.cursors[self.current]
     }
 
-    /// Current keyboard focus.
-    pub fn focus(&self) -> QuestionnaireFocus {
-        self.focus
+    /// Whether the highlighted row is the free-form field.
+    pub fn on_free_form_row(&self) -> bool {
+        !self.is_review()
+            && self.question().allows_free_form
+            && self.cursor() == self.question().choices.len()
     }
 
     /// Local validation error shown inside the overlay.
@@ -407,9 +413,12 @@ impl QuestionnaireState {
         self.error.as_deref()
     }
 
-    /// Whether the current question has a staged answer.
-    pub fn current_is_answered(&self) -> bool {
-        self.staged.contains_key(&self.question().id)
+    /// Whether question `index` has a staged answer.
+    pub fn is_answered(&self, index: usize) -> bool {
+        self.form
+            .questions
+            .get(index)
+            .is_some_and(|question| self.staged.contains_key(&question.id))
     }
 
     /// The current free-form draft, masked when sensitive.
@@ -424,11 +433,36 @@ impl QuestionnaireState {
         }
     }
 
-    /// The staged choice ID for the current question, if any.
+    /// The staged choice ID for the visible question, if any.
     pub fn staged_choice(&self) -> Option<&str> {
         match self.staged.get(&self.question().id) {
             Some(QuestionnaireAnswerValue::Choice(choice)) => Some(choice),
             _ => None,
+        }
+    }
+
+    /// The staged answer for question `index` as display text; sensitive
+    /// free-form answers are masked.
+    pub fn answer_text(&self, index: usize) -> Option<String> {
+        let question = self.form.questions.get(index)?;
+        match self.staged.get(&question.id)? {
+            QuestionnaireAnswerValue::Choice(id) => question
+                .choices
+                .iter()
+                .find(|choice| &choice.id == id)
+                .map(|choice| choice.label.clone()),
+            QuestionnaireAnswerValue::FreeForm(text) if question.sensitive => {
+                Some("*".repeat(text.chars().count()))
+            }
+            QuestionnaireAnswerValue::FreeForm(text) => Some(text.clone()),
+        }
+    }
+
+    fn row_count(&self) -> usize {
+        if self.is_review() {
+            REVIEW_ROWS.len()
+        } else {
+            self.question().choices.len() + usize::from(self.question().allows_free_form)
         }
     }
 
@@ -437,151 +471,37 @@ impl QuestionnaireState {
         if key.kind == KeyEventKind::Release {
             return None;
         }
-        if key.code == KeyCode::Esc {
-            return Some(QuestionnaireResolution::Cancelled);
-        }
+        let plain = !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
+        let editing = self.on_free_form_row();
         match key.code {
-            KeyCode::Tab => {
-                self.move_focus(false);
-                None
-            }
-            KeyCode::BackTab => {
-                self.move_focus(true);
-                None
-            }
-            KeyCode::Enter => self.activate_focus(),
-            _ if self.focus == QuestionnaireFocus::Answer => self.edit_answer(key),
-            _ => None,
-        }
-    }
-
-    fn controls(&self) -> Vec<QuestionnaireFocus> {
-        let mut controls = vec![QuestionnaireFocus::Answer];
-        if self.current > 0 {
-            controls.push(QuestionnaireFocus::Back);
-        }
-        if self.current + 1 < self.form.questions.len() {
-            controls.push(QuestionnaireFocus::Next);
-        }
-        controls.extend([QuestionnaireFocus::Submit, QuestionnaireFocus::Decline]);
-        controls
-    }
-
-    fn move_focus(&mut self, backwards: bool) {
-        let controls = self.controls();
-        let current = controls
-            .iter()
-            .position(|focus| *focus == self.focus)
-            .unwrap_or(0);
-        let next = if backwards {
-            current.checked_sub(1).unwrap_or(controls.len() - 1)
-        } else {
-            (current + 1) % controls.len()
-        };
-        self.focus = controls[next];
-        self.error = None;
-    }
-
-    fn activate_focus(&mut self) -> Option<QuestionnaireResolution> {
-        match self.focus {
-            QuestionnaireFocus::Answer => {
-                if self.question().choices.is_empty() {
-                    self.stage_free_form();
-                } else {
-                    self.stage_choice(self.choice_cursor);
-                }
-                None
-            }
-            QuestionnaireFocus::Back => {
-                self.current = self.current.saturating_sub(1);
-                self.choice_cursor = 0;
-                self.focus = QuestionnaireFocus::Answer;
-                self.error = None;
-                None
-            }
-            QuestionnaireFocus::Next => {
-                if !self.current_is_answered() {
-                    self.error = Some("stage an answer before continuing".to_owned());
-                } else {
-                    self.current = (self.current + 1).min(self.form.questions.len() - 1);
-                    self.choice_cursor = 0;
-                    self.focus = QuestionnaireFocus::Answer;
-                    self.error = None;
-                }
-                None
-            }
-            QuestionnaireFocus::Submit => self.submit(),
-            QuestionnaireFocus::Decline => Some(QuestionnaireResolution::Declined),
-        }
-    }
-
-    fn edit_answer(&mut self, key: KeyEvent) -> Option<QuestionnaireResolution> {
-        match key.code {
-            KeyCode::Up => {
-                let count = self.question().choices.len();
-                if count > 0 {
-                    self.choice_cursor = self.choice_cursor.checked_sub(1).unwrap_or(count - 1);
-                }
-            }
-            KeyCode::Down => {
-                let count = self.question().choices.len();
-                if count > 0 {
-                    self.choice_cursor = (self.choice_cursor + 1) % count;
-                }
-            }
-            KeyCode::Char(number @ '1'..='9')
-                if !key.modifiers.intersects(
-                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                ) =>
-            {
+            KeyCode::Esc => return Some(QuestionnaireResolution::Cancelled),
+            KeyCode::Up => self.move_cursor(false),
+            KeyCode::Down => self.move_cursor(true),
+            KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => self.move_cursor(false),
+            KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => self.move_cursor(true),
+            KeyCode::Tab => self.switch_tab(true),
+            KeyCode::BackTab => self.switch_tab(false),
+            KeyCode::Right if !editing => self.switch_tab(true),
+            KeyCode::Left if !editing => self.switch_tab(false),
+            KeyCode::Enter => return self.activate(),
+            _ if editing => self.edit_draft(key, plain),
+            KeyCode::Char(number @ '1'..='9') if plain => {
                 let index = usize::from(number as u8 - b'1');
-                if index < self.question().choices.len() {
-                    self.choice_cursor = index;
-                    self.stage_choice(index);
-                } else {
-                    self.insert_free_form(number);
+                if index < self.row_count() {
+                    self.cursors[self.current] = index;
+                    self.error = None;
+                    if !self.on_free_form_row() {
+                        return self.activate();
+                    }
                 }
             }
-            KeyCode::Char(' ') if !self.question().choices.is_empty() => {
-                self.stage_choice(self.choice_cursor);
-            }
-            KeyCode::Backspace => {
-                if self.question().allows_free_form {
-                    self.draft_mut().backspace();
-                    self.stage_draft_if_nonblank();
-                }
-            }
-            KeyCode::Delete => {
-                if self.question().allows_free_form {
-                    self.draft_mut().delete();
-                    self.stage_draft_if_nonblank();
-                }
-            }
-            KeyCode::Left => {
-                if self.question().allows_free_form {
-                    self.draft_mut().move_left();
-                }
-            }
-            KeyCode::Right => {
-                if self.question().allows_free_form {
-                    self.draft_mut().move_right();
-                }
-            }
-            KeyCode::Home => {
-                if self.question().allows_free_form {
-                    self.draft_mut().move_home();
-                }
-            }
-            KeyCode::End => {
-                if self.question().allows_free_form {
-                    self.draft_mut().move_end();
-                }
-            }
+            // Typing on a choice row starts the free-form answer.
             KeyCode::Char(character)
-                if !key.modifiers.intersects(
-                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                ) =>
+                if plain && !character.is_whitespace() && self.question_allows_typing() =>
             {
+                self.cursors[self.current] = self.question().choices.len();
                 self.insert_free_form(character);
             }
             _ => {}
@@ -589,12 +509,101 @@ impl QuestionnaireState {
         None
     }
 
+    fn question_allows_typing(&self) -> bool {
+        !self.is_review() && self.question().allows_free_form
+    }
+
+    fn move_cursor(&mut self, down: bool) {
+        let count = self.row_count();
+        if count == 0 {
+            return;
+        }
+        let cursor = &mut self.cursors[self.current];
+        *cursor = if down {
+            (*cursor + 1) % count
+        } else {
+            cursor.checked_sub(1).unwrap_or(count - 1)
+        };
+        self.error = None;
+    }
+
+    fn switch_tab(&mut self, forward: bool) {
+        let last = if self.has_review() {
+            self.form.questions.len()
+        } else {
+            self.form.questions.len() - 1
+        };
+        self.current = if forward {
+            (self.current + 1).min(last)
+        } else {
+            self.current.saturating_sub(1)
+        };
+        self.error = None;
+    }
+
+    fn edit_draft(&mut self, key: KeyEvent, plain: bool) {
+        match key.code {
+            KeyCode::Backspace => {
+                self.draft_mut().backspace();
+                self.stage_draft();
+            }
+            KeyCode::Delete => {
+                self.draft_mut().delete();
+                self.stage_draft();
+            }
+            KeyCode::Left => self.draft_mut().move_left(),
+            KeyCode::Right => self.draft_mut().move_right(),
+            KeyCode::Home => self.draft_mut().move_home(),
+            KeyCode::End => self.draft_mut().move_end(),
+            KeyCode::Char(character) if plain => self.insert_free_form(character),
+            _ => {}
+        }
+    }
+
+    fn activate(&mut self) -> Option<QuestionnaireResolution> {
+        if self.is_review() {
+            return if self.cursor() == 0 {
+                self.submit()
+            } else {
+                Some(QuestionnaireResolution::Declined)
+            };
+        }
+        if self.on_free_form_row() {
+            self.stage_draft();
+            if !self.is_answered(self.current) {
+                self.error = Some("type an answer first".to_owned());
+                return None;
+            }
+        } else {
+            let question_id = self.question().id.clone();
+            let choice = self.question().choices.get(self.cursor())?;
+            let value = QuestionnaireAnswerValue::Choice(choice.id.clone());
+            self.staged.insert(question_id, value);
+        }
+        self.error = None;
+        self.advance()
+    }
+
+    /// Moves past an answered question: to the next unanswered one, then to
+    /// the review tab; a lone question submits at once.
+    fn advance(&mut self) -> Option<QuestionnaireResolution> {
+        if !self.has_review() {
+            return self.submit();
+        }
+        let count = self.form.questions.len();
+        self.current = (self.current + 1..count)
+            .chain(0..self.current)
+            .find(|index| !self.is_answered(*index))
+            .unwrap_or(count);
+        None
+    }
+
     fn insert_free_form(&mut self, character: char) {
-        if !self.question().allows_free_form || self.draft_mut().len() >= MAX_FREE_FORM_CHARS {
+        if character.is_control() || self.draft_mut().len() >= MAX_FREE_FORM_CHARS {
             return;
         }
         self.draft_mut().insert(character);
-        self.stage_draft_if_nonblank();
+        self.stage_draft();
     }
 
     /// Inserts pasted text into the free-form draft, flattened to one line.
@@ -602,9 +611,13 @@ impl QuestionnaireState {
     /// Digits and spaces in a paste are draft characters, never choice
     /// shortcuts — only deliberate key presses select answers.
     pub fn paste(&mut self, text: &str) {
+        if !self.question_allows_typing() {
+            return;
+        }
+        self.cursors[self.current] = self.question().choices.len();
         let mut pending_space = false;
         for character in text.chars() {
-            if character == '\n' || character.is_whitespace() {
+            if character.is_whitespace() {
                 pending_space = true;
                 continue;
             }
@@ -619,22 +632,13 @@ impl QuestionnaireState {
     }
 
     fn draft_mut(&mut self) -> &mut Composer {
-        let question = self.form.questions[self.current].id.clone();
+        let question = self.question().id.clone();
         self.drafts.entry(question).or_default()
     }
 
-    fn stage_choice(&mut self, index: usize) {
-        let Some(choice) = self.question().choices.get(index) else {
-            return;
-        };
-        self.staged.insert(
-            self.question().id.clone(),
-            QuestionnaireAnswerValue::Choice(choice.id.clone()),
-        );
-        self.error = None;
-    }
-
-    fn stage_free_form(&mut self) {
+    /// Mirrors the draft into the staged answer. Clearing the draft only
+    /// withdraws a free-form answer; a picked choice survives it.
+    fn stage_draft(&mut self) {
         let question_id = self.question().id.clone();
         let value = self
             .drafts
@@ -643,44 +647,22 @@ impl QuestionnaireState {
             .unwrap_or_default()
             .trim()
             .to_owned();
-        if value.is_empty() {
-            self.staged.remove(&question_id);
-            self.error = Some("enter an answer before staging it".to_owned());
-        } else {
+        if !value.is_empty() {
             self.staged
                 .insert(question_id, QuestionnaireAnswerValue::FreeForm(value));
-            self.error = None;
-        }
-    }
-
-    fn stage_draft_if_nonblank(&mut self) {
-        let question_id = self.question().id.clone();
-        let value = self
-            .drafts
-            .get(&question_id)
-            .map(Composer::text)
-            .unwrap_or_default()
-            .trim()
-            .to_owned();
-        if value.is_empty() {
+        } else if matches!(
+            self.staged.get(&question_id),
+            Some(QuestionnaireAnswerValue::FreeForm(_))
+        ) {
             self.staged.remove(&question_id);
-        } else {
-            self.staged
-                .insert(question_id, QuestionnaireAnswerValue::FreeForm(value));
         }
         self.error = None;
     }
 
     fn submit(&mut self) -> Option<QuestionnaireResolution> {
-        let unanswered = self
-            .form
-            .questions
-            .iter()
-            .position(|question| !self.staged.contains_key(&question.id));
-        if let Some(index) = unanswered {
+        if let Some(index) = (0..self.form.questions.len()).find(|index| !self.is_answered(*index))
+        {
             self.current = index;
-            self.choice_cursor = 0;
-            self.focus = QuestionnaireFocus::Answer;
             self.error = Some("answer every question before submitting".to_owned());
             return None;
         }
@@ -719,7 +701,8 @@ mod tests {
                     "Design",
                     "Which direction?",
                     vec![choice("minimal", "Minimal"), choice("dense", "Dense")],
-                ),
+                )
+                .with_free_form(false),
                 QuestionnaireQuestion::new("note", "Note", "Anything else?", Vec::new())
                     .with_free_form(true),
             ],
@@ -728,40 +711,102 @@ mod tests {
         .unwrap()
     }
 
+    fn single(free_form: bool) -> QuestionnaireForm {
+        let question = QuestionnaireQuestion::new(
+            "q",
+            "Plan",
+            "How long?",
+            vec![choice("short", "Short"), choice("long", "Long")],
+        );
+        let question = if free_form {
+            question.with_free_form(false)
+        } else {
+            question
+        };
+        QuestionnaireForm::new("single", vec![question], Deadline::never()).unwrap()
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    #[test]
-    fn choice_enter_stages_but_never_implicitly_submits() {
-        let mut state = QuestionnaireState::new(form());
-        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
-        assert_eq!(state.staged_choice(), Some("minimal"));
-        assert_eq!(state.current_index(), 0);
+    fn typed(state: &mut QuestionnaireState, text: &str) -> Option<QuestionnaireResolution> {
+        text.chars()
+            .find_map(|character| state.on_key(key(KeyCode::Char(character))))
+    }
 
-        state.on_key(key(KeyCode::Tab));
-        assert_eq!(state.focus(), QuestionnaireFocus::Next);
-        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
-        assert_eq!(state.current_index(), 1);
+    fn submitted(resolution: Option<QuestionnaireResolution>) -> Vec<QuestionnaireAnswer> {
+        match resolution {
+            Some(QuestionnaireResolution::Submitted(answers)) => answers,
+            other => panic!("expected a submission, got {other:?}"),
+        }
     }
 
     #[test]
-    fn submission_is_an_explicit_control_and_preserves_question_order() {
+    fn a_single_question_submits_on_enter() {
+        let mut state = QuestionnaireState::new(single(false));
+        state.on_key(key(KeyCode::Down));
+        let answers = submitted(state.on_key(key(KeyCode::Enter)));
+        assert_eq!(
+            answers[0].value,
+            QuestionnaireAnswerValue::Choice("long".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_number_picks_and_submits_a_single_question() {
+        let mut state = QuestionnaireState::new(single(false));
+        let answers = submitted(state.on_key(key(KeyCode::Char('1'))));
+        assert_eq!(
+            answers[0].value,
+            QuestionnaireAnswerValue::Choice("short".to_owned())
+        );
+    }
+
+    #[test]
+    fn free_form_accepts_digits_and_spaces_and_wins_over_the_highlight() {
+        let mut state = QuestionnaireState::new(single(true));
+        // Typing on a choice row jumps to the free-form row.
+        assert_eq!(typed(&mut state, "about 2 weeks"), None);
+        assert!(state.on_free_form_row());
+        assert_eq!(state.displayed_draft(), "about 2 weeks");
+        let answers = submitted(state.on_key(key(KeyCode::Enter)));
+        assert_eq!(
+            answers[0].value,
+            QuestionnaireAnswerValue::FreeForm("about 2 weeks".to_owned())
+        );
+    }
+
+    #[test]
+    fn enter_on_an_empty_free_form_row_explains_instead_of_submitting() {
+        let mut state = QuestionnaireState::new(single(true));
+        state.on_key(key(KeyCode::Char('3')));
+        assert!(state.on_free_form_row());
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert!(state.error().is_some());
+    }
+
+    #[test]
+    fn clearing_a_draft_keeps_a_picked_choice() {
         let mut state = QuestionnaireState::new(form());
         state.on_key(key(KeyCode::Char('2')));
-        state.on_key(key(KeyCode::Tab));
-        state.on_key(key(KeyCode::Enter));
-        for character in "ship it".chars() {
-            state.on_key(key(KeyCode::Char(character)));
-        }
-        state.on_key(key(KeyCode::Tab));
-        // Last question: Answer -> Back -> Submit.
-        state.on_key(key(KeyCode::Tab));
-        assert_eq!(state.focus(), QuestionnaireFocus::Submit);
-        let resolution = state.on_key(key(KeyCode::Enter)).unwrap();
-        let QuestionnaireResolution::Submitted(answers) = resolution else {
-            panic!("expected a submitted questionnaire");
-        };
+        // Back to the first question; the choice is staged.
+        state.on_key(key(KeyCode::BackTab));
+        state.on_key(key(KeyCode::Char('3')));
+        state.on_key(key(KeyCode::Backspace));
+        assert_eq!(state.staged_choice(), Some("dense"));
+    }
+
+    #[test]
+    fn answering_moves_on_and_the_review_tab_submits_in_question_order() {
+        let mut state = QuestionnaireState::new(form());
+        assert_eq!(state.on_key(key(KeyCode::Char('2'))), None);
+        assert_eq!(state.current_index(), 1);
+        assert_eq!(typed(&mut state, "ship it"), None);
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert!(state.is_review());
+        assert_eq!(state.answer_text(0).as_deref(), Some("Dense"));
+        let answers = submitted(state.on_key(key(KeyCode::Enter)));
         assert_eq!(
             answers
                 .iter()
@@ -770,20 +815,28 @@ mod tests {
             vec!["design", "note"]
         );
         assert_eq!(
-            answers[0].value,
-            QuestionnaireAnswerValue::Choice("dense".to_owned())
-        );
-        assert_eq!(
             answers[1].value,
             QuestionnaireAnswerValue::FreeForm("ship it".to_owned())
         );
     }
 
     #[test]
+    fn submitting_with_a_gap_returns_to_the_unanswered_question() {
+        let mut state = QuestionnaireState::new(form());
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Tab));
+        assert!(state.is_review());
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(state.current_index(), 0);
+        assert!(state.error().is_some());
+    }
+
+    #[test]
     fn decline_and_cancel_are_distinct_typed_outcomes() {
         let mut decline = QuestionnaireState::new(form());
-        decline.on_key(key(KeyCode::BackTab));
-        assert_eq!(decline.focus(), QuestionnaireFocus::Decline);
+        decline.on_key(key(KeyCode::Tab));
+        decline.on_key(key(KeyCode::Tab));
+        decline.on_key(key(KeyCode::Down));
         assert_eq!(
             decline.on_key(key(KeyCode::Enter)),
             Some(QuestionnaireResolution::Declined)
@@ -813,17 +866,10 @@ mod tests {
         )
         .unwrap();
         let mut state = QuestionnaireState::new(form);
-        for character in "not-for-logs".chars() {
-            state.on_key(key(KeyCode::Char(character)));
-        }
+        typed(&mut state, "not-for-logs");
         assert_eq!(state.displayed_draft(), "************");
         assert!(!format!("{state:?}").contains("not-for-logs"));
-        state.on_key(key(KeyCode::Tab));
-        let QuestionnaireResolution::Submitted(answers) =
-            state.on_key(key(KeyCode::Enter)).unwrap()
-        else {
-            panic!("expected submission");
-        };
+        let answers = submitted(state.on_key(key(KeyCode::Enter)));
         assert!(!format!("{answers:?}").contains("not-for-logs"));
     }
 

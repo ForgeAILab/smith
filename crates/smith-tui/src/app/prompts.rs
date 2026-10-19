@@ -50,6 +50,12 @@ impl PromptInputGuard {
 }
 
 impl App {
+    /// Ends the input guard's quiet window so a test can answer at once.
+    #[cfg(test)]
+    pub(crate) fn settle_prompt_input(&mut self) {
+        self.prompt_input_guard.quiet_until = None;
+    }
+
     /// Opens through the shared prompt queue and transient-overlay policy.
     /// Returns false when a transient request cannot take focus.
     pub fn open_overlay(&mut self, overlay: Overlay) -> bool {
@@ -85,7 +91,12 @@ impl App {
                 self.approval_scroll_limit = 0;
                 Overlay::Approval { prompt, review }
             }
-            PendingPrompt::Questionnaire(state) => Overlay::Questionnaire { state },
+            PendingPrompt::Questionnaire(state) => {
+                // Enter answers a question, so a keystroke meant for the
+                // composer must not land on the first row.
+                self.prompt_input_guard.start();
+                Overlay::Questionnaire { state }
+            }
             PendingPrompt::Confirm(dialog) => {
                 self.prompt_input_guard.start();
                 Overlay::Confirm(dialog)

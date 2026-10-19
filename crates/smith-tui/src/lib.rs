@@ -61,8 +61,8 @@ pub use diff::{Change, EditReview, diff_lines};
 pub use line_input::LineInput;
 pub use picker::{PickerOutcome, ResourceEntry, ResourcePicker, draw_resource_picker};
 pub use questionnaire::{
-    QuestionnaireAnswer, QuestionnaireAnswerValue, QuestionnaireChoice, QuestionnaireFocus,
-    QuestionnaireForm, QuestionnaireQuestion, QuestionnaireResolution, QuestionnaireState,
+    QuestionnaireAnswer, QuestionnaireAnswerValue, QuestionnaireChoice, QuestionnaireForm,
+    QuestionnaireQuestion, QuestionnaireResolution, QuestionnaireState,
     QuestionnaireValidationError,
 };
 pub use references::{

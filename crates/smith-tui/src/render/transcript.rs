@@ -27,7 +27,9 @@ use crate::transcript::LocalResult;
 
 use super::lists::clip_words;
 use super::markdown::render_assistant_lines;
-use super::wrap::{wrap_lines, wrapped_row_count};
+use super::wrap::wrap_lines;
+#[cfg(test)]
+use super::wrap::wrapped_row_count;
 use agents::child_lines;
 #[cfg(test)]
 use blocks::conversation_lines;
@@ -265,6 +267,7 @@ pub(super) fn visual_scroll_limit(lines: &[Line<'static>], area: Rect) -> usize 
 /// render with. Uncached surfaces use this rather than a character-wrap guess,
 /// which undercounts word-wrapped prose and truncates modal action bars. The
 /// transcript uses the counts of its cached rows from the same wrapper.
+#[cfg(test)]
 pub(super) fn rendered_rows(lines: &[Line<'static>], width: u16) -> usize {
     wrapped_row_count(lines, width)
 }
