@@ -754,7 +754,8 @@ expect {
 }
 send -- "\r"
 expect {
-    -exact "Existing values differ." {}
+    # The collision review scrolls; its warning is below the first viewport.
+    -exact "existing values to replace:" {}
     timeout { exit 124 }
     eof { exit 125 }
 }
@@ -781,7 +782,7 @@ expect {
         "Choose provider model",
         "Enter model ID manually",
         "Model context window",
-        "Existing values differ.",
+        "existing values to replace:",
     ] {
         assert!(screen.contains(step), "missing {step}: {screen}");
     }
