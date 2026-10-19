@@ -61,3 +61,6 @@ completed_at: 2026-10-19T01:15:02Z
   offline fallback, unknown pricing, and custom-provider protocol coverage.
 - [x] 4.5 Run formatting, focused tests, Clippy with warnings denied, and
   relevant workspace checks after implementation.
+- [ ] 4.6 Complete full workspace architecture, setup PTY, headless/bridge
+  contracts and release distribution gates; resolve CI integration gaps before
+  publication.

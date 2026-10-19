@@ -719,20 +719,46 @@ fn add_model_accepts_a_valid_second_provider_that_has_no_models_yet() {
     ));
     let interaction = r#"
 expect {
+    -exact "Choose provider model" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+expect {
+    -exact "Enter model ID manually" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "\r"
+expect {
     -exact "Model ID" {}
     timeout { exit 124 }
     eof { exit 125 }
 }
 send -- "first-model\r"
-after 250
+expect {
+    -exact "Model context window" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
 send -- "64000\r"
-after 250
+expect {
+    -exact "Default selection" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
 send -- "\r"
-after 500
+expect {
+    -exact "Smith setup · Review" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
 send -- "\r"
-after 750
+expect {
+    -exact "Existing values differ." {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
 send -- "\r"
-after 1000
 expect {
     -exact "TERMINAL_RESTORED" {}
     timeout { exit 124 }
@@ -751,6 +777,14 @@ expect {
         "screen: {screen}\nstderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    for step in [
+        "Choose provider model",
+        "Enter model ID manually",
+        "Model context window",
+        "Existing values differ.",
+    ] {
+        assert!(screen.contains(step), "missing {step}: {screen}");
+    }
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
     let config = std::fs::read_to_string(fixture.home.path().join(".smith/config.toml"))
         .expect("updated user config");
@@ -759,6 +793,19 @@ expect {
         config.contains("[models.\"empty/first-model\"]"),
         "{config}"
     );
+    let parsed = smith_config::model::ConfigFile::parse(&config).expect("valid updated config");
+    let model = &parsed.models["empty/first-model"];
+    assert_eq!(model.context_tokens, Some(64_000));
+    assert_eq!(model.max_input_tokens, Some(64_000));
+    assert_eq!(model.max_output_tokens, Some(16_000));
+    assert!(parsed.providers.contains_key("local"));
+    let profile = parsed
+        .default_profile
+        .as_ref()
+        .and_then(|name| parsed.profiles.get(name))
+        .expect("new default profile");
+    assert_eq!(profile.provider.as_deref(), Some("empty"));
+    assert_eq!(profile.model.as_deref(), Some("first-model"));
 }
 
 #[test]

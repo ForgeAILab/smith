@@ -177,7 +177,13 @@ fn installed_module_tool_runs_under_confirmed_workspace_grants() {
             }).to_string()).unwrap();
             std::fs::write(
                 source.join("tools.wasm"),
-                include_bytes!("../../../smith-wasm-host/tests/fixtures/tools.wasm"),
+                // This contract exercises tool registration and workspace grants.
+                // The tools fixture also refreshes a status item with a 5 ms
+                // deadline while mounting, making unrelated scheduler delays
+                // remove the whole module before its tools can be bridged.
+                // The context-tools guest retains the same descriptor, probe
+                // tool and fs-write handler without a status contribution.
+                include_bytes!("../../../smith-wasm-host/tests/fixtures/context-tools.wasm"),
             )
             .unwrap();
             let installed = fixture.cli(&["plugin", "add", source.to_str().unwrap(), "--yes"]);
@@ -255,6 +261,31 @@ fn installed_module_tool_runs_under_confirmed_workspace_grants() {
                 {"list_tools":true}, {"call":{"tool":tool,"arguments":{"action":"fs-write"}}}, {"say":"module done"}
             ]), None);
             successful(&run);
+            let bridge_diagnostics = || {
+                let session = result(&run)["session_id"]
+                    .as_str()
+                    .expect("bridge module session");
+                let snapshot = fixture.snapshot(session);
+                let log = std::fs::read_to_string(
+                    fixture
+                        .smith
+                        .home
+                        .path()
+                        .join(".smith/logs")
+                        .join(format!("{session}.log")),
+                )
+                .unwrap_or_else(|error| format!("session log unavailable: {error}"));
+                json!({
+                    "codex": codex,
+                    "grant_write": grant_write,
+                    "result": result(&run),
+                    "manifest": snapshot["snapshot"]["manifests"]
+                        .as_array()
+                        .and_then(|manifests| manifests.last()),
+                    "log": log,
+                    "stderr": String::from_utf8_lossy(&run.output.stderr),
+                })
+            };
             // If native registration above succeeds but this list omits the
             // module, retain this failure as a bridge product defect. The
             // message records both genuine tool views rather than substituting
@@ -264,8 +295,9 @@ fn installed_module_tool_runs_under_confirmed_workspace_grants() {
                     .as_array()
                     .unwrap()
                     .contains(&json!(tool)),
-                "a natively registered module must be bridged: native tools {native_names:?}; bridge tools {}; native result {native_result}",
-                run.record["tool_names"]
+                "a natively registered module must be bridged: native tools {native_names:?}; bridge tools {}; native result {native_result}; bridge diagnostics {}",
+                run.record["tool_names"],
+                bridge_diagnostics(),
             );
             let reply = call_response(&run, tool);
             assert_eq!(reply["result"]["isError"], !grant_write, "{reply}");
