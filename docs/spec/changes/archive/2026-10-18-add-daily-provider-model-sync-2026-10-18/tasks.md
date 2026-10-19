@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-19T00:13:28Z
-updated_at: 2026-10-19T01:15:02Z
+updated_at: 2026-10-19T03:34:17Z
 completed_at: 2026-10-19T01:15:02Z
 ---
 
@@ -61,6 +61,21 @@ completed_at: 2026-10-19T01:15:02Z
   offline fallback, unknown pricing, and custom-provider protocol coverage.
 - [x] 4.5 Run formatting, focused tests, Clippy with warnings denied, and
   relevant workspace checks after implementation.
-- [ ] 4.6 Complete full workspace architecture, setup PTY, headless/bridge
+- [x] 4.6 Complete full workspace architecture, setup PTY, headless/bridge
   contracts and release distribution gates; resolve CI integration gaps before
   publication.
+
+## Release verification
+
+- Released [v0.7.4](https://github.com/ForgeAILab/smith/releases/tag/v0.7.4)
+  from `df21da254e1bd493d65eef4217ea816f22c7e0d8`.
+- [Source CI](https://github.com/ForgeAILab/smith/actions/runs/39191823985)
+  passed the full workspace and pinned Runtime conformance gates on Linux
+  Rust 1.88, macOS Rust 1.88, and Linux stable, including dependency policy.
+- [Release pipeline](https://github.com/ForgeAILab/smith/actions/runs/39193781817)
+  built all six platform archives and passed the portable Linux smoke tests.
+  All published archives matched SHA256SUMS and contained only the binary and
+  both license files.
+- npm `@forgeailab/smith@0.7.4` is publicly available as `latest`, with the
+  matching source commit. The published macOS artifact reports `smith 0.7.4`;
+  authenticated custom-provider refresh succeeded without changing config.
