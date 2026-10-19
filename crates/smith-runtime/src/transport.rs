@@ -663,7 +663,16 @@ fn sent_secrets(headers: &[(String, String)], url_secrets: &[String]) -> Vec<Str
     headers
         .iter()
         .filter(|(name, _)| !PUBLIC_HEADERS.contains(&name.to_ascii_lowercase().as_str()))
-        .map(|(_, value)| value.clone())
+        // The bare token as well as the whole value: a provider that echoes
+        // `Bearer <token>` back may well echo only the token.
+        .flat_map(|(_, value)| {
+            std::iter::once(value.clone()).chain(
+                value
+                    .split_whitespace()
+                    .filter(|part| part.chars().count() >= 8)
+                    .map(str::to_owned),
+            )
+        })
         .chain(url_secrets.iter().cloned())
         .filter(|secret| !secret.is_empty())
         .collect()
@@ -680,11 +689,18 @@ fn url_secrets(url: &Url) -> Vec<String> {
 }
 
 /// Pulls the documented reason fields out of an error body, or nothing.
+///
+/// The error object is the whole body, or the first `data:` line holding one:
+/// Gemini Interactions answers a rejected streaming request with an SSE
+/// `error` frame, not a bare JSON document. The symbolic label is `status`,
+/// or a string `code` where the provider sends no status.
 fn detail_from_body(body: &[u8], secrets: &[String]) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
-    let error = value.get("error")?;
+    let error = error_object(body)?;
     let message = error.get("message").and_then(serde_json::Value::as_str);
-    let status = error.get("status").and_then(serde_json::Value::as_str);
+    let status = error
+        .get("status")
+        .or_else(|| error.get("code"))
+        .and_then(serde_json::Value::as_str);
     let detail = match (status, message) {
         (Some(status), Some(message)) => format!("{status}: {message}"),
         (Some(status), None) => status.to_owned(),
@@ -706,6 +722,18 @@ fn detail_from_body(body: &[u8], secrets: &[String]) -> Option<String> {
         return None;
     }
     Some(truncate_chars(detail, MAX_DETAIL_CHARS))
+}
+
+/// The documented `error` object of a JSON or SSE-framed error body.
+fn error_object(body: &[u8]) -> Option<serde_json::Value> {
+    let from = |value: serde_json::Value| value.get("error").cloned();
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+        return from(value);
+    }
+    std::str::from_utf8(body).ok()?.lines().find_map(|line| {
+        let data = line.strip_prefix("data:")?;
+        from(serde_json::from_str(data.trim()).ok()?)
+    })
 }
 
 /// Truncates on a character boundary, marking that it happened.
@@ -744,6 +772,27 @@ mod tests {
         assert_eq!(detail, "INVALID_ARGUMENT: bad request");
         assert!(!detail.contains(TOKEN));
         assert!(!detail.contains("the whole prompt"));
+    }
+
+    #[test]
+    fn an_sse_framed_error_body_yields_its_reason() {
+        let body = b"event: error\ndata: {\"error\":{\"message\":\"Request contains an invalid argument.\",\"code\":\"invalid_request\"},\"event_type\":\"error\"}\n\n";
+        assert_eq!(
+            detail_from_body(body, &[]).as_deref(),
+            Some("invalid_request: Request contains an invalid argument.")
+        );
+        assert_eq!(
+            detail_from_body(b"event: error\ndata: not json\n", &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_reason_echoing_only_the_bare_bearer_token_is_dropped() {
+        let headers = vec![("authorization".to_owned(), format!("Bearer {TOKEN}"))];
+        let secrets = sent_secrets(&headers, &[]);
+        let body = format!(r#"{{"error":{{"message":"invalid key {TOKEN}"}}}}"#);
+        assert_eq!(detail_from_body(body.as_bytes(), &secrets), None);
     }
 
     #[test]

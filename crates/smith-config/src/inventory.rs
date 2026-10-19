@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::catalog::{
-    CatalogModel, CatalogSnapshot, catalog_provider_for, endpoint_context_windows,
+    CatalogBinding, CatalogModel, CatalogModelCost, CatalogSnapshot, endpoint_context_windows,
 };
 use crate::credential::CredentialRef;
 #[cfg(test)]
@@ -92,9 +92,9 @@ pub enum ModelLimitOrigin {
         /// Catalog revision.
         revision: u32,
     },
-    /// A schema-validated Models.dev snapshot.
+    /// A schema-validated public or configured-endpoint snapshot.
     Catalog {
-        /// Stable public catalog name.
+        /// Stable public or endpoint catalog source.
         catalog: String,
         /// Frozen source revision.
         revision: String,
@@ -141,8 +141,12 @@ pub struct ModelInventoryEntry {
     pub reasoning: Option<bool>,
     /// Whether the catalog advertises structured output, when catalog-backed.
     pub structured_output: Option<bool>,
-    /// Models.dev provider identity, when catalog-backed.
+    /// Source provider identity, when catalog-backed.
     pub catalog_provider: Option<String>,
+    /// Secret-free identity of the public or configured endpoint source.
+    pub catalog_source: Option<String>,
+    /// Individually validated prices in micro-USD per million tokens.
+    pub catalog_cost: Option<CatalogModelCost>,
     /// Frozen catalog revision, when catalog-backed.
     pub catalog_revision: Option<String>,
     /// Catalog retrieval time in Unix milliseconds, when catalog-backed.
@@ -310,29 +314,23 @@ pub fn local_inventory_with_catalog(
         }
     }
 
-    let mut catalog_models = BTreeMap::<(String, String), (&str, &CatalogModel)>::new();
+    let mut catalog_models =
+        BTreeMap::<(String, String), (CatalogBinding<'_>, &CatalogModel)>::new();
     if let Some(snapshot) = catalog {
         for (provider, section) in &providers {
             if !provider_valid.get(provider).copied().unwrap_or(false) {
                 continue;
             }
-            let catalog_provider = catalog_provider_for(
+            let Some(binding) = snapshot.bound_provider(
+                provider,
                 section.kind.as_deref().unwrap_or_default(),
                 section.base_url.as_deref(),
-            )
-            .or_else(|| {
-                (section.kind.as_deref() == Some(crate::model::KIND_GEMINI_INTERACTIONS))
-                    .then_some(crate::catalog::GOOGLE_CATALOG_PROVIDER)
-            });
-            let Some(catalog_provider) = catalog_provider else {
+            ) else {
                 continue;
             };
-            let Some(provider_catalog) = snapshot.provider(catalog_provider) else {
-                continue;
-            };
-            for (model, entry) in &provider_catalog.models {
+            for (model, entry) in &binding.provider.models {
                 candidate_pairs.insert((provider.clone(), model.clone()));
-                catalog_models.insert((provider.clone(), model.clone()), (catalog_provider, entry));
+                catalog_models.insert((provider.clone(), model.clone()), (binding, entry));
             }
         }
     }
@@ -350,6 +348,8 @@ pub fn local_inventory_with_catalog(
         let catalog_entry = catalog_models.get(&(provider.clone(), model.clone()));
         let catalog_model = catalog_entry.map(|(_, entry)| *entry);
         let catalog_limits = catalog_model.and_then(|entry| entry.limits);
+        let partial_limits = catalog_entry
+            .and_then(|(binding, _)| binding.partial_limits.and_then(|limits| limits.get(&model)));
         let model_scope = format!("models.{}.", quote(&identity));
         let active_pair = provider == *active_provider && model == *active_model;
         let mut context_windows = BTreeMap::<String, u8>::new();
@@ -462,7 +462,7 @@ pub fn local_inventory_with_catalog(
         let fallback = |built_in: Option<u32>, catalog_value: Option<u32>| CatalogLimit {
             built_in,
             value: catalog_value,
-            snapshot: catalog,
+            binding: catalog_entry.map(|(binding, _)| *binding),
         };
         let context_tokens = selected_window
             .as_ref()
@@ -477,7 +477,9 @@ pub fn local_inventory_with_catalog(
                     trusted.map(|record| (record.catalog, record.revision)),
                     fallback(
                         cli_bookkeeping.map(|(context, _, _)| context),
-                        catalog_limits.map(|limits| limits.context_tokens),
+                        catalog_limits
+                            .map(|limits| limits.context_tokens)
+                            .or_else(|| partial_limits.and_then(|limits| limits.context_tokens)),
                     ),
                 )
             });
@@ -495,7 +497,9 @@ pub fn local_inventory_with_catalog(
                     trusted.map(|record| (record.catalog, record.revision)),
                     fallback(
                         cli_bookkeeping.map(|(_, _, output)| output),
-                        catalog_limits.map(|limits| limits.max_output_tokens),
+                        catalog_limits
+                            .map(|limits| limits.max_output_tokens)
+                            .or_else(|| partial_limits.and_then(|limits| limits.max_output_tokens)),
                     ),
                 )
             });
@@ -528,7 +532,11 @@ pub fn local_inventory_with_catalog(
                         trusted.map(|record| (record.catalog, record.revision)),
                         fallback(
                             cli_bookkeeping.map(|(_, input, _)| input),
-                            catalog_limits.map(|limits| limits.max_input_tokens),
+                            catalog_limits
+                                .map(|limits| limits.max_input_tokens)
+                                .or_else(|| {
+                                    partial_limits.and_then(|limits| limits.max_input_tokens)
+                                }),
                         ),
                     )
                 }),
@@ -579,12 +587,56 @@ pub fn local_inventory_with_catalog(
         {
             continue;
         }
-        let mut disabled_reason = catalog_model.and_then(|entry| entry.disabled_reason.clone());
-        if disabled_reason.is_none() && catalog_model.is_some_and(|entry| !entry.has_text_output())
+        // An incomplete endpoint row may be completed by explicit model
+        // fields. Validate the effective limits below instead of preserving
+        // the source's missing-limit diagnostic after that field is supplied.
+        let endpoint_partial = catalog_limits.is_none()
+            && catalog_entry.is_some_and(|(binding, _)| binding.partial_limits.is_some())
+            && catalog_model.is_some_and(|entry| {
+                entry.disabled_reason.as_deref()
+                    == Some("endpoint model has no complete context/output limit declaration")
+                    || complete_explicit_limits(
+                        explicit,
+                        &context_tokens,
+                        &max_input_tokens,
+                        &max_output_tokens,
+                    ) && matches!(
+                        entry.disabled_reason.as_deref(),
+                        Some(
+                            "endpoint model has a zero, malformed, or out-of-range limit"
+                                | "endpoint model input or output limit exceeds its context window"
+                        )
+                    )
+            });
+        let mut disabled_reason = catalog_model
+            .filter(|_| !endpoint_partial)
+            .and_then(|entry| entry.disabled_reason.clone());
+        let unadvertised_capabilities = catalog_entry.is_some_and(|(binding, _)| {
+            binding
+                .unadvertised_capabilities
+                .is_some_and(|ids| ids.contains(&model))
+        });
+        let retain_configured_capabilities = complete_explicit_limits(
+            explicit,
+            &context_tokens,
+            &max_input_tokens,
+            &max_output_tokens,
+        ) && unadvertised_capabilities;
+        if disabled_reason.is_none() && unadvertised_capabilities && !retain_configured_capabilities
+        {
+            disabled_reason =
+                Some("endpoint model has incomplete tool/text capability metadata".to_owned());
+        }
+        if disabled_reason.is_none()
+            && !retain_configured_capabilities
+            && catalog_model.is_some_and(|entry| !entry.has_text_output())
         {
             disabled_reason = Some("catalog model does not produce text".to_owned());
         }
-        if disabled_reason.is_none() && catalog_model.is_some_and(|entry| !entry.tool_call) {
+        if disabled_reason.is_none()
+            && !retain_configured_capabilities
+            && catalog_model.is_some_and(|entry| !entry.tool_call)
+        {
             disabled_reason = Some("catalog model does not support tool calling".to_owned());
         }
         if disabled_reason.is_none()
@@ -631,15 +683,16 @@ pub fn local_inventory_with_catalog(
             label: catalog_model
                 .map(|entry| entry.name.clone())
                 .unwrap_or_else(|| model.clone()),
-            tool_call: catalog_model.map(|entry| entry.tool_call),
+            tool_call: catalog_model.and_then(|entry| {
+                (entry.tool_call || !unadvertised_capabilities).then_some(entry.tool_call)
+            }),
             reasoning: catalog_model.map(|entry| entry.reasoning),
             structured_output: catalog_model.map(|entry| entry.structured_output),
-            catalog_provider: catalog_entry
-                .map(|(catalog_provider, _)| (*catalog_provider).to_owned()),
-            catalog_revision: catalog_entry
-                .and(catalog.map(|snapshot| snapshot.revision().to_owned())),
-            catalog_retrieved_at_ms: catalog_entry
-                .and(catalog.map(|snapshot| snapshot.retrieved_at_ms)),
+            catalog_provider: catalog_entry.map(|(binding, _)| binding.provider.id.clone()),
+            catalog_source: catalog_entry.map(|(binding, _)| binding.source.to_owned()),
+            catalog_cost: catalog_model.and_then(|entry| entry.cost),
+            catalog_revision: catalog_entry.map(|(binding, _)| binding.revision.to_owned()),
+            catalog_retrieved_at_ms: catalog_entry.map(|(binding, _)| binding.retrieved_at_ms),
             provider,
             model,
             context_tokens,
@@ -782,7 +835,31 @@ struct PreviewWindow {
 struct CatalogLimit<'a> {
     built_in: Option<u32>,
     value: Option<u32>,
-    snapshot: Option<&'a CatalogSnapshot>,
+    binding: Option<CatalogBinding<'a>>,
+}
+
+fn complete_explicit_limits(
+    explicit: Option<&ModelSection>,
+    context: &Option<InventoryLimit>,
+    input: &Option<InventoryLimit>,
+    output: &Option<InventoryLimit>,
+) -> bool {
+    explicit.is_some()
+        && [context, input, output].into_iter().all(|limit| {
+            limit.as_ref().is_some_and(|limit| {
+                limit.value > 0
+                    && matches!(&limit.origin, ModelLimitOrigin::Configured(source)
+                        if source.layer != Layer::BuiltIn)
+            })
+        })
+        && context.as_ref().is_some_and(|context| {
+            input
+                .as_ref()
+                .is_some_and(|input| input.value <= context.value)
+                && output
+                    .as_ref()
+                    .is_some_and(|output| output.value <= context.value)
+        })
 }
 
 fn configured_limit(value: &Sourced<u32>) -> InventoryLimit {
@@ -824,13 +901,13 @@ fn inventory_limit(
             origin: ModelLimitOrigin::BuiltIn,
         });
     }
-    let snapshot = fallback.snapshot?;
+    let binding = fallback.binding?;
     Some(InventoryLimit {
         value: fallback.value?,
         origin: ModelLimitOrigin::Catalog {
-            catalog: "models.dev".to_owned(),
-            revision: snapshot.revision().to_owned(),
-            retrieved_at_ms: snapshot.retrieved_at_ms,
+            catalog: binding.source.to_owned(),
+            revision: binding.revision.to_owned(),
+            retrieved_at_ms: binding.retrieved_at_ms,
         },
     })
 }

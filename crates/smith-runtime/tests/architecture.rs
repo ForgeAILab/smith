@@ -229,6 +229,7 @@ const PUBLIC_RUNTIME_MODULES: &[&str] = &[
     "probe",
     "project_instructions",
     "prompt",
+    "provider_models",
     "reasoning",
     "resume_capsule",
     "rotation",

@@ -5,6 +5,7 @@ use super::{restore_usage_records, restore_usage_with_bindings};
 
 fn price(provider: &str, model: &str) -> smith_client::status::PriceReference {
     smith_client::status::PriceReference {
+        provenance: None,
         provider: provider.to_owned(),
         model: model.to_owned(),
         table: smith_client::status::PriceTable {
@@ -25,7 +26,7 @@ fn root_record(tokens: u64) -> UsageRecord {
 }
 
 #[test]
-fn restored_usage_uses_the_single_manifest_binding_even_after_a_switch() {
+fn restored_usage_uses_single_manifest_identity_without_inventing_historical_rates() {
     let mut status = smith_client::status::Status::new("current", "project");
     status.switch_model(Some("google".into()), "current");
     status.set_price(Some(price("google", "current")));
@@ -42,11 +43,8 @@ fn restored_usage_uses_the_single_manifest_binding_even_after_a_switch() {
     assert_eq!(usage.total_tokens(), 1_000_000);
     assert_eq!(usage.bindings[0].provider.as_deref(), Some("zai"));
     assert_eq!(usage.bindings[0].model, "glm-5.3");
-    let retained = usage.cost_price(status.price()).expect("restored price");
-    let cost = smith_client::status::SessionCost::compute(&usage, retained);
-    assert_eq!(cost.micro_usd, 2_000_000);
-    assert_eq!(cost.label, smith_client::status::CostLabel::Exact);
-    assert_eq!(retained.render_sources(&usage), "zai/glm-5.3");
+    assert!(usage.cost_price(status.price()).is_none());
+    assert!(usage.bindings[0].price.is_none());
 }
 
 #[test]
@@ -93,8 +91,12 @@ fn restored_usage_without_manifests_has_no_invented_binding() {
 fn logged_usage() -> smith_client::usage_log::SessionUsageRecord {
     let mut observed = smith_client::status::Status::new("glm-5.3", "project");
     observed.switch_model(Some("zai".into()), "glm-5.3");
+    observed.set_price(Some(price("zai", "glm-5.3")));
     observed.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 11_000));
     observed.switch_model(Some("google".into()), "gemini-3.8-flash");
+    let mut reference = price("google", "gemini-3.8-flash");
+    reference.table.input = Some(3_000_000);
+    observed.set_price(Some(reference));
     observed.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 12_000));
     smith_client::usage_log::SessionUsageRecord::new(
         "session",
@@ -166,6 +168,9 @@ fn usage_with_unattributed_followup() -> (
         provider: None,
         model: "earlier models".into(),
         totals: attributed.totals.clone(),
+        price: None,
+        synthetic_by_purpose: Default::default(),
+        reported: true,
     }];
     let mut restored = root_record(2401);
     restored.delta = restored.delta.with(CounterKind::Output, 15);
@@ -243,7 +248,7 @@ fn usage_restore_with_only_unattributed_matches_falls_back_to_manifests() {
         if manifests.len() == 1 {
             assert_eq!(binding.provider.as_deref(), Some("zai"));
             assert_eq!(binding.model, "glm-5.3");
-            assert!(binding.price.is_some());
+            assert!(binding.price.is_none());
         } else {
             assert!(binding.provider.is_none());
             assert_eq!(binding.model, "earlier models");
@@ -309,6 +314,7 @@ fn harness_usage_log_restores_provider_free_and_legacy_bindings() {
     observed.switch_model(Some("zai".into()), model);
     observed.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000));
     observed.switch_model(Some("zai".into()), "glm-5.3");
+    observed.set_price(Some(price("zai", "glm-5.3")));
     observed.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 2_000));
     let original = smith_client::usage_log::SessionUsageRecord::new(
         "session",
@@ -425,6 +431,8 @@ fn child_profile_resolution_keeps_catalog_endpoint_identity_and_unknowns() {
             reasoning: None,
             structured_output: None,
             catalog_provider: Some("google".into()),
+            catalog_source: None,
+            catalog_cost: None,
             catalog_revision: None,
             catalog_retrieved_at_ms: None,
             profiles: vec!["child".into()],
@@ -454,6 +462,33 @@ fn child_profile_resolution_keeps_catalog_endpoint_identity_and_unknowns() {
     assert_eq!(price.provider, "child-alias");
     assert_eq!(price.table.input, Some(3_000_000));
     assert!(super::resolve_child_usage_binding("missing", &inventory, &catalog).is_none());
+    // A custom source can intentionally use the same catalog/provider ID as
+    // a public deployment; its frozen source and rates remain authoritative.
+    inventory.models[0].catalog_source = Some("endpoint:account-a".into());
+    inventory.models[0].catalog_revision = Some("endpoint-A".into());
+    inventory.models[0].catalog_retrieved_at_ms = Some(2);
+    inventory.models[0].catalog_cost = Some(smith_config::catalog::CatalogModelCost {
+        input: Some(7_000_000),
+        output: None,
+        cache_read: None,
+        cache_write: None,
+    });
+    let binding =
+        super::resolve_child_usage_binding("child", &inventory, &catalog).expect("custom source");
+    let price = binding.price.expect("frozen endpoint price");
+    assert_eq!(price.table.input, Some(7_000_000));
+    assert_eq!(
+        price.provenance.as_ref().unwrap().source,
+        "endpoint:account-a"
+    );
+    inventory.models[0].catalog_cost = None;
+    assert!(
+        super::resolve_child_usage_binding("child", &inventory, &catalog)
+            .unwrap()
+            .price
+            .is_none(),
+        "an unpriced custom source must not borrow the public provider's rates"
+    );
     inventory.models[0].catalog_provider = None;
     let binding = super::resolve_child_usage_binding("child", &inventory, &catalog)
         .expect("known custom binding");
@@ -605,4 +640,196 @@ async fn chatgpt_subscription_price_stays_unknown_despite_openai_image_metadata(
         .is_some()
     );
     assert!(super::usage::resolve_price(&policy, &catalog).is_none());
+}
+
+#[test]
+fn resume_preserves_same_model_price_revisions_for_every_usage_route() {
+    use smith_client::status::{CostLabel, SessionCost, Status};
+    let a = price("gateway", "same-model").with_provenance("endpoint:account-a", "A", 1);
+    let mut b = a.clone().with_provenance("endpoint:account-a", "B", 2);
+    b.table.input = Some(5_000_000);
+    let mut observed = Status::new("same-model", "project");
+    observed.switch_model(Some("gateway".into()), "same-model");
+    let mut records = Vec::new();
+    for price in [&a, &b] {
+        observed.set_price(Some(price.clone()));
+        observed.set_advisor_price(Some(price.clone()));
+        observed.set_vision_price(Some(price.clone()));
+        for purpose in [
+            None,
+            Some("advisor"),
+            Some("vision"),
+            Some("module:review/module"),
+        ] {
+            let mut record = root_record(1_000);
+            record.provenance.purpose = purpose.map(str::to_owned);
+            observed.record_usage_record(&record);
+            records.push(record);
+        }
+        let mut synthetic = root_record(1_000);
+        synthetic.provenance.attempt_purpose = Some(ProviderAttemptPurpose::CacheKeepalive);
+        observed.record_usage_record(&synthetic);
+        records.push(synthetic);
+    }
+    let usage = observed.session_usage();
+    let mut child = smith_client::status::BindingUsage::new(
+        Some("gateway".into()),
+        "same-model",
+        Some(a.clone()),
+    );
+    child.record(
+        &UsageDelta::new().with(CounterKind::InputUncached, 1_000),
+        true,
+    );
+    let mut usage = usage;
+    usage.bindings.push(child);
+    usage
+        .delegated_totals
+        .insert(CounterKind::InputUncached, 1_000);
+    let logged = smith_client::usage_log::SessionUsageRecord::new(
+        "session",
+        Some("gateway".into()),
+        "same-model",
+        "build",
+        &usage,
+    );
+    let encoded = serde_json::to_string(&logged).expect("serialize prices");
+    let logged = serde_json::from_str(&encoded).expect("restore immutable prices");
+    let mut restored = Status::new("same-model", "project");
+    restored.switch_model(Some("gateway".into()), "same-model");
+    restored.set_price(Some(b.clone()));
+    restored.set_advisor_price(Some(b.clone()));
+    restored.set_vision_price(Some(b.clone()));
+    restore_usage_with_bindings(
+        &mut restored,
+        &records,
+        Some(&logged),
+        [("gateway", "same-model")],
+        |_, _| panic!("historical prices must not use today's catalog"),
+    );
+    let actual = restored.session_usage();
+    assert_eq!(actual.bindings, usage.bindings);
+    assert_eq!(actual.advisor_bindings, usage.advisor_bindings);
+    assert_eq!(actual.vision_bindings, usage.vision_bindings);
+    assert_eq!(actual.module_usage, usage.module_usage);
+    let cost = SessionCost::compute(&actual, &b);
+    assert_eq!(cost.micro_usd, 37_000);
+    assert_eq!(cost.label, CostLabel::Exact);
+    restored.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000));
+    assert_eq!(
+        SessionCost::compute(&restored.session_usage(), &b).micro_usd,
+        42_000
+    );
+}
+
+#[test]
+fn a_legacy_log_preserves_model_identity_without_repricing_from_the_new_catalog() {
+    let mut logged = logged_usage();
+    logged.schema_version = 5;
+    for binding in &mut logged.bindings {
+        binding.price = None;
+    }
+    let mut status = smith_client::status::Status::new("current", "project");
+    restore_usage_with_bindings(
+        &mut status,
+        &[root_record(23_000)],
+        Some(&logged),
+        [("zai", "glm-5.3"), ("google", "gemini-3.8-flash")],
+        |_, _| panic!("v5 stored no historic price revision"),
+    );
+    let usage = status.session_usage();
+    assert_eq!(usage.bindings.len(), 2);
+    assert_eq!(usage.bindings[0].provider.as_deref(), Some("zai"));
+    assert!(usage.bindings.iter().all(|binding| binding.price.is_none()));
+}
+
+#[test]
+fn endpoint_price_lookup_uses_only_the_exact_endpoint_snapshot() {
+    use smith_config::catalog::{CatalogSnapshot, EndpointCatalog};
+    let mut catalog: CatalogSnapshot = serde_json::from_value(serde_json::json!({
+        "schema_revision": smith_config::catalog::CATALOG_SCHEMA_REVISION,
+        "source_url": "fixture", "source_digest": "public", "content_digest": "public",
+        "source_revision": "public-A", "retrieved_at_ms": 1,
+        "providers": { "openai": { "id": "openai", "name": "OpenAI", "models": {
+            "same-model": { "id": "same-model", "name": "Model", "tool_call": true, "reasoning": false, "structured_output": false, "cost": { "input": 1_000_000 } }
+        }}}
+    })).expect("public snapshot");
+    let endpoint = EndpointCatalog {
+        binding_digest: "fixture-binding".into(),
+        partial_limits: Default::default(), unadvertised_capabilities: Default::default(),
+        kind: "openai".into(), base_url: "https://gateway.example/v1".into(),
+        source: "endpoint:account-a".into(), revision: "endpoint-A".into(), retrieved_at_ms: 2,
+        catalog: serde_json::from_value(serde_json::json!({ "id": "xiaoge", "name": "Xiaoge", "models": {
+            "same-model": { "id": "same-model", "name": "Model", "tool_call": true, "reasoning": false, "structured_output": false, "cost": { "input": 7_000_000 } }
+        }})).expect("endpoint provider"),
+    };
+    catalog.endpoint_catalogs.insert("xiaoge".into(), endpoint);
+    let binding = catalog
+        .bound_provider("xiaoge", "openai", Some("https://gateway.example/v1"))
+        .expect("bound endpoint");
+    let price = super::usage::bound_price("xiaoge", "same-model", binding).expect("endpoint rates");
+    assert_eq!(price.table.input, Some(7_000_000));
+    assert_eq!(
+        price.provenance.as_ref().expect("provenance").revision,
+        "endpoint-A"
+    );
+    assert!(
+        catalog
+            .bound_provider(
+                "another-account",
+                "openai",
+                Some("https://gateway.example/v1")
+            )
+            .is_none()
+    );
+    assert!(
+        catalog
+            .bound_provider("xiaoge", "openai", Some("https://different.example/v1"))
+            .is_none()
+    );
+    catalog
+        .endpoint_catalogs
+        .get_mut("xiaoge")
+        .unwrap()
+        .catalog
+        .models
+        .get_mut("same-model")
+        .unwrap()
+        .cost = None;
+    let binding = catalog
+        .bound_provider("xiaoge", "openai", Some("https://gateway.example/v1"))
+        .unwrap();
+    assert!(
+        super::usage::bound_price("xiaoge", "same-model", binding).is_none(),
+        "missing endpoint rates never borrow public same-name prices"
+    );
+}
+
+#[test]
+fn side_route_only_resume_retains_its_original_price() {
+    use smith_client::status::{SessionCost, Status};
+    let old = price("advisor", "reviewer").with_provenance("endpoint:advisor", "A", 1);
+    let mut observed = Status::new("unpriced-root", "project");
+    observed.set_advisor_price(Some(old.clone()));
+    let record = UsageRecord {
+        provenance: Provenance {
+            purpose: Some("advisor".into()),
+            ..Provenance::default()
+        },
+        ..root_record(1_000)
+    };
+    observed.record_usage_record(&record);
+    let logged = smith_client::usage_log::SessionUsageRecord::new(
+        "session",
+        None,
+        "unpriced-root",
+        "build",
+        &observed.session_usage(),
+    );
+    let mut restored = Status::new("unpriced-root", "project");
+    restore_usage_with_bindings(&mut restored, &[record], Some(&logged), [], |_, _| None);
+    let usage = restored.session_usage();
+    let retained = usage.cost_price(None).expect("side-route revision A");
+    assert_eq!(retained, &old);
+    assert_eq!(SessionCost::compute(&usage, retained).micro_usd, 2_000);
 }

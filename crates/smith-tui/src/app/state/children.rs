@@ -580,6 +580,7 @@ mod usage_binding_tests {
         PriceReference {
             provider: provider.to_owned(),
             model: model.to_owned(),
+            provenance: None,
             table: PriceTable {
                 input: Some(input),
                 output: None,

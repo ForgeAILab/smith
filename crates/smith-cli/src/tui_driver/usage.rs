@@ -30,8 +30,8 @@ pub(super) fn last_session_usage(
 }
 
 fn usage_bindings_are_attributed(record: &smith_client::usage_log::SessionUsageRecord) -> bool {
-    record.schema_version == 5
-        && !record.bindings.is_empty()
+    matches!(record.schema_version, 5 | 6)
+        && (!record.bindings.is_empty() || (record.schema_version == 6 && record.totals.is_empty()))
         && record.bindings.iter().all(|binding| {
             (smith_config::cli_agents::parse_cli_model_id(&binding.model).is_some()
                 || binding
@@ -55,15 +55,15 @@ pub(super) fn restore_usage_records(
     }
 }
 
-/// A matching v5 log preserves model switches that identity-free runtime
-/// records cannot recover. Stale or older logs use the single-manifest rule
-/// rather than assigning all earlier usage to the last model.
+/// Matching logs preserve serving identities; v6 additionally freezes prices.
+/// Earlier logs retain attribution while unrecoverable historical prices stay
+/// unknown instead of borrowing the newest catalog revision.
 pub(super) fn restore_usage_with_bindings<'a>(
     status: &mut smith_client::status::Status,
     records: &[UsageRecord],
     logged: Option<&smith_client::usage_log::SessionUsageRecord>,
     manifests: impl IntoIterator<Item = (&'a str, &'a str)>,
-    mut price_for: impl FnMut(&str, &str) -> Option<smith_client::status::PriceReference>,
+    _price_for: impl FnMut(&str, &str) -> Option<smith_client::status::PriceReference>,
 ) {
     if records.is_empty() {
         return;
@@ -71,6 +71,9 @@ pub(super) fn restore_usage_with_bindings<'a>(
     let provider = status.provider.clone();
     let model = status.model.clone();
     let price = status.price().cloned();
+    let active = status.session_usage();
+    status.set_advisor_price(None);
+    status.set_vision_price(None);
     let bindings = manifests
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
@@ -78,18 +81,19 @@ pub(super) fn restore_usage_with_bindings<'a>(
         && let Some((provider, model)) = bindings.iter().next()
     {
         status.switch_model(Some((*provider).to_owned()), *model);
-        status.set_price(price_for(provider, model));
+        // Manifests identify models, not the rates in force for old attempts.
+        status.set_price(None);
     } else {
         status.switch_model(None, "earlier models");
     }
     restore_usage_records(status, records);
     if let Some(logged) = logged {
-        restore_logged_bindings(status, logged, &mut price_for);
+        restore_logged_bindings(status, logged);
     }
-    if status.provider != provider || status.model != model {
-        status.switch_model(provider, model);
-        status.set_price(price);
-    }
+    status.switch_model(provider, model);
+    status.set_price(price);
+    status.set_advisor_price(active.advisor_price);
+    status.set_vision_price(active.vision_price);
 }
 
 /// Checks the root rollup and the binding partition before using the log:
@@ -97,9 +101,8 @@ pub(super) fn restore_usage_with_bindings<'a>(
 fn restore_logged_bindings(
     status: &mut smith_client::status::Status,
     logged: &smith_client::usage_log::SessionUsageRecord,
-    price_for: &mut impl FnMut(&str, &str) -> Option<smith_client::status::PriceReference>,
 ) {
-    use smith_client::status::{BindingUsage, counter_label};
+    use smith_client::status::counter_label;
     let mut restored = status.session_usage();
     let totals = restored
         .totals
@@ -130,6 +133,102 @@ fn restore_logged_bindings(
     if partition != expected {
         return;
     }
+    let versioned = logged.schema_version == 6;
+    let Some(bindings) = bindings_from_log(&logged.bindings, versioned, logged.reported) else {
+        return;
+    };
+    // A same-root-total log can still predate advisor/cache maintenance work.
+    // Keep the live ledger authoritative and only restore matching partitions.
+    restored.bindings = bindings;
+    if versioned {
+        let synthetic = restored.bindings.iter().fold(
+            BTreeMap::<String, BTreeMap<String, u64>>::new(),
+            |mut all, binding| {
+                for (purpose, totals) in &binding.synthetic_by_purpose {
+                    for (kind, value) in totals {
+                        let total = all
+                            .entry(purpose.as_str().into())
+                            .or_default()
+                            .entry(counter_label(*kind).into())
+                            .or_default();
+                        *total = total.saturating_add(*value);
+                    }
+                }
+                all
+            },
+        );
+        for (purpose, totals) in synthetic {
+            if logged.synthetic_by_purpose.get(&purpose) != Some(&totals) {
+                return;
+            }
+            let canonical = restored
+                .synthetic_by_purpose
+                .iter()
+                .find(|(known, _)| known.as_str() == purpose)
+                .map(|(_, totals)| totals);
+            if totals.iter().any(|(label, value)| {
+                canonical.is_none_or(|canonical| {
+                    canonical
+                        .iter()
+                        .find(|(kind, _)| counter_label(**kind) == label)
+                        .is_none_or(|(_, known)| value > known)
+                })
+            }) {
+                return;
+            }
+        }
+        for (entries, target, expected) in [
+            (
+                &logged.advisor_bindings,
+                &mut restored.advisor_bindings,
+                &restored.advisor_totals,
+            ),
+            (
+                &logged.vision_bindings,
+                &mut restored.vision_bindings,
+                &restored.vision_totals,
+            ),
+        ] {
+            if let Some(bindings) = bindings_from_log(entries, true, logged.reported)
+                && binding_totals(&bindings) == *expected
+            {
+                *target = bindings;
+            }
+        }
+    }
+    status.retain_usage_bindings(&restored);
+    let mut module_usage = BTreeMap::new();
+    for (module, entries) in &logged.module_usage {
+        let Some(bindings) = bindings_from_log(entries, versioned, logged.reported) else {
+            return;
+        };
+        module_usage.insert(module.clone(), bindings);
+    }
+    let expected_modules = restored.module_totals();
+    restored.module_usage = module_usage;
+    if restored.module_totals() == expected_modules {
+        status.retain_usage_bindings(&restored);
+    }
+}
+
+fn binding_totals(bindings: &[smith_client::status::BindingUsage]) -> BTreeMap<CounterKind, u64> {
+    let mut totals = BTreeMap::<CounterKind, u64>::new();
+    for binding in bindings {
+        for (kind, value) in &binding.totals {
+            let total = totals.entry(*kind).or_default();
+            *total = total.saturating_add(*value);
+        }
+    }
+    totals
+}
+
+fn bindings_from_log(
+    entries: &[smith_client::usage_log::BindingUsageRecord],
+    versioned: bool,
+    reported: bool,
+) -> Option<Vec<smith_client::status::BindingUsage>> {
+    use agent_runtime_core::provider::ProviderAttemptPurpose;
+    use smith_client::status::{BindingUsage, counter_label};
     let kinds = [
         CounterKind::InputUncached,
         CounterKind::InputCached,
@@ -138,51 +237,47 @@ fn restore_logged_bindings(
         CounterKind::Reasoning,
         CounterKind::WebSearchRequests,
     ];
-    let mut bindings = Vec::new();
-    for entry in &logged.bindings {
-        let mut binding = BindingUsage::new(entry.provider.clone(), &entry.model, None);
-        for (label, value) in &entry.totals {
-            let Some(kind) = kinds.iter().find(|kind| counter_label(**kind) == label) else {
-                return;
-            };
-            binding.totals.insert(*kind, *value);
-        }
-        binding.reported = logged.reported && restored.bindings.iter().all(|entry| entry.reported);
-        bindings.push(binding);
-    }
-    for binding in &mut bindings {
-        binding.price = binding
-            .provider
-            .as_deref()
-            .and_then(|provider| price_for(provider, &binding.model));
-    }
-    restored.bindings = bindings;
-    status.retain_usage_bindings(&restored);
-    let mut module_usage = BTreeMap::new();
-    for (module, entries) in &logged.module_usage {
-        let mut bindings = Vec::new();
-        for entry in entries {
-            let mut binding = BindingUsage::new(entry.provider.clone(), &entry.model, None);
+    let purposes = [
+        ProviderAttemptPurpose::CacheKeepalive,
+        ProviderAttemptPurpose::CacheHandoffCheckpoint,
+        ProviderAttemptPurpose::IdleCompaction,
+        ProviderAttemptPurpose::CacheResourceCreate,
+        ProviderAttemptPurpose::CacheResourceExtend,
+        ProviderAttemptPurpose::CacheResourceInspect,
+        ProviderAttemptPurpose::CacheResourceDelete,
+    ];
+    entries
+        .iter()
+        .map(|entry| {
+            let price = entry
+                .price
+                .as_ref()
+                .filter(|price| {
+                    versioned
+                        && entry.provider.as_deref() == Some(price.provider.as_str())
+                        && entry.model == price.model
+                })
+                .cloned();
+            let mut binding = BindingUsage::new(entry.provider.clone(), &entry.model, price);
             for (label, value) in &entry.totals {
-                let Some(kind) = kinds.iter().find(|kind| counter_label(**kind) == label) else {
-                    return;
-                };
+                let kind = kinds.iter().find(|kind| counter_label(**kind) == label)?;
                 binding.totals.insert(*kind, *value);
             }
-            binding.price = binding
-                .provider
-                .as_deref()
-                .and_then(|provider| price_for(provider, &binding.model));
-            binding.reported = logged.reported;
-            bindings.push(binding);
-        }
-        module_usage.insert(module.clone(), bindings);
-    }
-    let expected_modules = restored.module_totals();
-    restored.module_usage = module_usage;
-    if restored.module_totals() == expected_modules {
-        status.retain_usage_bindings(&restored);
-    }
+            if versioned {
+                for (purpose, totals) in &entry.synthetic_by_purpose {
+                    let purpose = purposes.iter().find(|known| known.as_str() == purpose)?;
+                    let mut converted = BTreeMap::new();
+                    for (label, value) in totals {
+                        let kind = kinds.iter().find(|kind| counter_label(**kind) == label)?;
+                        converted.insert(*kind, *value);
+                    }
+                    binding.synthetic_by_purpose.insert(*purpose, converted);
+                }
+            }
+            binding.reported = reported && entry.reported;
+            Some(binding)
+        })
+        .collect()
 }
 
 /// Resolves the active model's catalog price, using **exactly** the binding
@@ -200,15 +295,29 @@ pub(crate) fn resolve_price(
     policy: &RuntimePolicy,
     catalog: &smith_config::catalog::CatalogSnapshot,
 ) -> Option<smith_client::status::PriceReference> {
-    let catalog_provider = smith_config::catalog::catalog_provider_for(
+    let binding = catalog.bound_provider(
+        &policy.provider_name,
         &policy.provider_kind,
         policy.endpoint.as_deref(),
-    );
-    resolve_catalog_price(
-        &policy.provider_name,
-        policy.model.as_str(),
-        catalog_provider,
-        catalog,
+    )?;
+    bound_price(&policy.provider_name, policy.model.as_str(), binding)
+}
+
+pub(super) fn bound_price(
+    provider: &str,
+    model: &str,
+    binding: smith_config::catalog::CatalogBinding<'_>,
+) -> Option<smith_client::status::PriceReference> {
+    if model.starts_with("cli/") {
+        return None;
+    }
+    let cost = binding.provider.models.get(model)?.cost.as_ref()?;
+    Some(
+        smith_client::status::PriceReference::from_catalog(provider, model, cost).with_provenance(
+            binding.source,
+            binding.revision,
+            binding.retrieved_at_ms,
+        ),
     )
 }
 
@@ -221,13 +330,63 @@ pub(super) fn resolve_catalog_price(
     if model.starts_with("cli/") {
         return None;
     }
-    let cost = catalog_provider
-        .and_then(|provider| catalog.provider(provider))
-        .and_then(|provider| provider.models.get(model))
-        .and_then(|model| model.cost.as_ref())?;
-    Some(smith_client::status::PriceReference::from_catalog(
-        provider, model, cost,
-    ))
+    let catalog_provider = catalog_provider?;
+    if let Some(public) = catalog.provider(catalog_provider) {
+        let cost = public.models.get(model)?.cost.as_ref()?;
+        return Some(
+            smith_client::status::PriceReference::from_catalog(provider, model, cost)
+                .with_provenance("models.dev", catalog.revision(), catalog.retrieved_at_ms),
+        );
+    }
+    if let Some(endpoint) = catalog.endpoint_catalogs.get(provider)
+        && endpoint.catalog.id == catalog_provider
+    {
+        // The immutable inventory admitted this exact local provider binding.
+        let cost = endpoint.catalog.models.get(model)?.cost.as_ref()?;
+        return Some(
+            smith_client::status::PriceReference::from_catalog(provider, model, cost)
+                .with_provenance(
+                    &endpoint.source,
+                    &endpoint.revision,
+                    endpoint.retrieved_at_ms,
+                ),
+        );
+    }
+    None
+}
+
+pub(super) fn resolve_inventory_price(
+    provider: &str,
+    model: &str,
+    inventory: &SelectionInventory,
+    catalog: &smith_config::catalog::CatalogSnapshot,
+) -> Option<smith_client::status::PriceReference> {
+    let entry = inventory
+        .models
+        .iter()
+        .find(|entry| entry.provider == provider && entry.model == model)?;
+    let catalog_provider = entry.catalog_provider.as_deref()?;
+    if model.starts_with("cli/") {
+        return None;
+    }
+    if let Some(source) = &entry.catalog_source {
+        // Price fields were captured from the exact admitted binding along
+        // with this immutable picker/host inventory. Do not resolve another
+        // same-ID public or endpoint source after that decision.
+        return Some(
+            smith_client::status::PriceReference::from_catalog(
+                provider,
+                model,
+                entry.catalog_cost.as_ref()?,
+            )
+            .with_provenance(
+                source,
+                entry.catalog_revision.as_deref()?,
+                entry.catalog_retrieved_at_ms?,
+            ),
+        );
+    }
+    resolve_catalog_price(provider, model, Some(catalog_provider), catalog)
 }
 
 pub(super) fn resolve_child_usage_binding(
@@ -243,12 +402,7 @@ pub(super) fn resolve_child_usage_binding(
     })?;
     let provider = profile.provider.as_deref()?;
     let model = profile.model.as_deref()?;
-    let catalog_provider = inventory
-        .models
-        .iter()
-        .find(|entry| entry.provider == provider && entry.model == model)
-        .and_then(|entry| entry.catalog_provider.as_deref());
-    let price = resolve_catalog_price(provider, model, catalog_provider, catalog);
+    let price = resolve_inventory_price(provider, model, inventory, catalog);
     Some(smith_client::status::BindingUsage::new(
         Some(provider.to_owned()),
         model,

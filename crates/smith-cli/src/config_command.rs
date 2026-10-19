@@ -68,6 +68,7 @@ pub(super) fn resolution_request_with_catalog(
     } else {
         SyntheticCacheSpendAuthority::Deny
     };
+    let frozen_catalog = catalog.is_some();
     let mut request = ResolveRequest::new(&start)
         .with_known_modules(crate::modules::known_modules())
         .with_env(std::env::vars())
@@ -77,12 +78,51 @@ pub(super) fn resolution_request_with_catalog(
     if let Some(catalog) = catalog {
         request = request.with_catalog(catalog);
     }
-    let request = crate::plugins::with_known_plugins(request)?;
+    let mut request = crate::plugins::with_known_plugins(request)?;
+    if !frozen_catalog {
+        request = request_catalog(request)?;
+    } else {
+        request = authorize_catalog(request)?;
+    }
     let request = match &selection.advisor {
         Some(choice) => request.with_advisor_override(choice.clone()),
         None => request,
     };
     Ok((start, request))
+}
+
+/// Prepare endpoint snapshots only after ordinary configuration validation.
+/// Invalid project policy cannot trigger even a local credential read.
+pub(super) fn request_catalog(mut request: ResolveRequest) -> Result<ResolveRequest> {
+    smith_config::resolve::resolve_model_sync_request(&request)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let user_dir = match &request.home_dir {
+        Some(home) => home.join(".smith"),
+        None => smith_config::credential::user_state_root()?,
+    };
+    request.catalog = Some(crate::model_sync::cached_snapshot(&user_dir)?);
+    authorize_catalog(request)
+}
+
+/// Recheck authority for fresh and frozen request snapshots before their
+/// metadata contributes to inventory or runtime resolution.
+pub(super) fn authorize_catalog(mut request: ResolveRequest) -> Result<ResolveRequest> {
+    let Some(snapshot) = request.catalog.clone() else {
+        return Ok(request);
+    };
+    let next = match resolve(&request) {
+        Ok(resolution) => crate::model_sync::catalog_for_resolution(&resolution, snapshot)?,
+        Err(_) if snapshot.endpoint_catalogs.is_empty() => snapshot,
+        Err(_) => {
+            let mut snapshot = snapshot;
+            std::sync::Arc::make_mut(&mut snapshot)
+                .endpoint_catalogs
+                .clear();
+            snapshot
+        }
+    };
+    request.catalog = Some(next);
+    Ok(request)
 }
 
 pub(super) fn explain_config(key: &str, selection: &Selection) -> Result<()> {

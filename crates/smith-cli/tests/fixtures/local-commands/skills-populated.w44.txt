@@ -32,6 +32,11 @@ ce · active · Smith configuration reference,
 ive · Smith configuration reference, section
  "Image generation". `https://api.openai.com
 /v1`.
+  smith.configuration.model-discovery-and-da
+ily-synchronization · active · Smith configu
+ration reference, section "Model discovery a
+nd daily synchronization". authenticated `/m
+odels` listing.
   smith.configuration.policy-keys-and-defaul
 ts · active · Smith configuration reference,
  section "Policy keys and defaults". instruc
@@ -194,11 +199,6 @@ not loaded
   broken · it does not start with a --- fr
 ontmatter block declaring a description ·
 <HOME>/.smith/skills/broken/SKILL.md
-
-
-
-
-
 
 
 

@@ -644,7 +644,7 @@ fn with_vision(revision: String, vision: Option<&Sourced<VisionTarget>>) -> Stri
     digest.update(b"\0vision\0");
     digest.update(vision.value.to_string().as_bytes());
     digest.update([0]);
-    digest.update(vision.source.to_string().as_bytes());
+    digest.update(source_identity(&vision.source).as_bytes());
     format!("{:x}", digest.finalize())
 }
 
@@ -748,6 +748,14 @@ fn with_capability_limits(revision: String, limits: &ResolvedCapabilityLimits) -
     format!("{:x}", digest.finalize())
 }
 
+/// What a profile revision records about where a value came from: its layer
+/// and key, not its file. The same configuration read from another path, such
+/// as a moved or symlinked home directory, keeps its revision, so a session's
+/// child routes still resolve after it.
+fn source_identity(source: &Source) -> String {
+    format!("{}\0{}", source.layer.label(), source.key)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn agent_profile_revision(
     name: &str,
@@ -762,26 +770,26 @@ pub(super) fn agent_profile_revision(
     legacy: bool,
 ) -> String {
     let mut digest = Sha256::new();
-    digest.update(b"smith-agent-profile-2\0");
+    digest.update(b"smith-agent-profile-3\0");
     digest.update(name.as_bytes());
     digest.update([0]);
     digest.update(posture.value.as_str().as_bytes());
     digest.update([0]);
-    digest.update(posture.source.to_string().as_bytes());
+    digest.update(source_identity(&posture.source).as_bytes());
     for placement in &uses.value {
         digest.update([0]);
         digest.update(placement.as_str().as_bytes());
     }
     digest.update([0]);
-    digest.update(uses.source.to_string().as_bytes());
+    digest.update(source_identity(&uses.source).as_bytes());
     digest.update([0, u8::from(delegation.value)]);
-    digest.update(delegation.source.to_string().as_bytes());
+    digest.update(source_identity(&delegation.source).as_bytes());
     // Preserve revisions for configurations without an advisor.
     if let Some(advisor) = advisor {
         digest.update(b"\0advisor\0");
         digest.update(advisor.value.to_string().as_bytes());
         digest.update([0]);
-        digest.update(advisor.source.to_string().as_bytes());
+        digest.update(source_identity(&advisor.source).as_bytes());
     }
     for value in [description, instructions, provider, model]
         .into_iter()
@@ -790,7 +798,7 @@ pub(super) fn agent_profile_revision(
         digest.update([0]);
         digest.update(value.value.as_bytes());
         digest.update([0]);
-        digest.update(value.source.to_string().as_bytes());
+        digest.update(source_identity(&value.source).as_bytes());
     }
     digest.update([u8::from(legacy)]);
     format!("{:x}", digest.finalize())
@@ -914,6 +922,7 @@ pub(super) fn extract(
         persistence,
         approval,
         background,
+        model_sync: super::load::resolve_model_sync(provenance)?,
         mcp,
         image_generation,
         web: super::web::resolve_web(provenance)?,

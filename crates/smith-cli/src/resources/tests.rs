@@ -105,6 +105,8 @@ fn setup_default_rows_list_agents_as_the_model_picker_does() {
         catalog_provider: None,
         catalog_revision: None,
         catalog_retrieved_at_ms: None,
+        catalog_source: None,
+        catalog_cost: None,
         profiles: vec!["cc".into()],
         selectable: true,
         disabled_reason: None,
@@ -195,6 +197,8 @@ fn model_detail_compacts_every_limit_and_keeps_provenance_off_the_row() {
         catalog_provider: None,
         catalog_revision: None,
         catalog_retrieved_at_ms: None,
+        catalog_source: None,
+        catalog_cost: None,
         profiles: vec!["glm".into()],
         selectable: true,
         disabled_reason: None,
@@ -232,9 +236,37 @@ fn model_detail_compacts_every_limit_and_keeps_provenance_off_the_row() {
         Some("advisor requires usable context limits")
     );
     model.max_input_tokens.as_mut().expect("input").origin = ModelLimitOrigin::BuiltIn;
-    let mixed = model_entries(vec![model], None);
+    let mixed = model_entries(vec![model.clone()], None);
     assert!(mixed[0].detail.contains("255.6k [built-in] input"));
     assert!(mixed[0].detail.contains("trusted catalog r5"));
+
+    model.provider = "xiaoge".into();
+    model.model = "selected-large".into();
+    model.catalog_provider = Some("xiaoge".into());
+    model.catalog_source = Some("https://example.test/v1/models".into());
+    model.catalog_revision = Some("endpoint-revision-1".into());
+    model.catalog_retrieved_at_ms = Some(1);
+    let endpoint = model_entries(vec![model.clone()], None);
+    assert!(
+        endpoint[0]
+            .detail
+            .contains("https://example.test/v1/models advertised")
+    );
+    assert!(!endpoint[0].detail.contains("models.dev/xiaoge"));
+    assert!(endpoint[0].detail.contains("price unknown"));
+    model.catalog_cost = Some(smith_config::catalog::CatalogModelCost {
+        input: Some(0),
+        output: Some(2_000_000),
+        cache_read: None,
+        cache_write: None,
+    });
+    let priced = model_entries(vec![model], None);
+    assert!(
+        priced[0]
+            .detail
+            .contains("USD/M tokens: input $0, output $2")
+    );
+    assert!(!priced[0].detail.contains("price unknown"));
 }
 
 #[test]

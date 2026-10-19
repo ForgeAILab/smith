@@ -41,6 +41,8 @@ use crate::submission::{
 use crate::{FRAME, SPINNER_TICK, interaction, local_command, terminal};
 
 pub(super) enum InteractiveExit {
+    /// A validated cache snapshot can join at an idle boundary.
+    CatalogChanged(Arc<smith_config::catalog::CatalogSnapshot>),
     /// A classified root rejection requires the same-session search route to
     /// be recomposed before another prompt reaches the provider.
     HostedSearchUnavailable,
@@ -451,6 +453,8 @@ struct TuiLoop<'a> {
     child_tx: tokio::sync::mpsc::UnboundedSender<(ChildId, EventEnvelope)>,
     child_rx: tokio::sync::mpsc::UnboundedReceiver<(ChildId, EventEnvelope)>,
     mcp_changes: Option<tokio::sync::watch::Receiver<u64>>,
+    catalog_changes: tokio::sync::watch::Receiver<crate::model_sync::CatalogUpdate>,
+    catalog_update_pending: bool,
     composed_remote_tools: usize,
     remote_tools_pending: bool,
     trusted_skill_pending: bool,
@@ -548,11 +552,17 @@ where
             } => {
                 tui.on_mcp_change();
             }
+            changed = tui.catalog_changes.changed() => {
+                if changed.is_ok() {
+                    let update = tui.catalog_changes.borrow_and_update().clone();
+                    tui.catalog_update_pending = crate::model_sync::differs(&update, &tui.host.runtime().policy().user_dir, tui.catalog);
+                }
+            }
             _ = tui.spinner.tick() => {
                 tui.on_spinner();
             }
 
-            _ = tui.frame.tick(), if tui.dirty || tui.remote_tools_pending || tui.trusted_skill_pending || tui.pending_module_switch.is_some() || tui.pending_plugin_switch.is_some() => {
+            _ = tui.frame.tick(), if tui.dirty || tui.remote_tools_pending || tui.trusted_skill_pending || tui.catalog_update_pending || tui.pending_module_switch.is_some() || tui.pending_plugin_switch.is_some() => {
                 if let Some(exit) = tui.on_frame(terminal).await? {
                     break exit;
                 }
@@ -663,6 +673,8 @@ impl<'a> TuiLoop<'a> {
             child_tx,
             child_rx,
             mcp_changes,
+            catalog_changes: crate::model_sync::subscribe(),
+            catalog_update_pending: false,
             composed_remote_tools,
             remote_tools_pending,
             trusted_skill_pending,
@@ -675,6 +687,58 @@ impl<'a> TuiLoop<'a> {
             window_title,
         }
     }
+}
+
+/// Check a candidate before shutting down a usable session. No picker or turn
+/// may cross this boundary, and a removed current model defers adoption.
+async fn prepared_catalog_adoption(
+    host: &HostSession,
+    project: &std::path::Path,
+    current: &smith_config::catalog::CatalogSnapshot,
+) -> Option<Arc<smith_config::catalog::CatalogSnapshot>> {
+    let policy = host.runtime().policy();
+    let snapshot = crate::model_sync::cached_snapshot(&policy.user_dir).ok()?;
+    let mut selection = crate::cli::Selection {
+        project: Some(project.to_path_buf()),
+        provider: Some(policy.provider_name.clone()),
+        model: Some(policy.model.as_str().to_owned()),
+        reasoning_enabled: policy.reasoning.selected_enabled,
+        reasoning_effort: policy.reasoning.selected_effort.clone(),
+        context_window: policy.context_window.clone(),
+        ..Default::default()
+    };
+    if !policy.agent_profile_legacy {
+        selection.profile = Some(policy.agent_profile.clone());
+    }
+    let prepared =
+        crate::config_command::prepare_with_catalog(&selection, Some(snapshot.clone())).ok()?;
+    let snapshot = prepared.catalog.clone();
+    if !crate::model_sync::snapshots_differ(&snapshot, current) {
+        return None;
+    }
+    let inventory = smith_config::inventory::local_inventory_with_catalog(
+        &prepared.resolution,
+        smith_runtime::factory::AVAILABLE_ADAPTER_KINDS,
+        Some(&snapshot),
+    )
+    .ok()?;
+    inventory.models.iter().find(|model| {
+        model.provider == policy.provider_name
+            && model.model == policy.model.as_str()
+            && model.selectable
+    })?;
+    let request = crate::runtime_host::preflight_request(
+        &prepared.resolution,
+        project,
+        smith_runtime::factory::HostSurface::Terminal,
+        Some(snapshot.clone()),
+    )
+    .ok()?;
+    let preflight = smith_runtime::factory::preflight(&request).await.ok()?;
+    if preflight.endpoint != policy.endpoint || preflight.provider_kind != policy.provider_kind {
+        return None;
+    }
+    Some(snapshot)
 }
 
 /// Defence behind command validation: no host-owned work may cross a rebuild.
@@ -937,3 +1001,39 @@ pub(super) use usage::resolve_price;
 mod tests;
 #[cfg(test)]
 mod transcript_notice_tests;
+
+/// Runs the real frame boundary with a staged catalog generation, without raw
+/// mode or an input reader, so snapshot immutability can be regression-tested.
+#[cfg(test)]
+pub(super) async fn fold_scripted_catalog_frame(
+    host: &HostSession,
+    project: &std::path::Path,
+    resources: &InteractiveResources,
+    app: App,
+) -> Result<(Option<InteractiveExit>, App)> {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 32))?;
+    let mut keys = futures_util::stream::pending::<std::io::Result<TermEvent>>();
+    let mut tui = TuiLoop::new(
+        app,
+        TuiRunInputs {
+            keys: &mut keys,
+            host,
+            project,
+            approvals: None,
+            interactions: None,
+            rotations: None,
+            accounts: ActiveAccounts::ephemeral(),
+            credential_pool: None,
+            agents: &resources.agents,
+            catalog: &resources.catalog,
+            inventory: &resources.inventory,
+            theme: Theme::new().without_color().without_motion(),
+            mcp: None,
+            skills: resources.skills.clone(),
+            commands: resources.commands.clone(),
+        },
+    );
+    tui.catalog_update_pending = true;
+    let exit = tui.on_frame(&mut terminal).await?;
+    Ok((exit, tui.app))
+}

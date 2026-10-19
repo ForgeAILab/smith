@@ -1,0 +1,9 @@
+{
+  "change_id": "update-provider-reasons-and-profile-routes",
+  "change_ref": "update-provider-reasons-and-profile-routes-2026-10-18",
+  "created_at": "2026-10-19T00:05:00Z",
+  "updated_at": "2026-10-19T00:05:00Z",
+  "status": "proposed",
+  "depends_on": [],
+  "external_dependencies": ["agent-runtime update-provider-rejection-reasons-2026-10-18"]
+}

@@ -241,12 +241,25 @@ pub fn profile_route_key(name: &str, revision: &str) -> String {
 }
 
 impl SmithChildFactory {
+    /// The route a recorded key names: the exact profile revision, or else the
+    /// profile's current route. A child recorded under an older revision then
+    /// still has a policy to compare, so its parent resumes and the child is
+    /// reported as changed rather than the whole session failing.
+    fn profile_route(&self, route_key: &str) -> Option<&SmithChildRoute> {
+        self.profile_routes.get(route_key).or_else(|| {
+            let (name, _) = route_key.strip_prefix("smith-profile:")?.rsplit_once('@')?;
+            self.profile_routes
+                .values()
+                .find(|route| route.agent_profile_name == name)
+        })
+    }
+
     fn route_for(&self, selection: &ChildModelSelection) -> Result<&SmithChildRoute, RuntimeError> {
         match selection {
             ChildModelSelection::Inherit => Ok(&self.default_route),
             ChildModelSelection::Explicit { provider, model } => {
                 if let Some(route_key) = provider
-                    && let Some(route) = self.profile_routes.get(route_key)
+                    && let Some(route) = self.profile_route(route_key)
                 {
                     if model == &route.model {
                         return Ok(route);
@@ -285,7 +298,17 @@ impl ChildRuntimeFactory for SmithChildFactory {
     }
 
     fn policy_fingerprint(&self, spec: &DurableChildSpec) -> Result<Fingerprint, RuntimeError> {
-        let route = self.route_for(&spec.model)?;
+        let route = match self.route_for(&spec.model) {
+            Ok(route) => route,
+            // A child this configuration can no longer route was recorded under
+            // a policy that is gone. That policy has changed, which Runtime
+            // reports on the child; failing here would refuse the parent.
+            Err(error) => {
+                return Ok(Fingerprint::of(
+                    format!("smith-child-route-unavailable\0{}", error.message).into_bytes(),
+                ));
+            }
+        };
         let prompt_revisions = route
             .prompt_contributor
             .fragments()

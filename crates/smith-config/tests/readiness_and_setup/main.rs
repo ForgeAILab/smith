@@ -158,6 +158,7 @@ fn catalog_snapshot() -> CatalogSnapshot {
         content_digest: format!("sha256:{}", "2".repeat(64)),
         source_revision: "fixture-r1".to_owned(),
         retrieved_at_ms: 1_000,
+        endpoint_catalogs: BTreeMap::new(),
         providers: BTreeMap::from([
             (
                 "openrouter".to_owned(),
@@ -183,6 +184,7 @@ fn catalog_snapshot() -> CatalogSnapshot {
 }
 
 mod inventory;
+mod model_sync;
 mod readiness;
 mod response_policy;
 mod trusted_providers;

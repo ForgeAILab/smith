@@ -20,7 +20,9 @@ use crate::status::{SessionUsage, counter_label};
 
 /// Record wire version.
 ///
-/// Bumped to 5 to retain each root/child binding across model switches.
+/// Version 6 freezes catalog price revisions with root/child, synthetic,
+/// advisor, vision, and module counters. Version 5 retained each root/child
+/// binding across model switches.
 /// Version 4 added separately attributed synthetic cache usage. Version 3
 /// added cache miss diagnostics: `cache_miss_count` and
 /// `cache_rebilled_tokens` are optional so an older record means "no cache
@@ -29,9 +31,9 @@ use crate::status::{SessionUsage, counter_label};
 /// `delegated_contributors` are new fields. Both carry `#[serde(default)]`
 /// so [`read_all`] stays tolerant of version-1 lines, which simply have no
 /// delegated usage to report.
-pub const USAGE_RECORD_SCHEMA_VERSION: u32 = 5;
+pub const USAGE_RECORD_SCHEMA_VERSION: u32 = 6;
 
-/// Durable binding attribution without catalog prices or conversation content.
+/// Durable binding attribution and frozen prices without conversation content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BindingUsageRecord {
     /// Absent for CLI agents or an unresolved serving binding.
@@ -40,6 +42,49 @@ pub struct BindingUsageRecord {
     pub model: String,
     /// Disjoint counters keyed by the same labels as the root rollup.
     pub totals: std::collections::BTreeMap<String, u64>,
+    /// Rates used for these counters; never re-resolved from today's catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price: Option<crate::status::PriceReference>,
+    /// Per-binding synthetic counters preserve independent price revisions.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub synthetic_by_purpose:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>>,
+    /// Provider measurement confidence for this exact bucket.
+    #[serde(default = "reported_default")]
+    pub reported: bool,
+}
+
+fn reported_default() -> bool {
+    true
+}
+
+impl From<&crate::status::BindingUsage> for BindingUsageRecord {
+    fn from(binding: &crate::status::BindingUsage) -> Self {
+        Self {
+            provider: binding.provider.clone(),
+            model: binding.model.clone(),
+            totals: binding
+                .totals
+                .iter()
+                .map(|(kind, value)| (counter_label(*kind).into(), *value))
+                .collect(),
+            price: binding.price.clone(),
+            synthetic_by_purpose: binding
+                .synthetic_by_purpose
+                .iter()
+                .map(|(purpose, totals)| {
+                    (
+                        purpose.as_str().into(),
+                        totals
+                            .iter()
+                            .map(|(kind, value)| (counter_label(*kind).into(), *value))
+                            .collect(),
+                    )
+                })
+                .collect(),
+            reported: binding.reported,
+        }
+    }
 }
 
 /// One session's bounded usage record.
@@ -77,6 +122,12 @@ pub struct SessionUsageRecord {
     /// Advisor provider counters, separately attributed from root turns.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub advisor_totals: std::collections::BTreeMap<String, u64>,
+    /// Advisor counters and their original price revisions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub advisor_bindings: Vec<BindingUsageRecord>,
+    /// Vision counters and their original price revisions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vision_bindings: Vec<BindingUsageRecord>,
     /// Module counters with their serving bindings, keyed by installed module id.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub module_usage: std::collections::BTreeMap<String, Vec<BindingUsageRecord>>,
@@ -124,6 +175,10 @@ struct SessionUsageRecordWire {
     #[serde(default)]
     advisor_totals: std::collections::BTreeMap<String, u64>,
     #[serde(default)]
+    advisor_bindings: Vec<BindingUsageRecord>,
+    #[serde(default)]
+    vision_bindings: Vec<BindingUsageRecord>,
+    #[serde(default)]
     module_usage: std::collections::BTreeMap<String, Vec<BindingUsageRecord>>,
     compactions: u32,
     reclaimed_tokens: u64,
@@ -153,6 +208,8 @@ impl<'de> Deserialize<'de> for SessionUsageRecord {
             synthetic_totals: wire.synthetic_totals,
             synthetic_by_purpose: wire.synthetic_by_purpose,
             advisor_totals: wire.advisor_totals,
+            advisor_bindings: wire.advisor_bindings,
+            vision_bindings: wire.vision_bindings,
             module_usage: wire.module_usage,
             compactions: wire.compactions,
             reclaimed_tokens: wire.reclaimed_tokens,
@@ -217,6 +274,16 @@ impl SessionUsageRecord {
                 .iter()
                 .map(|(kind, value)| (counter_label(*kind).to_owned(), *value))
                 .collect(),
+            advisor_bindings: usage
+                .advisor_bindings
+                .iter()
+                .map(BindingUsageRecord::from)
+                .collect(),
+            vision_bindings: usage
+                .vision_bindings
+                .iter()
+                .map(BindingUsageRecord::from)
+                .collect(),
             module_usage: std::collections::BTreeMap::new(),
             compactions: usage.compactions,
             reclaimed_tokens: usage.reclaimed_tokens,
@@ -240,40 +307,31 @@ impl SessionUsageRecord {
                     .module_usage
                     .entry(module.clone())
                     .or_default()
-                    .push(BindingUsageRecord {
-                        provider: binding.provider.clone(),
-                        model: binding.model.clone(),
-                        totals: binding
-                            .totals
-                            .iter()
-                            .map(|(kind, value)| (counter_label(*kind).into(), *value))
-                            .collect(),
-                    });
+                    .push(BindingUsageRecord::from(binding));
             }
         }
         for binding in &usage.bindings {
-            if binding.totals.is_empty() {
+            if binding.totals.is_empty() && binding.synthetic_by_purpose.is_empty() {
                 continue;
             }
             let totals = binding
                 .totals
                 .iter()
                 .map(|(kind, value)| (counter_label(*kind).to_owned(), *value));
-            if let Some(existing) = record
-                .bindings
-                .iter_mut()
-                .find(|entry| entry.provider == binding.provider && entry.model == binding.model)
-            {
+            if let Some(existing) = record.bindings.iter_mut().find(|entry| {
+                entry.provider == binding.provider
+                    && entry.model == binding.model
+                    && entry.price == binding.price
+                    && entry.reported == binding.reported
+                    && entry.synthetic_by_purpose.is_empty()
+                    && binding.synthetic_by_purpose.is_empty()
+            }) {
                 for (kind, value) in totals {
                     let total = existing.totals.entry(kind).or_default();
                     *total = total.saturating_add(value);
                 }
             } else {
-                record.bindings.push(BindingUsageRecord {
-                    provider: binding.provider.clone(),
-                    model: binding.model.clone(),
-                    totals: totals.collect(),
-                });
+                record.bindings.push(BindingUsageRecord::from(binding));
             }
         }
         if record.bindings.is_empty() {
@@ -288,6 +346,9 @@ impl SessionUsageRecord {
                 provider: self.provider.clone(),
                 model: self.model.clone(),
                 totals: self.totals.clone(),
+                price: None,
+                synthetic_by_purpose: Default::default(),
+                reported: self.reported,
             });
         }
     }
@@ -388,7 +449,7 @@ mod tests {
             &usage,
         );
 
-        assert_eq!(record.schema_version, 5);
+        assert_eq!(record.schema_version, USAGE_RECORD_SCHEMA_VERSION);
         assert_eq!(record.totals["cached"], 90_000);
         assert_eq!(record.synthetic_totals["cached"], 80_000);
         assert_eq!(
@@ -516,8 +577,10 @@ mod tests {
             module_usage: Default::default(),
             delegated_module_usage: Default::default(),
             advisor_price: None,
+            advisor_bindings: Vec::new(),
             vision_totals: Default::default(),
             vision_price: None,
+            vision_bindings: Vec::new(),
             cache_miss_count: 0,
             cache_rebilled_tokens: 0,
             bindings: Vec::new(),
@@ -557,8 +620,10 @@ mod tests {
             module_usage: Default::default(),
             delegated_module_usage: Default::default(),
             advisor_price: None,
+            advisor_bindings: Vec::new(),
             vision_totals: Default::default(),
             vision_price: None,
+            vision_bindings: Vec::new(),
             cache_miss_count: 0,
             cache_rebilled_tokens: 0,
             bindings: Vec::new(),
@@ -721,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn version_five_keeps_binding_counters_and_last_root_identity_without_prices() {
+    fn version_six_keeps_binding_counters_and_last_root_identity_without_unknown_prices() {
         use crate::status::{BindingUsage, Status};
         use agent_runtime_core::usage::UsageDelta;
         let mut status = Status::new("glm-5.3", "project");
@@ -742,7 +807,7 @@ mod tests {
             "build",
             &usage,
         );
-        assert_eq!(record.schema_version, 5);
+        assert_eq!(record.schema_version, USAGE_RECORD_SCHEMA_VERSION);
         assert_eq!(record.provider.as_deref(), Some("google"));
         assert_eq!(record.model, "gemini-3.8-flash");
         assert_eq!(record.bindings.len(), 3);

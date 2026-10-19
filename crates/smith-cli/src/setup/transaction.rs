@@ -15,6 +15,22 @@ pub(super) async fn apply_submission(
     if cancellation.requested() {
         return ApplyOutcome::Cancelled;
     }
+    if let SetupSubmission::AddModel {
+        provider, model, ..
+    } = &submission
+        && let Some(catalog) = context.catalog.endpoint_catalogs.get(provider)
+        && catalog.catalog.models.contains_key(model)
+        && let Err(error) =
+            crate::model_sync::validate_frozen_catalog(&context.user_dir, provider, catalog).await
+    {
+        return ApplyOutcome::Failed {
+            message: error.to_string(),
+            authentication: false,
+        };
+    }
+    if cancellation.requested() {
+        return ApplyOutcome::Cancelled;
+    }
     let enroller = CredentialEnroller::new();
     let outcome =
         apply_submission_with(context, submission, allow_collisions, &enroller, || async {
@@ -43,7 +59,31 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<(), (String, bool)>>,
 {
-    let plan = match setup_plan(submission) {
+    let explicit_model = match &submission {
+        SetupSubmission::AddModel {
+            provider,
+            model,
+            limits,
+            ..
+        } => Some((
+            format!("{provider}/{model}"),
+            *limits,
+            super::model_limits::configured_model_section(context, provider, model),
+        )),
+        _ => None,
+    };
+    let cache_backed_model = match &submission {
+        SetupSubmission::AddModel {
+            provider,
+            model,
+            limits,
+            ..
+        } if cache_supplies_limits(context, provider, model, *limits) => {
+            Some(format!("{provider}/{model}"))
+        }
+        _ => None,
+    };
+    let mut plan = match setup_plan(submission) {
         Ok(plan) => plan,
         Err(error) => {
             return ApplyOutcome::Failed {
@@ -52,6 +92,32 @@ where
             };
         }
     };
+    if let Some(model) = cache_backed_model {
+        // Discovery publishes generated metadata in the scoped cache. An
+        // unchanged selection must not turn it into a permanent TOML override.
+        plan.patch.models.remove(&model);
+    } else if let Some((model, limits, explicit)) = explicit_model
+        && let Some(patch) = plan.patch.models.get_mut(&model)
+    {
+        // Setup writes the user file, but a reviewed value may already belong
+        // to a higher project layer. Do not copy unchanged effective leaves
+        // into lower-precedence user overrides or create false collisions.
+        if explicit.context_tokens == Some(limits.context_tokens) {
+            patch.context_tokens = None;
+        }
+        if explicit.max_input_tokens == Some(limits.max_input_tokens) {
+            patch.max_input_tokens = None;
+        }
+        if explicit.max_output_tokens == Some(limits.max_output_tokens) {
+            patch.max_output_tokens = None;
+        }
+        if patch.context_tokens.is_none()
+            && patch.max_input_tokens.is_none()
+            && patch.max_output_tokens.is_none()
+        {
+            plan.patch.models.remove(&model);
+        }
+    }
     let prepared = match prepare_user_config_edit(&context.user_dir, &plan.patch) {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -105,6 +171,40 @@ where
             }
         }
     }
+}
+
+fn cache_supplies_limits(
+    context: &SetupContext,
+    provider: &str,
+    model: &str,
+    limits: super::SetupModelLimits,
+) -> bool {
+    let Some(section) = super::model_limits::configured_provider_section(context, provider) else {
+        return false;
+    };
+    let Some(kind) = section.kind.as_deref() else {
+        return false;
+    };
+    let Some(binding) = context
+        .catalog
+        .bound_provider(provider, kind, section.base_url.as_deref())
+    else {
+        return false;
+    };
+    if binding
+        .provider
+        .models
+        .get(model)
+        .and_then(|model| model.limits)
+        .is_none()
+    {
+        return false;
+    }
+    super::model_limits::prepared_model_limits(context, provider, model).is_some_and(|resolved| {
+        resolved.context_tokens == limits.context_tokens
+            && resolved.max_input_tokens == limits.max_input_tokens
+            && resolved.max_output_tokens == limits.max_output_tokens
+    })
 }
 
 async fn enroll_if_needed(
@@ -161,6 +261,8 @@ async fn preflight(context: &SetupContext) -> Result<(), (String, bool)> {
             .with_cli(context.selection.overrides()),
     )
     .map_err(|error| (error.to_string(), false))?;
+    let request = crate::config_command::authorize_catalog(request)
+        .map_err(|error| (error.to_string(), false))?;
     let resolution = match inspect(&request) {
         ConfigReadiness::Ready(resolution) => *resolution,
         ConfigReadiness::Unconfigured(_) => {

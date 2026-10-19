@@ -566,7 +566,8 @@ credential service, or make a network request.
 Smith SHALL augment the pure local selection inventory with models from an
 immutable, schema-validated catalog snapshot only for configured providers
 whose available adapter and normalized endpoint match a Smith-owned catalog
-binding. Catalog data MUST retain the configured provider's local identity and
+binding or a validated endpoint snapshot scoped to their exact configured
+provider/adapter/endpoint/account identity. Catalog data MUST retain the configured provider's local identity and
 MUST NOT create or modify a provider, endpoint, adapter, credential, header, or
 profile.
 
@@ -596,7 +597,8 @@ profile.
 - **BUT** its normalized endpoint is not the Smith-owned OpenRouter binding
 - **WHEN** Smith builds the selection inventory
 - **THEN** it does not attach the OpenRouter catalog to that provider
-- **AND** only locally configured or otherwise trusted models remain candidates
+- **AND** only locally configured, otherwise trusted, or exact-endpoint cached
+  models remain candidates
 
 #### Scenario: Inventory consumes a prepared snapshot
 
@@ -606,15 +608,24 @@ profile.
 - **AND** does not access a network, provider credential, keychain, or provider
   endpoint
 
+#### Scenario: Custom endpoint adds a model without a TOML record
+
+- **GIVEN** configured provider `xiaoge` has a prepared valid endpoint snapshot
+- **AND** that snapshot advertises `selected-large` with usable model metadata
+- **WHEN** Smith builds inventory and runtime preflight from that snapshot
+- **THEN** it offers `xiaoge/selected-large` with the same frozen limits
+- **AND** explicit model fields retain precedence over advertised fields
+- **AND** another endpoint's models or prices are never inherited by name
+
 ### Requirement: Catalog model validation and precedence
 
 Smith SHALL normalize only schema-valid catalog metadata into provider-scoped
 model records. Explicit Smith model configuration MUST retain field-level
 precedence over catalog metadata, and every winning catalog field MUST identify
 its catalog revision and retrieval provenance. A catalog entry MAY carry an
-optional per-counter price in USD per million tokens; an entry whose price
-block is absent, incomplete, or ill-typed MUST remain a valid selectable model
-record with no price rather than a rejected or partially-priced one. A model's
+optional per-counter price in USD per million tokens. Individually valid
+prices MUST be retained; missing, ill-typed, negative, or overflowing counters
+MUST remain unpriced without rejecting or disabling the model. A model's
 published maximum output MUST remain a ceiling rather than becoming Smith's
 implicit per-request output budget.
 
@@ -2799,3 +2810,33 @@ configuration layer may raise them above the built-in defaults.
   the default
 - **WHEN** configuration is resolved
 - **THEN** the setting is ignored and reported
+
+### Requirement: User-owned model synchronization policy
+
+Smith SHALL expose user-only `model_sync.enabled` and
+`model_sync.interval_hours`, defaulting to `true` and `24` respectively, with
+a validated integer interval from 1 through 168 hours. This policy governs
+process-owned refresh for eligible configured sources; it MUST NOT authorize
+project-controlled credential forwarding, endpoint changes, or model overrides.
+
+#### Scenario: Default daily refresh
+
+- **GIVEN** the user has not configured a synchronization policy
+- **WHEN** Smith prepares eligible authorized providers
+- **THEN** synchronization is enabled with a 24-hour interval
+- **AND** offline model enumeration remains independent of refresh
+
+#### Scenario: User disables synchronization
+
+- **GIVEN** owner-controlled configuration sets `model_sync.enabled = false`
+- **WHEN** Smith starts or remains open past the interval
+- **THEN** no automatic source refresh is scheduled
+- **AND** existing caches and explicit `smith models sync` remain usable
+
+#### Scenario: Invalid or project-owned policy
+
+- **GIVEN** an interval is zero, non-integer, above 168, or the policy is
+  declared by a project configuration layer
+- **WHEN** Smith validates configuration
+- **THEN** it reports the offending key and source before scheduling refresh
+- **AND** no credential read or metadata request is triggered by that value

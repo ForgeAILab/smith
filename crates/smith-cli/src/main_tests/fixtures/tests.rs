@@ -65,6 +65,7 @@ async fn fixtures_local_status_diagnostics() {
     priced.status.set_price(Some(PriceReference {
         provider: "local".into(),
         model: "example-model".into(),
+        provenance: None,
         table: PriceTable {
             input: Some(2_000_000),
             output: Some(8_000_000),

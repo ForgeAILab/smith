@@ -242,6 +242,78 @@ fn runtime_source_preserves_local_alias_and_nested_model_identity() {
 }
 
 #[test]
+fn endpoint_catalog_runtime_source_retains_its_exact_binding_and_revision() {
+    use smith_config::catalog::EndpointCatalog;
+
+    let mut snapshot = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
+    let mut model = snapshot.provider("openai").unwrap().models["gpt-6-astra"].clone();
+    model.id = "selected-large".to_owned();
+    model.name = "Selected large".to_owned();
+    model.limits = Some(CatalogLimits {
+        context_tokens: 1_048_576,
+        max_input_tokens: 1_000_000,
+        max_output_tokens: 256_000,
+    });
+    model.tool_call = true;
+    model.disabled_reason = None;
+    snapshot.endpoint_catalogs.insert(
+        "xiaoge".to_owned(),
+        EndpointCatalog {
+            binding_digest: "fixture-binding".to_owned(),
+            unadvertised_capabilities: BTreeSet::new(),
+            partial_limits: BTreeMap::new(),
+            kind: "openai-compatible".to_owned(),
+            base_url: "https://example.test/v1".to_owned(),
+            source: "endpoint/xiaoge".to_owned(),
+            revision: "endpoint-fixture-r1".to_owned(),
+            retrieved_at_ms: 123_456,
+            catalog: CatalogProvider {
+                id: "xiaoge".to_owned(),
+                name: "Xiaoge".to_owned(),
+                models: BTreeMap::from([(model.id.clone(), model)]),
+            },
+        },
+    );
+    let source = runtime_catalog_source(
+        &snapshot,
+        "xiaoge",
+        "openai-compatible",
+        Some("https://example.test/v1/"),
+    )
+    .expect("exact endpoint snapshot is a runtime source");
+    let record = source
+        .lookup("xiaoge", &ModelId::new("selected-large"))
+        .expect("discovered model resolves without a TOML record");
+    assert_eq!(record.context_tokens, Some(1_048_576));
+    assert_eq!(record.max_input_tokens, Some(1_000_000));
+    assert_eq!(record.max_output_tokens, Some(256_000));
+    assert_eq!(record.revision.as_deref(), Some("endpoint-fixture-r1"));
+    assert_eq!(record.retrieved, Some(Timestamp(123_456)));
+    assert!(
+        runtime_catalog_source(
+            &snapshot,
+            "xiaoge",
+            "openai-compatible",
+            Some("https://other.example.test/v1"),
+        )
+        .is_none()
+    );
+    assert!(
+        runtime_catalog_source(
+            &snapshot,
+            "different-account",
+            "openai-compatible",
+            Some("https://example.test/v1"),
+        )
+        .is_none()
+    );
+
+    let bytes = serde_json::to_vec(&snapshot).unwrap();
+    let reloaded = parse_snapshot(&bytes).expect("public cache still validates");
+    assert!(reloaded.endpoint_catalogs.is_empty());
+}
+
+#[test]
 fn runtime_catalog_image_input_uses_endpoint_bindings() {
     use agent_runtime_core::catalog::{LayeredModelCatalog, ModelCatalog};
 

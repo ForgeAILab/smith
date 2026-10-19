@@ -91,51 +91,69 @@ fn json(output: &Output) -> serde_json::Value {
 }
 
 fn serve_one_openai_request(listener: TcpListener) -> Vec<u8> {
-    let (mut stream, _) = listener.accept().expect("one provider request");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .expect("a read timeout");
-    let mut request = Vec::new();
-    let mut buffer = [0_u8; 4096];
-    let header_end = loop {
-        let read = stream.read(&mut buffer).expect("request bytes");
-        assert!(read > 0, "request ended before its headers");
-        request.extend_from_slice(&buffer[..read]);
-        if let Some(index) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
-            break index + 4;
+    loop {
+        let (mut stream, _) = listener.accept().expect("one provider request");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("a read timeout");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let read = stream.read(&mut buffer).expect("request bytes");
+            assert!(read > 0, "request ended before its headers");
+            request.extend_from_slice(&buffer[..read]);
+            if let Some(index) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().expect("content length"))
+            })
+            .unwrap_or(0);
+        while request.len() < header_end + content_length {
+            let read = stream.read(&mut buffer).expect("request body");
+            assert!(read > 0, "request body ended early");
+            request.extend_from_slice(&buffer[..read]);
         }
-    };
-    let headers = String::from_utf8_lossy(&request[..header_end]);
-    let content_length = headers
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse::<usize>().expect("content length"))
-        })
-        .unwrap_or(0);
-    while request.len() < header_end + content_length {
-        let read = stream.read(&mut buffer).expect("request body");
-        assert!(read > 0, "request body ended early");
-        request.extend_from_slice(&buffer[..read]);
-    }
 
-    let body = concat!(
-        "data: {\"choices\":[{\"delta\":{\"content\":\"Hello from the endpoint.\"}}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],",
-        "\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":5,",
-        "\"prompt_tokens_details\":{\"cached_tokens\":3}}}\n\n",
-        "data: [DONE]\n\n",
-    );
-    let response = format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+        // User-owned providers now refresh metadata in the background. Discovery
+        // may arrive before the serving request; it must not consume the fixture's
+        // one completion response or make this credential contract depend on timing.
+        if request.starts_with(b"GET /v1/models ") {
+            let body = r#"{"data":[{"id":"test-model"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("model discovery response");
+            continue;
+        }
+
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello from the endpoint.\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],",
+            "\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":5,",
+            "\"prompt_tokens_details\":{\"cached_tokens\":3}}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
          content-length: {}\r\nconnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream
-        .write_all(response.as_bytes())
-        .expect("provider response");
-    request
+            body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("provider response");
+        return request;
+    }
 }
 
 #[test]

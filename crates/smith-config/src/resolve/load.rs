@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::model::{
     AgentModeSection, AgentPosture, ApprovalMode, ApprovalSection, BackgroundExit,
     BackgroundSection, CacheSection, ChildAgentSection, ConfigFile, ContextCacheSection,
-    ContextSection, KIND_COMMAND_JSONL, LimitsSection, PersistenceSection,
+    ContextSection, KIND_COMMAND_JSONL, LimitsSection, ModelSyncSection, PersistenceSection,
 };
 use agent_runtime_core::store::Secret;
 
@@ -14,6 +14,15 @@ use super::agent::*;
 use super::provenance::*;
 use super::provider::*;
 use super::types::*;
+
+mod model_sync;
+
+pub(super) use model_sync::resolve_model_sync;
+use model_sync::validate_model_sync_policy;
+pub use model_sync::{
+    endpoint_discovery_authorized, resolve_model_sync_request, resolve_user_model_sync,
+    resolve_user_provider,
+};
 
 /// Resolves one run's configuration.
 ///
@@ -103,6 +112,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     provenance.extend(cli);
     provenance.extend(session);
     provenance.extend(advisor_binding);
+    validate_model_sync_policy(&provenance)?;
     apply_product_model_defaults(&mut provenance);
     apply_image_generation_defaults(&mut provenance);
     super::vision::explain_model_input(&mut provenance, request.catalog.as_deref())?;
@@ -505,6 +515,10 @@ pub(super) fn built_in_defaults(user_dir: &Path) -> ConfigFile {
         cache: Some(CacheSection {
             miss_notices: Some(true),
         }),
+        model_sync: Some(ModelSyncSection {
+            enabled: Some(true),
+            interval_hours: Some(24),
+        }),
         ..ConfigFile::default()
     }
 }
@@ -777,6 +791,23 @@ pub(super) fn contributions_of(
     layer: Layer,
     path: Option<&Path>,
 ) -> Result<Vec<Contribution>, ConfigError> {
+    if !matches!(layer, Layer::BuiltIn | Layer::UserFile)
+        && let Some(policy) = &file.model_sync
+    {
+        let field = if policy.enabled.is_some() {
+            "model_sync.enabled"
+        } else if policy.interval_hours.is_some() {
+            "model_sync.interval_hours"
+        } else {
+            "model_sync"
+        };
+        return Err(ConfigError::InvalidValue {
+            source: source_for(layer, path, field),
+            message:
+                "model synchronization policy is user-only; configure it in `~/.smith/config.toml`"
+                    .to_owned(),
+        });
+    }
     validate_model_context_windows(file, layer, path)?;
     let table = toml::Table::try_from(file).map_err(|err| ConfigError::Unrepresentable {
         message: err.to_string(),

@@ -145,6 +145,10 @@ impl SetupApp {
                     ),
                 ),
                 (
+                    "Requests",
+                    "the output ceiling is separate from the request output budget".into(),
+                ),
+                (
                     "Default",
                     if self.make_default {
                         "use this model"
@@ -180,7 +184,11 @@ impl SetupApp {
         let destination = review_destination(&self.destination, home.as_deref().map(Path::new));
         rows.push((
             "Writes",
-            format!("{destination}, then checks the configuration"),
+            if self.action == Some(SetupAction::AddModel) {
+                format!("explicit changes to {destination}, then checks the configuration")
+            } else {
+                format!("{destination}, then checks the configuration")
+            },
         ));
         rows
     }

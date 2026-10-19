@@ -7,23 +7,36 @@ pub fn runtime_catalog_source(
     kind: &str,
     base_url: Option<&str>,
 ) -> Option<Arc<dyn ModelCatalogSource>> {
-    let catalog_provider = catalog_provider_for(kind, base_url)?;
-    let provider = snapshot.provider(catalog_provider)?;
+    let binding = snapshot.bound_provider(local_provider, kind, base_url)?;
+    let provider = binding.provider;
     let mut source =
-        StaticSource::new("models.dev", CatalogSource::CachedRemote).for_provider(local_provider);
-    for model in provider.models.values().filter(|model| {
-        model.disabled_reason.is_none()
-            && model.tool_call
-            && model.has_text_output()
-            && model.limits.is_some()
-    }) {
-        let limits = model.limits.expect("filtered above");
-        let mut record = ModelRecord::new()
-            .with_limits(ModelLimits::new(
+        StaticSource::new(binding.source, CatalogSource::CachedRemote).for_provider(local_provider);
+    for model in provider
+        .models
+        .values()
+        .filter(|model| model.tool_call && model.has_text_output())
+    {
+        let mut record = ModelRecord::new();
+        if let Some(limits) = model.limits {
+            record = record.with_limits(ModelLimits::new(
                 limits.context_tokens,
                 limits.max_input_tokens,
                 limits.max_output_tokens,
-            ))
+            ));
+        } else if let Some(limits) = binding
+            .partial_limits
+            .and_then(|models| models.get(&model.id))
+        {
+            // Partial endpoint fields can complement an explicit override;
+            // preflight still rejects a profile without complete safe limits.
+            record.context_tokens = limits.context_tokens;
+            record.max_input_tokens = limits.max_input_tokens;
+            record.max_output_tokens = limits.max_output_tokens;
+        } else {
+            continue;
+        }
+        let output_ceiling = record.max_output_tokens;
+        record = record
             .with_capabilities(Capabilities {
                 streaming: true,
                 tools: model.tool_call,
@@ -47,10 +60,10 @@ pub fn runtime_catalog_source(
                 cache_contract: None,
                 auth: AuthKind::ApiKey,
                 continuation: false,
-                max_output_tokens: Some(limits.max_output_tokens),
+                max_output_tokens: output_ceiling,
             })
-            .with_revision(snapshot.source_revision.clone());
-        record.retrieved = Some(Timestamp(snapshot.retrieved_at_ms));
+            .with_revision(binding.revision.to_owned());
+        record.retrieved = Some(Timestamp(binding.retrieved_at_ms));
         record.input_modalities = (!model.input_modalities.is_empty()).then(|| {
             model
                 .input_modalities

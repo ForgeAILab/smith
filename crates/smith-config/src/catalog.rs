@@ -1,10 +1,10 @@
-//! Frozen, credential-free provider model metadata shared by inventory and runtime.
+//! Frozen provider model metadata shared by inventory and runtime.
 //!
 //! The host owns loading and refreshing this data. Configuration and picker
 //! code receive only an immutable value, which keeps enumeration pure and
 //! prevents a model choice from changing underneath runtime preflight.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -124,9 +124,121 @@ pub struct CatalogSnapshot {
     pub retrieved_at_ms: u64,
     /// Only the provider catalogs Smith explicitly supports.
     pub providers: BTreeMap<String, CatalogProvider>,
+    /// Separately validated endpoint snapshots, keyed by configured provider.
+    ///
+    /// The host verifies account scope before composing these in memory. They
+    /// never enter the public Models.dev cache or its deserialization path.
+    #[serde(skip)]
+    pub endpoint_catalogs: BTreeMap<String, EndpointCatalog>,
+}
+
+/// Metadata from one authorized configured endpoint after host validation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EndpointCatalog {
+    /// Non-secret digest of the exact provider/adapter/endpoint/account binding.
+    pub binding_digest: String,
+    /// Exact adapter kind used to discover the metadata.
+    pub kind: String,
+    /// Configured API base URL, matched after normalization.
+    pub base_url: String,
+    /// Secret-free source identity used in provenance.
+    pub source: String,
+    /// Frozen content revision.
+    pub revision: String,
+    /// Last successful validation time in Unix milliseconds.
+    pub retrieved_at_ms: u64,
+    /// Normalized provider-owned model metadata.
+    pub catalog: CatalogProvider,
+    /// Individually valid advertised limits, including incomplete model rows.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub partial_limits: BTreeMap<String, PartialCatalogLimits>,
+    /// Models with missing tool/text evidence and no explicit denial.
+    ///
+    /// Existing explicit models may retain their adapter behavior; newly
+    /// advertised IDs still need complete capability evidence to be selectable.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub unadvertised_capabilities: BTreeSet<String>,
+}
+
+/// Individually validated endpoint limits before a complete profile exists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PartialCatalogLimits {
+    /// Total context ceiling when published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u32>,
+    /// Separate input ceiling when published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u32>,
+    /// Output ceiling when published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+}
+
+/// One eligible catalog and its own immutable provenance.
+#[derive(Debug, Clone, Copy)]
+pub struct CatalogBinding<'a> {
+    /// Metadata eligible for the configured provider binding.
+    pub provider: &'a CatalogProvider,
+    /// Endpoint limit fields retained even when the complete profile is absent.
+    pub partial_limits: Option<&'a BTreeMap<String, PartialCatalogLimits>>,
+    /// Endpoint models with unknown tool/text advertisements, absent publicly.
+    pub unadvertised_capabilities: Option<&'a BTreeSet<String>>,
+    /// Secret-free source identity.
+    pub source: &'a str,
+    /// Frozen source revision.
+    pub revision: &'a str,
+    /// Last successful validation time in Unix milliseconds.
+    pub retrieved_at_ms: u64,
 }
 
 impl CatalogSnapshot {
+    /// Resolves metadata for one configured provider, adapter, and endpoint.
+    ///
+    /// Endpoint entries were already checked against account scope by the
+    /// host. Recheck the local provider, kind, and normalized endpoint here so
+    /// an unrelated provider never inherits custom metadata by model name.
+    pub fn bound_provider(
+        &self,
+        local_provider: &str,
+        kind: &str,
+        base_url: Option<&str>,
+    ) -> Option<CatalogBinding<'_>> {
+        // Reviewed deployment bindings retain the richer public catalog's
+        // precedence. ID-only endpoint listings cannot erase known prices,
+        // limits, or capabilities for these exact deployments.
+        if let Some(provider) =
+            catalog_provider_for(kind, base_url).and_then(|provider| self.provider(provider))
+        {
+            return Some(CatalogBinding {
+                provider,
+                partial_limits: None,
+                unadvertised_capabilities: None,
+                source: "models.dev",
+                revision: self.revision(),
+                retrieved_at_ms: self.retrieved_at_ms,
+            });
+        }
+        if let Some(entry) = self.endpoint_catalogs.get(local_provider)
+            && entry.kind == kind
+            && base_url
+                .and_then(normalized_endpoint)
+                .zip(normalized_endpoint(&entry.base_url))
+                .is_some_and(|(configured, cached)| configured == cached)
+        {
+            return Some(CatalogBinding {
+                provider: &entry.catalog,
+                partial_limits: Some(&entry.partial_limits),
+                unadvertised_capabilities: Some(&entry.unadvertised_capabilities),
+                source: &entry.source,
+                revision: &entry.revision,
+                retrieved_at_ms: entry.retrieved_at_ms,
+            });
+        }
+        None
+    }
+
     /// Returns one supported provider catalog.
     pub fn provider(&self, id: &str) -> Option<&CatalogProvider> {
         self.providers.get(id)
@@ -368,7 +480,7 @@ pub fn modality_catalog_provider_for(kind: &str, base_url: Option<&str>) -> Opti
     })
 }
 
-fn normalized_endpoint(raw: &str) -> Option<String> {
+pub(crate) fn normalized_endpoint(raw: &str) -> Option<String> {
     let url = Url::parse(raw).ok()?;
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
@@ -555,6 +667,147 @@ mod tests {
         );
     }
 
+    #[test]
+    fn endpoint_binding_requires_local_identity_adapter_and_normalized_url() {
+        let mut snapshot = snapshot_with("openrouter", &[("public-model", limits())]);
+        snapshot.endpoint_catalogs.insert(
+            "xiaoge".to_owned(),
+            EndpointCatalog {
+                binding_digest: String::new(),
+                unadvertised_capabilities: Default::default(),
+                kind: KIND_OPENAI_COMPATIBLE.to_owned(),
+                base_url: "https://gateway.example/v1".to_owned(),
+                source: "https://gateway.example/v1/models".to_owned(),
+                revision: "endpoint-r2".to_owned(),
+                retrieved_at_ms: 2_000,
+                partial_limits: BTreeMap::new(),
+                catalog: snapshot.provider("openrouter").unwrap().clone(),
+            },
+        );
+        let binding = snapshot
+            .bound_provider(
+                "xiaoge",
+                KIND_OPENAI_COMPATIBLE,
+                Some("https://GATEWAY.example/v1/"),
+            )
+            .expect("same normalized binding");
+        assert_eq!(binding.source, "https://gateway.example/v1/models");
+        assert_eq!(binding.revision, "endpoint-r2");
+        assert_eq!(binding.retrieved_at_ms, 2_000);
+        for (provider, kind, endpoint) in [
+            (
+                "another-local-name",
+                KIND_OPENAI_COMPATIBLE,
+                "https://gateway.example/v1",
+            ),
+            (
+                "xiaoge",
+                KIND_OPENAI_RESPONSES,
+                "https://gateway.example/v1",
+            ),
+            (
+                "xiaoge",
+                KIND_OPENAI_COMPATIBLE,
+                "https://another.example/v1",
+            ),
+            (
+                "xiaoge",
+                KIND_OPENAI_COMPATIBLE,
+                "https://gateway.example/v1?key=secret",
+            ),
+            (
+                "xiaoge",
+                KIND_OPENAI_COMPATIBLE,
+                "https://key@gateway.example/v1",
+            ),
+        ] {
+            assert!(
+                snapshot
+                    .bound_provider(provider, kind, Some(endpoint))
+                    .is_none()
+            );
+        }
+        let public = snapshot
+            .bound_provider("router", KIND_OPENAI_COMPATIBLE, Some(OPENROUTER_ENDPOINT))
+            .expect("public fallback");
+        assert_eq!(public.source, "models.dev");
+        assert_eq!(public.revision, snapshot.revision());
+    }
+
+    #[test]
+    fn public_snapshot_never_serializes_or_accepts_endpoint_catalogs() {
+        let mut snapshot = snapshot_with("openrouter", &[]);
+        snapshot.endpoint_catalogs.insert(
+            "private".to_owned(),
+            EndpointCatalog {
+                binding_digest: String::new(),
+                unadvertised_capabilities: Default::default(),
+                kind: KIND_OPENAI_COMPATIBLE.to_owned(),
+                base_url: "https://private.example/v1".to_owned(),
+                source: "private-endpoint".to_owned(),
+                revision: "private-revision".to_owned(),
+                retrieved_at_ms: 1_000,
+                partial_limits: BTreeMap::new(),
+                catalog: snapshot.provider("openrouter").unwrap().clone(),
+            },
+        );
+        let mut json = serde_json::to_value(&snapshot).expect("serialize public snapshot");
+        assert!(json.get("endpoint_catalogs").is_none());
+        let decoded: CatalogSnapshot = serde_json::from_value(json.clone()).expect("public cache");
+        assert!(decoded.endpoint_catalogs.is_empty());
+        json["endpoint_catalogs"] = serde_json::to_value(&snapshot.endpoint_catalogs).unwrap();
+        assert!(serde_json::from_value::<CatalogSnapshot>(json).is_err());
+    }
+
+    #[test]
+    fn reviewed_public_binding_keeps_richer_metadata_over_endpoint_listing() {
+        let mut snapshot = snapshot_with("openrouter", &[("rich-model", limits())]);
+        let mut public_model = priced_model();
+        public_model.id = "rich-model".to_owned();
+        public_model.limits = limits();
+        snapshot
+            .providers
+            .get_mut("openrouter")
+            .unwrap()
+            .models
+            .insert("rich-model".to_owned(), public_model);
+        snapshot.endpoint_catalogs.insert(
+            "router".to_owned(),
+            EndpointCatalog {
+                binding_digest: String::new(),
+                unadvertised_capabilities: Default::default(),
+                kind: KIND_OPENAI_COMPATIBLE.to_owned(),
+                base_url: OPENROUTER_ENDPOINT.to_owned(),
+                source: "endpoint/router".to_owned(),
+                revision: "newer-but-incomplete".to_owned(),
+                retrieved_at_ms: 5_000,
+                partial_limits: BTreeMap::new(),
+                catalog: CatalogProvider {
+                    id: "router".to_owned(),
+                    name: "Router".to_owned(),
+                    models: BTreeMap::new(),
+                },
+            },
+        );
+        let binding = snapshot
+            .bound_provider("router", KIND_OPENAI_COMPATIBLE, Some(OPENROUTER_ENDPOINT))
+            .unwrap();
+        assert_eq!(binding.source, "models.dev");
+        assert_eq!(binding.revision, "revision");
+        let model = &binding.provider.models["rich-model"];
+        assert!(model.cost.is_some());
+        assert!(model.limits.is_some());
+        assert!(model.tool_call);
+        snapshot.providers.clear();
+        assert_eq!(
+            snapshot
+                .bound_provider("router", KIND_OPENAI_COMPATIBLE, Some(OPENROUTER_ENDPOINT))
+                .unwrap()
+                .source,
+            "endpoint/router"
+        );
+    }
+
     fn snapshot_with(provider: &str, models: &[(&str, Option<CatalogLimits>)]) -> CatalogSnapshot {
         CatalogSnapshot {
             schema_revision: 1,
@@ -563,6 +816,7 @@ mod tests {
             content_digest: "content".to_owned(),
             source_revision: "revision".to_owned(),
             retrieved_at_ms: 0,
+            endpoint_catalogs: BTreeMap::new(),
             providers: BTreeMap::from([(
                 provider.to_owned(),
                 CatalogProvider {

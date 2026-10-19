@@ -16,6 +16,8 @@ xample". Policy tables may be top-level or profile-scoped as shown.
 scovery and precedence". nearest .smith/ directory.
   smith.configuration.image-generation · active · Smith configuration reference, section "Image gene
 ration". https://api.openai.com/v1.
+  smith.configuration.model-discovery-and-daily-synchronization · active · Smith configuration refer
+ence, section "Model discovery and daily synchronization". authenticated /models listing.
   smith.configuration.policy-keys-and-defaults · active · Smith configuration reference, section "Po
 licy keys and defaults". instructions may take together.
   smith.configuration.project-instructions-and-context-identity · active · Smith configuration refer
@@ -104,8 +106,6 @@ aries
 not loaded
   broken · it does not start with a --- frontmatter block declaring a description · <HOME>/.smit
 h/skills/broken/SKILL.md
-
-
 
 
 

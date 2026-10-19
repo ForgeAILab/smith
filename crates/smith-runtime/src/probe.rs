@@ -6,14 +6,9 @@
 //! and treats every failure as "nothing resolved": a probe is a proposal, not
 //! a prerequisite.
 
-use std::time::Duration;
+use std::collections::BTreeMap;
 
 use serde_json::Value;
-
-/// Wall-clock bound for one probe, covering connect and body.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-/// A listing larger than this is not a model listing Smith wants to trust.
-const MAX_LISTING_BYTES: usize = 1024 * 1024;
 
 /// Limit fields one listing entry advertised, each independently absent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -54,37 +49,14 @@ pub async fn openai_compatible_model_limits(
     bearer: Option<&str>,
     model: &str,
 ) -> Result<Option<OpenAiModelLimits>, String> {
-    let url = format!("{}/models", endpoint.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .connect_timeout(PROBE_TIMEOUT)
-        .timeout(PROBE_TIMEOUT)
-        .user_agent(concat!("smith/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|error| format!("building the model-listing client failed: {error}"))?;
-    let mut request = client.get(&url);
-    if let Some(bearer) = bearer {
-        request = request.bearer_auth(bearer);
+    match crate::provider_models::read_listing(endpoint, bearer, &BTreeMap::new(), None).await? {
+        crate::provider_models::ListingResponse::Fresh { listing, .. } => {
+            Ok(find_model_limits(&listing, model))
+        }
+        crate::provider_models::ListingResponse::NotModified => {
+            Err("the model listing returned 304 without a cached revision".to_owned())
+        }
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| format!("reading the model listing failed: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "the model listing answered {}",
-            response.status().as_u16()
-        ));
-    }
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| format!("reading the model listing failed: {error}"))?;
-    if body.len() > MAX_LISTING_BYTES {
-        return Err("the model listing exceeded Smith's size bound".to_owned());
-    }
-    let listing: Value = serde_json::from_slice(&body)
-        .map_err(|error| format!("the model listing was not JSON: {error}"))?;
-    Ok(find_model_limits(&listing, model))
 }
 
 /// Finds `model`'s entry in one parsed listing and reads its limit fields.
@@ -115,15 +87,22 @@ pub fn limits_from_models_entry(entry: &Value) -> OpenAiModelLimits {
     let input = ["max_input_tokens", "max_prompt_tokens"];
     let output = ["max_output_tokens", "max_completion_tokens", "max_tokens"];
     let nested = entry.get("top_provider");
+    let limits = entry.get("limits");
     let read = |source: &Value, fields: &[&str]| {
         fields
             .iter()
             .find_map(|field| positive_u32(source.get(*field)))
     };
     OpenAiModelLimits {
-        context_tokens: read(entry, &context).or_else(|| nested.and_then(|n| read(n, &context))),
-        max_input_tokens: read(entry, &input).or_else(|| nested.and_then(|n| read(n, &input))),
-        max_output_tokens: read(entry, &output).or_else(|| nested.and_then(|n| read(n, &output))),
+        context_tokens: read(entry, &context)
+            .or_else(|| nested.and_then(|n| read(n, &context)))
+            .or_else(|| limits.and_then(|n| read(n, &["context"]))),
+        max_input_tokens: read(entry, &input)
+            .or_else(|| nested.and_then(|n| read(n, &input)))
+            .or_else(|| limits.and_then(|n| read(n, &["input"]))),
+        max_output_tokens: read(entry, &output)
+            .or_else(|| nested.and_then(|n| read(n, &output)))
+            .or_else(|| limits.and_then(|n| read(n, &["output"]))),
     }
 }
 
@@ -193,6 +172,25 @@ mod tests {
         assert_eq!(
             find_model_limits(&vllm, "Qwen/Qwen2.5-Coder-32B-Instruct"),
             Some(OpenAiModelLimits::default())
+        );
+    }
+
+    #[test]
+    fn top_level_limits_take_precedence_over_nested_limit_aliases() {
+        let listing = json!({ "data": [{
+            "id": "gateway-model",
+            "context_window": 131072,
+            "max_input_tokens": 100000,
+            "max_output_tokens": 16000,
+            "limits": { "context": 262144, "input": 200000, "output": 32000 }
+        }] });
+        assert_eq!(
+            find_model_limits(&listing, "gateway-model"),
+            Some(OpenAiModelLimits {
+                context_tokens: Some(131072),
+                max_input_tokens: Some(100000),
+                max_output_tokens: Some(16000),
+            })
         );
     }
 

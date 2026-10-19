@@ -730,6 +730,36 @@ fn advisor_changes_are_reflected_in_profile_revisions() {
 }
 
 #[test]
+fn profile_revisions_do_not_depend_on_where_the_config_file_lives() {
+    let text = config("advisor = \"sol\"", "", SOL);
+    let here = Fixture::new(&text);
+    let there = Fixture::new(&text);
+    assert_ne!(here.project.path(), there.project.path());
+    let here_user = Fixture::new("");
+    here_user.write_user(&text);
+    let there_user = Fixture::new("");
+    there_user.write_user(&text);
+
+    let revision = |fixture: &Fixture| {
+        fixture
+            .resolve()
+            .expect("the shared configuration")
+            .config
+            .agent
+            .profile
+            .revision
+    };
+    // A moved home or project keeps every child route a session recorded.
+    assert_eq!(revision(&here), revision(&there));
+    assert_eq!(revision(&here_user), revision(&there_user));
+    // The layer still counts: a project may not stand in for the user.
+    assert_ne!(revision(&here), revision(&here_user));
+
+    here.write_project("config.local.toml", "advisor = false\n");
+    assert_ne!(revision(&here), revision(&there));
+}
+
+#[test]
 fn advisor_target_parsing_splits_on_the_first_slash() {
     assert_eq!(AdvisorTarget::parse("sol"), Some(profile("sol")));
     assert_eq!(
