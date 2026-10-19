@@ -373,6 +373,27 @@ pub fn resolve_reasoning_policy(
     } else if explicit_controls {
         resolve_explicit(metadata)?
     } else if endpoint == Some(ZAI_CODING_PLAN_ENDPOINT)
+        && let Some(controls) = catalog_controls.filter(|controls| !controls.efforts.is_empty())
+    {
+        // GLM-5.2 and later replace the on/off `thinking` switch with a
+        // validated `reasoning_effort` ladder and refuse to stop thinking,
+        // so an advertised ladder means the OpenAI-effort dialect with no
+        // `off`. Models that advertise only a toggle keep `thinking.type`.
+        let has_off = controls.efforts.iter().any(|effort| effort == "none");
+        ResolvedReasoningControls {
+            support: ReasoningSupport::Controllable,
+            switch: if has_off {
+                ReasoningSwitch::Optional
+            } else {
+                ReasoningSwitch::MandatoryOn
+            },
+            efforts: controls.efforts.clone(),
+            default_enabled: (!has_off).then_some(true),
+            default_effort: None,
+            dialect: Some(ReasoningDialect::OpenaiEffort),
+            capability_source: "Models.dev advertised Z.AI reasoning efforts".to_owned(),
+        }
+    } else if endpoint == Some(ZAI_CODING_PLAN_ENDPOINT)
         && trusted_model("zai", &config.model.value).is_some()
     {
         ResolvedReasoningControls {
@@ -387,12 +408,9 @@ pub fn resolve_reasoning_policy(
     } else if endpoint == Some(ZAI_CODING_PLAN_ENDPOINT)
         && profile.capabilities.reasoning != ReasoningSupport::Unsupported
     {
-        // The Z.AI Coding Plan endpoint exposes one normalized on/off
-        // `thinking` switch for every reasoning model it serves, so a
-        // catalog-advertised reasoning model is controllable without
-        // per-model metadata. The provider default stays unknown, and any
-        // catalog-advertised effort ladder is deliberately unused: the
-        // `thinking.type` wire dialect has no effort spelling.
+        // Without an advertised ladder, the Coding Plan endpoint's on/off
+        // `thinking` switch is the control every reasoning model accepts.
+        // The provider default stays unknown.
         ResolvedReasoningControls {
             support: ReasoningSupport::Controllable,
             switch: ReasoningSwitch::Optional,

@@ -745,6 +745,48 @@ fn zai_coding_plan_grants_the_thinking_switch_to_catalog_reasoning_models() {
 }
 
 #[test]
+fn zai_coding_plan_uses_an_advertised_effort_ladder_and_cannot_turn_off() {
+    let ladder = CatalogReasoningControls {
+        toggle: false,
+        efforts: vec!["low".to_owned(), "high".to_owned(), "max".to_owned()],
+    };
+    let mut config = resolved_config();
+    config.reasoning.effort = Some(Sourced::new(
+        "high".to_owned(),
+        Source::session("reasoning.effort"),
+    ));
+    let policy = resolve_reasoning_policy(
+        &config,
+        &model_profile(ReasoningSupport::Fixed),
+        Some(ZAI_CODING_PLAN_ENDPOINT),
+        Some(&ladder),
+    )
+    .expect("an advertised ladder is selectable");
+    assert_eq!(policy.dialect, Some(ReasoningDialect::OpenaiEffort));
+    assert_eq!(policy.efforts, ["low", "high", "max"]);
+    assert_eq!(policy.switch, ReasoningSwitch::MandatoryOn);
+    assert_eq!(
+        policy
+            .request_config()
+            .and_then(|reasoning| reasoning.effort),
+        Some("high".to_owned())
+    );
+
+    // GLM-5.2+ always thinks; `off` is refused rather than silently ignored.
+    let mut off = resolved_config();
+    off.reasoning.enabled = Some(Sourced::new(false, Source::session("reasoning.enabled")));
+    assert!(
+        resolve_reasoning_policy(
+            &off,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(ZAI_CODING_PLAN_ENDPOINT),
+            Some(&ladder),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn openai_effort_off_requires_an_advertised_none_effort() {
     let metadata_source = Source::built_in("test model metadata");
     let metadata = |efforts: Vec<String>| ResolvedModelReasoning {
