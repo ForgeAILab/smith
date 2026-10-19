@@ -5,10 +5,12 @@
 An automatic `delegation.child-completion` delivery SHALL be built within an
 inline budget equal to the resolved `context.tool_output_inline_bytes`. Each
 completed child's reply SHALL be delivered in full while it fits the
-remaining budget, in the delivery's existing deterministic order. A reply
-that does not fit SHALL be stored unchanged as an artifact owned by the
-parent session, and the delivery SHALL carry a bounded excerpt of it together
-with that artifact's reference. Smith MUST NOT refuse, defer, or drop an
+remaining budget, in the delivery's existing deterministic order; a reply of
+at most 1,024 bytes SHALL always be delivered in full. Every reply longer
+than 1,024 bytes SHALL be stored unchanged as an artifact owned by the parent
+session when the child completes. A reply that does not fit SHALL be
+delivered as its first 1,024 bytes together with that artifact's reference.
+Smith MUST NOT refuse, defer, or drop an
 admission because of the size of its replies, and an oversized outcome MUST
 NOT delay the delivery of any other outcome.
 
@@ -27,7 +29,7 @@ NOT delay the delivery of any other outcome.
 - **GIVEN** a child whose final reply fits the inline budget
 - **WHEN** its outcome is delivered automatically
 - **THEN** the delivery contains the reply verbatim
-- **AND** no artifact is created for it
+- **AND** the delivery carries no excerpt marker or artifact reference for it
 
 #### Scenario: A long reply does not block a later child
 
