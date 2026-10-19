@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-19T00:57:31Z
-updated_at: 2026-10-19T04:00:00Z
-completed_at:
+updated_at: 2026-10-19T04:41:12Z
+completed_at: 2026-10-19T04:41:12Z
 ---
 
 ## 1. Failing tests (Smith)
@@ -74,4 +74,7 @@ Recorded in Agent Runtime as
   passed 5 of 5 alone and in every later full run. The `smith-cli` test
   binary also aborts with SIGABRT in some parallel runs (3 of 5 here, 2 of 6
   on `release/v0.7.5` without this change), never single-threaded.
-- [ ] 3.5 Push the branch for CI; land on `main` after `release/v0.7.5`.
+- [x] 3.5 Push the branch for CI; land on `main` with `release/v0.7.5`.
+  All four jobs passed on `3caa61d` (run `39198787158`). The stacked
+  release and delivery fixes landed together on Smith `main` in `847e1c8`
+  for v0.7.5; the final commit only updates release notes and spec metadata.

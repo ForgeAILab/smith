@@ -421,8 +421,10 @@ different project instructions.
 Smith SHALL derive a deterministic revision for the effective agent-profile
 fragment from its resolved behavior, instructions, placement, and source
 identity, and SHALL include that revision in root prompt plans and child policy
-fingerprints. Smith MUST keep stable host, project-instruction, skill, memory,
-and profile revisions independently attributable.
+fingerprints. A value's source identity SHALL be its configuration layer and
+key; the path of the file that supplied it MUST NOT affect the revision. Smith
+MUST keep stable host, project-instruction, skill, memory, and profile
+revisions independently attributable.
 
 #### Scenario: Reuse an unchanged profile
 - **GIVEN** two equivalent compositions resolve the same effective profile and
@@ -436,6 +438,13 @@ and profile revisions independently attributable.
 - **WHEN** Smith plans provider context
 - **THEN** the profile revision and exact full prompt identity change
 - **AND** Smith does not claim reuse under the prior exact identity
+
+#### Scenario: The same configuration is read from another path
+- **GIVEN** identical configuration files in two homes or two projects
+- **WHEN** Smith resolves the profile from each
+- **THEN** both resolutions have the same profile revision
+- **AND** the same values from a project file and from the user file still
+  have different revisions
 
 #### Scenario: Debug profile identity
 - **GIVEN** a profile contains private or sensitive instruction text
