@@ -322,3 +322,171 @@ async fn resume_marks_unresolved_ephemeral_work_interrupted_without_restarting_i
         .await
         .expect("the second resume shuts down");
 }
+
+const ROUTED_CHILD_CONFIG: &str = r#"
+default_profile = "dev"
+
+[profiles.dev]
+provider = "local"
+model = "example-model"
+use = ["main"]
+
+[profiles.audit]
+provider = "local"
+model = "example-model"
+posture = "review"
+use = ["child"]
+instructions = "Audit the requested scope."
+
+[providers.local]
+kind = "fake"
+
+[models."local/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+"#;
+
+fn audit_profile(fixture: &Fixture) -> ResolvedConfig {
+    resolve(
+        &ResolveRequest::new(fixture.project.path())
+            .with_home_dir(fixture.home.path())
+            .with_cli(Overrides {
+                profile: Some("audit".to_owned()),
+                ..Overrides::default()
+            })
+            .with_profile_use(smith_config::model::ProfileUse::Child),
+    )
+    .expect("the child profile")
+    .config
+}
+
+fn routed_request(fixture: &Fixture, provider: &Arc<FakeProvider>) -> HostSessionRequest {
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.provider = Some(provider.clone());
+    request
+        .runtime
+        .child_profiles
+        .push(smith_runtime::factory::ChildProfileRequest {
+            vision_profile: None,
+            config: audit_profile(fixture),
+            catalog_sources: Vec::new(),
+        });
+    request
+}
+
+/// Runs one routed child to completion and returns the parent and child ids.
+async fn routed_child_session(
+    fixture: &Fixture,
+    provider: &Arc<FakeProvider>,
+) -> (SessionId, agent_runtime_core::ids::ChildId) {
+    let first = start(routed_request(fixture, provider))
+        .await
+        .expect("the first Smith host");
+    let parent = first.session().id().clone();
+    let mut parent_events = first.session().subscribe();
+    let coordinator = first
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+        .expect("the first coordinator");
+    let audit = audit_profile(fixture);
+    let route = smith_runtime::delegation::profile_route_key(
+        &audit.agent.profile.name,
+        &audit.agent.profile.revision,
+    );
+    let child = match coordinator
+        .spawn(ChildSpec {
+            task: UserInput::text("Audit the parser."),
+            model: ChildModelSelection::Explicit {
+                provider: Some(route),
+                model: agent_runtime_core::provider::ModelId::new("example-model"),
+            },
+            limits: ChildLimits::turns(1),
+            tools: ToolViewScope::ReadOnly,
+            workspace: WorkspacePolicy::ReadOnlyView,
+        })
+        .await
+        .expect("the routed child starts")
+    {
+        SpawnOutcome::Spawned { child, .. } => child,
+        other => panic!("expected a spawned child, got {other:?}"),
+    };
+    coordinator
+        .wait_task_outcome(&child)
+        .await
+        .expect("the routed child completes");
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while let Some(event) = parent_events.next().await {
+            if matches!(event.payload, RuntimeEvent::TurnCompleted { .. }) {
+                return;
+            }
+        }
+        panic!("the parent event stream ended before the delivery turn completed");
+    })
+    .await
+    .expect("the automatic delivery turn completes");
+    first.shutdown().await.expect("the first host shuts down");
+    (parent, child)
+}
+
+fn delivery_provider() -> Arc<FakeProvider> {
+    Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![ScriptedStream::new(vec![
+            ProviderStreamEvent::TextDelta {
+                text: "parent received the audit".to_owned(),
+            },
+            ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])],
+    ))
+}
+
+#[tokio::test]
+async fn a_parent_resumes_after_its_child_profile_changed_or_was_removed() {
+    for removed in [false, true] {
+        let fixture = Fixture::with_config(ROUTED_CHILD_CONFIG);
+        let provider = delivery_provider();
+        let (parent, child) = routed_child_session(&fixture, &provider).await;
+
+        let mut resume = if removed {
+            let config = ROUTED_CHILD_CONFIG.replace("use = [\"child\"]", "use = [\"main\"]");
+            std::fs::write(fixture.project.path().join(".smith/config.toml"), config)
+                .expect("the profile is no longer a child profile");
+            let mut request = fixture.request(HostSurface::Headless);
+            request.runtime.provider = Some(provider.clone());
+            request
+        } else {
+            let config = ROUTED_CHILD_CONFIG.replace(
+                "Audit the requested scope.",
+                "Audit the requested scope and cite evidence.",
+            );
+            std::fs::write(fixture.project.path().join(".smith/config.toml"), config)
+                .expect("the child profile changes");
+            routed_request(&fixture, &provider)
+        };
+        resume = resume.resume(parent.clone());
+        let resumed = start(resume)
+            .await
+            .unwrap_or_else(|error| panic!("the parent resumes (removed={removed}): {error}"));
+        let status = resumed
+            .runtime()
+            .delegation()
+            .and_then(|delegation| delegation.coordinator())
+            .expect("the resumed coordinator")
+            .status(&child)
+            .expect("the child is still listed");
+        assert_eq!(status.state, ChildState::Idle);
+        assert!(
+            status.incompatibility.is_some(),
+            "a child recorded under another policy is reported changed (removed={removed})"
+        );
+        resumed
+            .shutdown()
+            .await
+            .expect("the resumed host shuts down");
+    }
+}
