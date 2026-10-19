@@ -4,6 +4,11 @@ set -euo pipefail
 runtime_dir="${SMITH_AGENT_RUNTIME_DIR:-../agent-runtime}"
 runtime_manifest="${runtime_dir}/Cargo.toml"
 
+# These control this wrapper, not Smith configuration. Keep their shell values
+# for the checks below without exposing unknown SMITH_* settings to test
+# processes that exercise the production configuration resolver.
+export -n SMITH_AGENT_RUNTIME_DIR SMITH_AGENT_RUNTIME_REVISION SMITH_CI_CLIPPY_WARNINGS_ONLY
+
 if [[ ! -f "${runtime_manifest}" ]]; then
     echo "smith-ci: Agent Runtime is missing at ${runtime_manifest}" >&2
     echo "smith-ci: set SMITH_AGENT_RUNTIME_DIR to the tested checkout" >&2
