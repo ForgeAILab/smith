@@ -121,6 +121,7 @@ impl Module for StateModule {
             "failed" => Err(ModuleError("fixture mount error".into())),
             "inactive" => Ok(Mounted::Inactive {
                 reason: "fixture host condition".into(),
+                setup_hint: None,
             }),
             _ => Ok(Mounted::Contributions(vec![])),
         }
@@ -263,6 +264,22 @@ async fn headless_listing_matches_runtime_module_outcomes_without_a_session() {
                     "no vision model is configured".into()
                 } else {
                     "semantic summaries are disabled".into()
+                },
+                setup_hint: match row.id.as_str() {
+                    "vision" => Some(
+                        smith_module::SetupHint::new(
+                            "no vision model is configured, so images can't be viewed",
+                            "smith.guide.vision",
+                            vec![],
+                        )
+                        .with_setting("vision"),
+                    ),
+                    "image-generation" => Some(smith_module::SetupHint::new(
+                        "the active provider has no image binding, so images can't be generated",
+                        "smith.guide.setup",
+                        vec![],
+                    )),
+                    _ => None,
                 },
             }
         };

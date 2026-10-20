@@ -233,7 +233,7 @@ pub(super) fn resolve_agent_profiles(
                 instructions: None,
                 delegation,
                 advisor,
-                vision: model_selection(&global, name, "vision")?,
+                vision: vision_selection(&global, name)?,
                 uses,
                 provider: None,
                 model: None,
@@ -281,7 +281,7 @@ pub(super) fn resolve_agent_profiles(
                 instructions: None,
                 delegation,
                 advisor: None,
-                vision: None,
+                vision: ResolvedVision::Unset,
                 uses,
                 provider: None,
                 model: None,
@@ -295,7 +295,7 @@ pub(super) fn resolve_agent_profiles(
     for profile in profiles.values() {
         validate_advisor(profile.advisor.as_ref(), &profiles, declared)?;
         validate_vision(
-            profile.vision.as_ref(),
+            profile.vision.selected(),
             &profiles,
             declared,
             &global,
@@ -303,7 +303,7 @@ pub(super) fn resolve_agent_profiles(
         )?;
     }
     for profile in profiles.values_mut() {
-        profile.revision = with_vision(profile.revision.clone(), profile.vision.as_ref());
+        profile.revision = with_vision(profile.revision.clone(), &profile.vision);
     }
     Ok(profiles)
 }
@@ -371,14 +371,13 @@ pub(super) fn resolved_profile(
         },
         name,
     )?;
-    let vision = model_selection(
+    let vision = vision_selection(
         if effective.winner("vision").is_none() && uses.value.contains(&ProfileUse::Main) {
             global
         } else {
             effective
         },
         name,
-        "vision",
     )?;
     let provider = text(effective, "provider")?;
     let model = text(effective, "model")?;
@@ -502,6 +501,18 @@ fn advisor_selection(
     profile: &str,
 ) -> Result<Option<Sourced<AdvisorTarget>>, ConfigError> {
     model_selection(provenance, profile, "advisor")
+}
+
+fn vision_selection(provenance: &Provenance, profile: &str) -> Result<ResolvedVision, ConfigError> {
+    if let Some(target) = model_selection(provenance, profile, "vision")? {
+        return Ok(ResolvedVision::Selected(target));
+    }
+    Ok(match provenance.winner("vision") {
+        Some(entry) if entry.value == SettingValue::Flag(false) => {
+            ResolvedVision::Disabled(entry.source.clone())
+        }
+        _ => ResolvedVision::Unset,
+    })
 }
 
 fn model_selection(
@@ -634,17 +645,19 @@ fn validate_vision(
     Ok(())
 }
 
-/// Preserves existing profile revisions when no vision model is selected.
-fn with_vision(revision: String, vision: Option<&Sourced<VisionTarget>>) -> String {
-    let Some(vision) = vision else {
-        return revision;
+/// Keeps the old revision for unset vision; explicit choices include their source.
+fn with_vision(revision: String, vision: &ResolvedVision) -> String {
+    let (value, source) = match vision {
+        ResolvedVision::Unset => return revision,
+        ResolvedVision::Disabled(source) => ("false".to_owned(), source),
+        ResolvedVision::Selected(target) => (target.value.to_string(), &target.source),
     };
     let mut digest = Sha256::new();
     digest.update(revision.as_bytes());
     digest.update(b"\0vision\0");
-    digest.update(vision.value.to_string().as_bytes());
+    digest.update(value.as_bytes());
     digest.update([0]);
-    digest.update(source_identity(&vision.source).as_bytes());
+    digest.update(source_identity(source).as_bytes());
     format!("{:x}", digest.finalize())
 }
 
@@ -849,7 +862,7 @@ pub(super) fn extract(
         &request.known_modules,
     )?;
     validate_vision(
-        agent.profile.vision.as_ref(),
+        agent.profile.vision.selected(),
         &agent.profiles,
         declared,
         provenance,
@@ -1030,10 +1043,9 @@ pub(super) fn resolve_agent(
         provenance,
         selected_profile.map_or(active.value.as_str(), |selected| selected.value.as_str()),
     )?;
-    let default_vision = model_selection(
+    let default_vision = vision_selection(
         provenance,
         selected_profile.map_or(active.value.as_str(), |selected| selected.value.as_str()),
-        "vision",
     )?;
     let mut profile = match selected_profile {
         Some(selected) => profiles
@@ -1079,7 +1091,7 @@ pub(super) fn resolve_agent(
                         None,
                         true,
                     ),
-                    default_vision.as_ref(),
+                    &default_vision,
                 ),
                 legacy: true,
             }),
@@ -1147,7 +1159,7 @@ pub(super) fn resolve_agent(
                 ),
                 &profile.capabilities,
             ),
-            profile.vision.as_ref(),
+            &profile.vision,
         );
     }
     validate_advisor(profile.advisor.as_ref(), &profiles, declared)?;
@@ -1222,6 +1234,7 @@ pub(super) fn resolve_agent(
         profile,
         profiles,
         profile_order,
+        image_capable_profiles: Vec::new(),
         configured_advisor,
         advisor_overridden: advisor_override.is_some(),
     })

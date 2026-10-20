@@ -188,6 +188,8 @@ async fn wasm_watcher_fixture_reaches_an_idle_session_through_the_inbox() {
         model: None,
         vision: None,
         web: None,
+        vision_unset: true,
+        image_capable_profiles: Vec::new(),
         main_model_accepts_images: false,
         image_binding: None,
         session_history: None,

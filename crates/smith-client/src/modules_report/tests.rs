@@ -65,6 +65,7 @@ fn every_mount_outcome_keeps_the_deciding_key_layer_and_origin() {
         (
             ModuleState::Inactive {
                 reason: "no image binding".into(),
+                setup_hint: None,
             },
             "inactive · no image binding",
         ),
@@ -108,4 +109,23 @@ fn every_mount_outcome_keeps_the_deciding_key_layer_and_origin() {
         );
         assert!(text.contains("third-party (external-images)"), "{text}");
     }
+}
+
+#[test]
+fn inactive_hint_follows_the_reason_in_plain_module_status() {
+    let state = ModuleState::Inactive {
+        reason: "no vision model is configured".into(),
+        setup_hint: Some(smith_module::SetupHint::new(
+            "no vision model is configured, so images can't be viewed",
+            "smith.guide.vision",
+            vec!["visual".into()],
+        )),
+    };
+    let label = super::state_label(&state);
+    assert!(label.starts_with("inactive · no vision model is configured · "));
+    assert!(label.contains("set up with smith.guide.vision · profiles that accept images: visual"));
+    assert!(
+        !label.contains("tell them"),
+        "agent wording stays out of status"
+    );
 }

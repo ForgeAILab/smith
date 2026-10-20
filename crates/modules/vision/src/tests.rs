@@ -61,6 +61,8 @@ fn context() -> ModuleContext {
         http: None,
         model: None,
         image_binding: None,
+        vision_unset: true,
+        image_capable_profiles: Vec::new(),
         main_model_accepts_images: false,
         vision: Some(VisionBinding {
             provider: Arc::new(agent_runtime::provider::fake::FakeProvider::text_reply(
@@ -95,7 +97,7 @@ fn module_inactive_reasons_and_recomposition_follow_the_active_model() {
         "the host's reviewed-module policy decides read-only admission"
     );
     context.main_model_accepts_images = true;
-    let Mounted::Inactive { reason } = VisionModule.mount(&context).unwrap() else {
+    let Mounted::Inactive { reason, .. } = VisionModule.mount(&context).unwrap() else {
         panic!("inactive")
     };
     assert!(reason.contains("main model accepts images"));
@@ -105,12 +107,12 @@ fn module_inactive_reasons_and_recomposition_follow_the_active_model() {
         Mounted::Contributions(_)
     ));
     context.vision = None;
-    let Mounted::Inactive { reason } = VisionModule.mount(&context).unwrap() else {
+    let Mounted::Inactive { reason, .. } = VisionModule.mount(&context).unwrap() else {
         panic!("inactive")
     };
     assert!(reason.contains("no vision model"));
     context.built_in_tools = false;
-    let Mounted::Inactive { reason } = VisionModule.mount(&context).unwrap() else {
+    let Mounted::Inactive { reason, .. } = VisionModule.mount(&context).unwrap() else {
         panic!("inactive")
     };
     assert!(reason.contains("built-in tools are disabled"));
@@ -244,4 +246,60 @@ async fn mounted_module_contributes_placeholder_guidance() {
     assert!(body.contains("[image <id>: …] placeholders"));
     assert!(body.contains("calling view_image with that id as `image`"));
     assert_eq!(body.lines().count(), 1);
+}
+
+#[test]
+fn setup_hint_only_for_unset_vision_in_a_writable_text_only_session() {
+    let mut base = context();
+    base.vision = None;
+    base.image_capable_profiles = vec!["visual".into(), "other".into()];
+    let Mounted::Inactive {
+        setup_hint: Some(hint),
+        ..
+    } = VisionModule.mount(&base).unwrap()
+    else {
+        panic!("unset vision offers setup");
+    };
+    assert_eq!(hint.guide, "smith.guide.vision");
+    assert_eq!(hint.candidates, ["visual", "other"]);
+    assert!(hint.missing.contains("no vision model"));
+    for condition in ["disabled", "vision-main", "builtins-off"] {
+        let mut context = base.clone();
+        match condition {
+            "disabled" => context.vision_unset = false,
+            "vision-main" => context.main_model_accepts_images = true,
+            _ => context.built_in_tools = false,
+        }
+        assert!(
+            matches!(
+                VisionModule.mount(&context).unwrap(),
+                Mounted::Inactive {
+                    setup_hint: None,
+                    ..
+                }
+            ),
+            "{condition}"
+        );
+    }
+    base.image_capable_profiles.clear();
+    let Mounted::Inactive {
+        setup_hint: Some(hint),
+        ..
+    } = VisionModule.mount(&base).unwrap()
+    else {
+        panic!("setup remains useful without candidates");
+    };
+    assert!(hint.candidates.is_empty());
+    base.image_capable_profiles = (0..8).map(|n| format!("visual{n}")).collect();
+    let Mounted::Inactive {
+        setup_hint: Some(hint),
+        ..
+    } = VisionModule.mount(&base).unwrap()
+    else {
+        panic!("setup hint");
+    };
+    assert_eq!(
+        hint.candidates,
+        ["visual0", "visual1", "visual2", "visual3", "visual4"]
+    );
 }

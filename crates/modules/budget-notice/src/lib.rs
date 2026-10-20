@@ -35,6 +35,7 @@ impl Module for BudgetNoticeModule {
         if !context.semantic_summary_enabled {
             return Ok(Mounted::Inactive {
                 reason: "semantic summaries are disabled".into(),
+                setup_hint: None,
             });
         }
         // As in the factory port, a budget too small for the threshold omits
@@ -45,6 +46,7 @@ impl Module for BudgetNoticeModule {
         ) else {
             return Ok(Mounted::Inactive {
                 reason: "the input budget cannot fit the notice threshold".into(),
+                setup_hint: None,
             });
         };
         let component = Arc::new(component);

@@ -235,3 +235,39 @@ shared `smith-runtime` factory. A direct embedder that supplies its own skill
 sources replaces the set entirely and receives no implicit built-in entries.
 A user, trusted-workspace, or session declaration that reuses a built-in name
 shadows the shipped body while the built-in entry stays in the index.
+
+## Built-in task guides
+
+The references describe what each setting means. The task guides describe how
+to get something done: which keys and commands to use, whether the user or the
+agent does each step, and how to check the result. Each guide is compiled from
+`docs/guides/<topic>.md` and registers as one skill, activated whole. They
+are small enough not to need sections: at most about 1,200 tokens each, and
+600 for the index.
+
+| Skill | Embedded document | Task |
+| --- | --- | --- |
+| `smith.guide.overview` | `docs/guides/overview.md` | Index of the guides, and who runs what |
+| `smith.guide.setup` | `docs/guides/setup.md` | First run, providers, credentials, image generation |
+| `smith.guide.models-and-thinking` | `docs/guides/models-and-thinking.md` | Models, effort, thinking, context windows |
+| `smith.guide.vision` | `docs/guides/vision.md` | Let a text-only model see images |
+| `smith.guide.profiles-and-advisor` | `docs/guides/profiles-and-advisor.md` | Profiles, `profile_order`, the advisor |
+| `smith.guide.sessions` | `docs/guides/sessions.md` | Resume, undo, goals, child agents |
+| `smith.guide.extending` | `docs/guides/extending.md` | Skills, file commands, plugins, MCP, modules |
+| `smith.guide.headless` | `docs/guides/headless.md` | Scripting `smith -p` |
+| `smith.guide.troubleshooting` | `docs/guides/troubleshooting.md` | Diagnosing config and runtime problems |
+
+A guide is pre-activated only on its own short list of distinctive keywords,
+such as `vision` or `advisor`, never on everyday words like "file" or "model".
+That keeps a coding prompt from loading a how-to it doesn't need. The agent can
+still find any guide by its description through `registry.search`.
+
+Tests keep the guides honest: each body must match its file byte for byte and
+stay within its token bound. Every slash command, `smith` subcommand, and TOML
+example a guide names must also resolve against the real command registry and
+config schema.
+
+When a compiled-in module is inactive for a reason the user can fix, such as
+a text-only model with no `vision` set, Smith adds a short capability hint to
+the agent's context. The hint names the guide to activate and the user's own
+profiles that would work. `vision = false` turns the hint off.

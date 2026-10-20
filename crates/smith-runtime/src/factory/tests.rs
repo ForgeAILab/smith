@@ -1365,7 +1365,7 @@ fn agent(posture: AgentPosture) -> ResolvedAgent {
         instructions: None,
         delegation: sourced(true),
         advisor: None,
-        vision: None,
+        vision: smith_config::resolve::ResolvedVision::Unset,
         uses: sourced(vec![ProfileUse::Main]),
         provider: None,
         model: None,
@@ -1388,6 +1388,7 @@ fn agent(posture: AgentPosture) -> ResolvedAgent {
         profile: profile.clone(),
         profiles: std::collections::BTreeMap::from([(name.clone(), profile)]),
         profile_order: sourced(vec![name]),
+        image_capable_profiles: Vec::new(),
         configured_advisor: None,
         advisor_overridden: false,
     }

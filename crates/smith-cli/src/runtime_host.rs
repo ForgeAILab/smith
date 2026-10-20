@@ -1281,7 +1281,7 @@ fn resolve_vision_profile(
     if config.model_image_input.value == smith_config::resolve::ImageInput::Accepts {
         return Ok(None);
     }
-    let Some(vision) = &config.agent.profile.vision else {
+    let Some(vision) = config.agent.profile.vision.selected() else {
         return Ok(None);
     };
     request.cli = Default::default();

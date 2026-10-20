@@ -43,6 +43,16 @@ impl Module for ImageGenerationModule {
         if let Some(reason) = reason {
             return Ok(Mounted::Inactive {
                 reason: reason.into(),
+                setup_hint: (context.built_in_tools
+                    && context.posture != ModulePosture::ReadOnly
+                    && context.image_binding.is_none())
+                .then(|| {
+                    smith_module::SetupHint::new(
+                        "the active provider has no image binding, so images can't be generated",
+                        "smith.guide.setup",
+                        Vec::new(),
+                    )
+                }),
             });
         }
         let binding = context

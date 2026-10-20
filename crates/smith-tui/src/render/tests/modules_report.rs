@@ -11,7 +11,8 @@ fn every_module_state_renders_locally_with_its_reason_and_origin() {
         (ModuleState::Blocked { reason: ModuleBlockReason::Requirement("dependency".into()) }, "requires dependency"),
         (ModuleState::Blocked { reason: ModuleBlockReason::Cycle(vec!["a".into(), "b".into()]) }, "requirement cycle: a, b"),
         (ModuleState::Failed { reason: "fixture failure".into() }, "failed · fixture failure"),
-        (ModuleState::Inactive { reason: "no image binding".into() }, "inactive · no image binding"),
+        (ModuleState::Inactive { reason: "no image binding".into(), setup_hint: None }, "inactive · no image binding"),
+        (ModuleState::Inactive { reason: "no vision model".into(), setup_hint: Some(smith_client::modules_report::SetupHint::new("images cannot be viewed", "smith.guide.vision", vec!["visual".into()])) }, "set up with smith.guide.vision"),
     ] {
         let report = ModulesReport { rows: vec![ModuleRow {
             id: "external".into(), description: "External image tool".into(), state,

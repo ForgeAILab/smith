@@ -57,6 +57,8 @@ fn context() -> ModuleContext {
         posture: ModulePosture::ReadWrite,
         transport: Arc::new(ReplayTransport::single(Vec::new())),
         vision: None,
+        vision_unset: true,
+        image_capable_profiles: Vec::new(),
         main_model_accepts_images: false,
         model: None,
         image_binding: None,
@@ -265,6 +267,7 @@ fn conditional_inactivity_explains_why_no_values_mounted() {
             calls: calls.clone(),
             outcome: Ok(Mounted::Inactive {
                 reason: "semantic summary is disabled".into(),
+                setup_hint: None,
             }),
         }),
         origin: ModuleOrigin::FirstParty,
@@ -280,7 +283,8 @@ fn conditional_inactivity_explains_why_no_values_mounted() {
     assert_eq!(
         state(&plan, "conditional"),
         &ModuleState::Inactive {
-            reason: "semantic summary is disabled".into()
+            reason: "semantic summary is disabled".into(),
+            setup_hint: None
         }
     );
     assert_eq!(
@@ -321,4 +325,44 @@ fn empty_composition_has_no_mounts_or_reports() {
     let plan = mount_modules(&ModuleComposition::default(), &context());
     assert!(plan.mounted.is_empty());
     assert!(plan.report.is_empty());
+}
+
+#[test]
+fn inactive_setup_hints_survive_planning_with_a_bounded_candidate_list() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let module = CompiledModule {
+        module: Arc::new(Fixture {
+            id: "conditional",
+            requires: &[],
+            calls,
+            outcome: Ok(Mounted::Inactive {
+                reason: "no vision model".into(),
+                setup_hint: Some(crate::SetupHint {
+                    missing: "images cannot be viewed".into(),
+                    guide: "smith.guide.vision".into(),
+                    candidates: (0..8).map(|n| format!("visual{n}")).collect(),
+                    setting: None,
+                }),
+            }),
+        }),
+        origin: ModuleOrigin::FirstParty,
+    };
+    let plan = mount_modules(
+        &ModuleComposition::with_defaults(vec![module], vec![]),
+        &context(),
+    );
+    assert!(plan.mounted.is_empty());
+    let ModuleState::Inactive {
+        reason,
+        setup_hint: Some(hint),
+    } = state(&plan, "conditional")
+    else {
+        panic!("hint survives the inactive report");
+    };
+    assert_eq!(reason, "no vision model");
+    assert_eq!(
+        hint.candidates,
+        ["visual0", "visual1", "visual2", "visual3", "visual4"]
+    );
+    assert_eq!(hint.guide, "smith.guide.vision");
 }

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use smith_config::resolve::ResolvedModule;
 pub use smith_config::resolve::{Layer, Source};
-pub use smith_module::{ModuleBlockReason, ModuleOrigin, ModuleState};
+pub use smith_module::{ModuleBlockReason, ModuleOrigin, ModuleState, SetupHint};
 
 /// Every known module in deterministic id order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,7 +75,13 @@ pub fn state_label(state: &ModuleState) -> String {
             format!("blocked · requirement cycle: {}", ids.join(", "))
         }
         ModuleState::Failed { reason } => format!("failed · {reason}"),
-        ModuleState::Inactive { reason } => format!("inactive · {reason}"),
+        ModuleState::Inactive { reason, setup_hint } => {
+            let mut label = format!("inactive · {reason}");
+            if let Some(hint) = setup_hint {
+                label.push_str(&format!(" · {}", hint.status_text()));
+            }
+            label
+        }
     }
 }
 

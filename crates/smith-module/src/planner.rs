@@ -36,6 +36,8 @@ pub enum ModuleState {
     Inactive {
         /// Safe explanation provided by the module.
         reason: String,
+        /// User-fixable setup guidance, if the module supplied it.
+        setup_hint: Option<crate::SetupHint>,
     },
 }
 
@@ -253,7 +255,15 @@ fn mount_one(
             });
             ModuleState::Mounted
         }
-        Ok(Mounted::Inactive { reason }) => ModuleState::Inactive { reason },
+        Ok(Mounted::Inactive {
+            reason,
+            mut setup_hint,
+        }) => {
+            if let Some(hint) = &mut setup_hint {
+                hint.candidates.truncate(5);
+            }
+            ModuleState::Inactive { reason, setup_hint }
+        }
         Err(error) => ModuleState::Failed {
             reason: error.to_string(),
         },

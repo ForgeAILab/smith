@@ -195,3 +195,36 @@ fn modalities_value(modalities: &[CatalogModality]) -> SettingValue {
             .collect(),
     )
 }
+
+/// Uses the same frozen metadata and profile bindings as vision validation.
+pub(super) fn image_capable_profiles(
+    agent: &ResolvedAgent,
+    global: &Provenance,
+    catalog: Option<&CatalogSnapshot>,
+) -> Result<Vec<String>, ConfigError> {
+    let mut candidates = Vec::new();
+    for name in &agent.profile_order.value {
+        if *name == agent.profile.name {
+            continue;
+        }
+        let Some(profile) = agent
+            .profiles
+            .get(name)
+            .filter(|p| p.supports(crate::model::ProfileUse::Main))
+        else {
+            continue;
+        };
+        let provider = profile.provider.clone().or(text(global, "provider")?);
+        let model = profile.model.clone().or(text(global, "model")?);
+        if let (Some(provider), Some(model)) = (provider, model)
+            && crate::cli_agents::parse_cli_model_id(&model.value).is_none()
+            && model_input(global, &provider.value, &model.value, catalog)?
+                .image
+                .value
+                == ImageInput::Accepts
+        {
+            candidates.push(name.clone());
+        }
+    }
+    Ok(candidates)
+}

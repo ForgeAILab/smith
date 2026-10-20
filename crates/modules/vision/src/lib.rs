@@ -5,7 +5,7 @@ mod history;
 mod tool;
 
 use smith_module::{
-    Module, ModuleContext, ModuleContribution, ModuleError, Mounted, PipelineComponent,
+    Module, ModuleContext, ModuleContribution, ModuleError, Mounted, PipelineComponent, SetupHint,
 };
 use std::sync::Arc;
 
@@ -43,6 +43,19 @@ impl Module for VisionModule {
         if let Some(reason) = reason {
             return Ok(Mounted::Inactive {
                 reason: reason.into(),
+                // Read-only postures keep the hint only while they admit this
+                // module; the host's posture enforcement decides that.
+                setup_hint: (context.built_in_tools
+                    && !context.main_model_accepts_images
+                    && context.vision_unset)
+                    .then(|| {
+                        SetupHint::new(
+                            "no vision model is configured, so images can't be viewed",
+                            "smith.guide.vision",
+                            context.image_capable_profiles.clone(),
+                        )
+                        .with_setting("vision")
+                    }),
             });
         }
         let binding = context

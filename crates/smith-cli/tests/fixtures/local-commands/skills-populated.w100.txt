@@ -37,6 +37,24 @@ ction "Vision model for text-only agents". A vision model answers questions abou
 only main model.
   smith.configuration.web-tools · active · Smith configuration reference, section "Web tools". Web t
 ools let Smith read public pages and search for current information.
+  smith.guide.extending · active · Extend Smith with skills, file commands, plugins, MCP servers, an
+d modules; install, trust, list, and diagnose extensions.
+  smith.guide.headless · active · Run Smith non-interactively with smith -p, pass prompts and images
+, choose text or JSON output, resume sessions, and integrate scripts and automation.
+  smith.guide.models-and-thinking · active · Select or switch Smith models, enable or disable thinki
+ng and reasoning, choose effort and context windows, and verify model capabilities and limits.
+  smith.guide.overview · active · Find the right Smith task guide; discover CLI subcommands, slash c
+ommands, setup, models, profiles, sessions, extensions, automation, and troubleshooting.
+  smith.guide.profiles-and-advisor · active · Create and inherit Smith profiles, switch profiles and
+ postures, configure an advisor, and control delegation and capability limits.
+  smith.guide.sessions · active · List, resume, or start Smith sessions; undo, redo, or revert a tur
+n's file changes; set multi-turn goals; inspect and follow up child agents; read status and history.
+  smith.guide.setup · active · Set up Smith with a provider and model, connect credentials through u
+ser-run setup, configure image generation, and verify configuration and module availability.
+  smith.guide.troubleshooting · active · Diagnose Smith startup, configuration precedence, provider
+and model errors, missing tools, inactive modules, trust, approvals, and session recovery.
+  smith.guide.vision · active · Enable Smith image viewing for a text-only model, select a vision pr
+ofile or provider/model, interpret image placeholders, and diagnose unavailable view_image.
   smith.headless · active · Outline of the Smith headless protocol reference for smith -p: input mod
 es, text, json, and stream-json output formats, event framing, exit behavior, and resuming sessions
 non-interactively. Activate before scripting or integrating smith -p, then activate the section it n
@@ -106,24 +124,6 @@ aries
 not loaded
   broken · it does not start with a --- frontmatter block declaring a description · <HOME>/.smit
 h/skills/broken/SKILL.md
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

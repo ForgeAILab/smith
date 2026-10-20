@@ -330,6 +330,7 @@ pub(crate) fn plugin_composition(
                 } else {
                     smith_module::ModuleState::Inactive {
                         reason: "available; mounted when the session starts".into(),
+                        setup_hint: None,
                     }
                 };
                 let requirements = inner.as_ref().map_or_else(Vec::new, |module| {

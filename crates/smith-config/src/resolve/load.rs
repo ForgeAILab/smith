@@ -127,6 +127,12 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
         agent_profiles,
         request,
     )?;
+    let mut global = Provenance::default();
+    for layer in &file_layers {
+        global.extend(layer.clone());
+    }
+    config.agent.image_capable_profiles =
+        super::vision::image_capable_profiles(&config.agent, &global, request.catalog.as_deref())?;
     config.unknown_plugins = unknown_plugins;
     let cache_miss_notices = required_flag(&provenance, "cache.miss_notices")?;
     Ok(Resolution {

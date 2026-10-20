@@ -10,7 +10,7 @@ use smith_config::catalog::{
 use smith_config::model::{ConfigFile, KIND_COMMAND_JSONL, ProfileUse, VisionSelection};
 use smith_config::resolve::{
     ConfigError, ImageInput, Layer, Overrides, ReferenceKind, Resolution, ResolveRequest,
-    SettingValue, VisionTarget, image_input, resolve,
+    ResolvedVision, SettingValue, VisionTarget, image_input, resolve,
 };
 use tempfile::TempDir;
 
@@ -304,7 +304,14 @@ fn chatgpt_vision_profile_validates_through_the_openai_catalog() {
     let resolution = resolve(&fixture.request().with_catalog(Arc::new(endpoint_catalog())))
         .expect("ChatGPT vision profile without credential access");
     assert_eq!(
-        resolution.config.agent.profile.vision.unwrap().value,
+        resolution
+            .config
+            .agent
+            .profile
+            .vision
+            .selected()
+            .unwrap()
+            .value,
         VisionTarget::Profile("luna".to_owned())
     );
 }
@@ -546,7 +553,7 @@ max_output_tokens = 4096
 fn top_level_vision_model_reference_resolves_with_catalog_metadata() {
     let fixture = Fixture::new("vision = \"google/gemini-3-flash\"", "", "");
     let resolution = fixture.resolve().unwrap();
-    let selected = resolution.config.agent.profile.vision.unwrap();
+    let selected = resolution.config.agent.profile.vision.selected().unwrap();
     assert_eq!(selected.value, model("google", "gemini-3-flash"));
     assert_eq!(selected.source.key, "vision");
     assert_eq!(
@@ -571,6 +578,7 @@ fn explicit_vision_input_loads_without_a_catalog() {
             .agent
             .profile
             .vision
+            .selected()
             .unwrap()
             .value,
         model("acme", "uncatalogued-vl")
@@ -611,7 +619,10 @@ fn valid_vision_loads_when_the_main_model_already_accepts_images() {
         resolution.config.model_image_input.value,
         ImageInput::Accepts
     );
-    assert!(resolution.config.agent.profile.vision.is_some());
+    assert!(matches!(
+        resolution.config.agent.profile.vision,
+        ResolvedVision::Selected(_)
+    ));
 }
 
 #[test]
@@ -644,7 +655,7 @@ fn inherited_profile_selection_overrides_a_disabled_default_and_changes_revision
         "[profiles.base]\nvision = \"sol\"",
     );
     let with_vision = fixture.resolve().unwrap();
-    let selected = with_vision.config.agent.profile.vision.as_ref().unwrap();
+    let selected = with_vision.config.agent.profile.vision.selected().unwrap();
     assert_eq!(selected.value, VisionTarget::Profile("sol".to_owned()));
     assert_eq!(selected.source.key, "profiles.base.vision");
     let explained = with_vision.provenance.explain("vision").unwrap();
@@ -652,7 +663,10 @@ fn inherited_profile_selection_overrides_a_disabled_default_and_changes_revision
     assert_eq!(explained.overridden[0].value, SettingValue::Flag(false));
     fixture.write_project("config.local.toml", "[profiles.code]\nvision = false");
     let without_vision = fixture.resolve().unwrap();
-    assert!(without_vision.config.agent.profile.vision.is_none());
+    assert!(matches!(
+        without_vision.config.agent.profile.vision,
+        ResolvedVision::Disabled(_)
+    ));
     assert_ne!(
         with_vision.config.agent.profile.revision,
         without_vision.config.agent.profile.revision
@@ -679,7 +693,10 @@ fn unusable_profile_selection_reports_the_profile_vision_key() {
 fn profile_can_disable_top_level_vision() {
     let fixture = Fixture::new("vision = \"sol\"", "vision = false", "");
     let resolution = fixture.resolve().unwrap();
-    assert!(resolution.config.agent.profile.vision.is_none());
+    assert!(matches!(
+        resolution.config.agent.profile.vision,
+        ResolvedVision::Disabled(_)
+    ));
     let explained = resolution.provenance.explain("vision").unwrap();
     assert_eq!(explained.value, SettingValue::Flag(false));
     assert_eq!(explained.source.key, "profiles.code.vision");
@@ -744,7 +761,14 @@ fn child_profile_resolves_its_own_inherited_vision() {
     )
     .unwrap();
     assert_eq!(
-        resolution.config.agent.profile.vision.unwrap().value,
+        resolution
+            .config
+            .agent
+            .profile
+            .vision
+            .selected()
+            .unwrap()
+            .value,
         VisionTarget::Profile("sol".to_owned())
     );
 }
@@ -776,7 +800,10 @@ fn unknown_vision_targets_use_advisor_reference_errors() {
 fn top_level_self_default_is_skipped_but_profile_self_reference_is_rejected() {
     let fixture = Fixture::new("vision = \"sol\"", "", "");
     let resolution = fixture.resolve().unwrap();
-    assert!(resolution.config.agent.profiles["sol"].vision.is_none());
+    assert_eq!(
+        resolution.config.agent.profiles["sol"].vision,
+        ResolvedVision::Unset
+    );
     for (own, extra, key) in [
         ("vision = \"code\"", "", "profiles.code.vision"),
         (
@@ -887,4 +914,94 @@ fn inline_images_profile_override_has_provenance() {
     assert_eq!(explained.source.key, "profiles.code.context.inline_images");
     assert_eq!(explained.source.layer, Layer::Profile);
     assert_eq!(explained.overridden[0].value, SettingValue::Integer(12));
+}
+
+#[test]
+fn vision_unset_and_disabled_retain_distinct_sources_and_revisions() {
+    let fixture = Fixture::new("", "", "");
+    let unset = fixture.resolve().unwrap();
+    assert_eq!(unset.config.agent.profile.vision, ResolvedVision::Unset);
+    fixture.write_project("config.local.toml", "[profiles.code]\nvision = false");
+    let disabled = fixture.resolve().unwrap();
+    let ResolvedVision::Disabled(source) = &disabled.config.agent.profile.vision else {
+        panic!("explicit opt-out survives resolution");
+    };
+    assert_eq!(source.key, "profiles.code.vision");
+    assert_eq!(source.layer, Layer::Profile);
+    assert_eq!(
+        *source,
+        disabled.provenance.explain("vision").unwrap().source
+    );
+    assert_ne!(
+        unset.config.agent.profile.revision,
+        disabled.config.agent.profile.revision
+    );
+    fixture.write_project("config.local.toml", "vision = false");
+    let disabled = fixture.resolve().unwrap();
+    assert!(
+        matches!(&disabled.config.agent.profile.vision, ResolvedVision::Disabled(source) if source.layer == Layer::ProjectLocalFile && source.key == "vision")
+    );
+}
+
+#[test]
+fn image_candidates_use_frozen_catalog_inherited_bindings_and_profile_order() {
+    let fixture = Fixture::new(
+        "profile_order = [\"zeta\", \"unknown\", \"code\", \"sol\", \"blind\", \"command\"]",
+        "",
+        r#"
+[profiles.zeta]
+extends = "sol"
+[profiles.child]
+extends = "sol"
+use = ["child"]
+[profiles.unknown]
+extends = "code"
+model = "unknown"
+[profiles.blind]
+extends = "code"
+[profiles.command]
+provider = "bridge"
+model = "eyes"
+[models."bridge/eyes"]
+input_modalities = ["image"]
+"#,
+    );
+    fixture.write_user(
+        r#"
+[providers.bridge]
+kind = "command-jsonl"
+[providers.bridge.command]
+executable = "/must-not-run"
+"#,
+    );
+    let resolution = fixture.resolve().unwrap();
+    assert_eq!(
+        resolution.config.agent.image_capable_profiles,
+        ["zeta", "sol"]
+    );
+    let visual = resolve(&fixture.request().with_cli(Overrides {
+        profile: Some("sol".into()),
+        ..Overrides::default()
+    }))
+    .unwrap();
+    assert_eq!(visual.config.agent.image_capable_profiles, ["zeta"]);
+    assert!(
+        fixture.resolve().is_ok(),
+        "credential file references must not be read"
+    );
+}
+
+#[test]
+fn image_candidates_are_empty_without_image_metadata() {
+    let fixture = Fixture::new("", "", "");
+    let mut request = fixture.request();
+    request.catalog = None;
+    assert!(
+        resolve(&request)
+            .unwrap()
+            .config
+            .agent
+            .image_capable_profiles
+            .is_empty()
+    );
 }

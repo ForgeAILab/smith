@@ -106,16 +106,22 @@ impl Fixture {
         vision: Arc<dyn Provider>,
     ) -> RuntimeRequest {
         let config = self.config(model);
-        let target = config.agent.profile.vision.clone().map(|target| {
-            let config = resolve(&self.resolution().with_advisor_route(target))
-                .unwrap()
-                .config;
-            Box::new(VisionProfileRequest {
-                config,
-                catalog_sources: Vec::new(),
-                provider: Some(vision),
-            })
-        });
+        let target = config
+            .agent
+            .profile
+            .vision
+            .selected()
+            .cloned()
+            .map(|target| {
+                let config = resolve(&self.resolution().with_advisor_route(target))
+                    .unwrap()
+                    .config;
+                Box::new(VisionProfileRequest {
+                    config,
+                    catalog_sources: Vec::new(),
+                    provider: Some(vision),
+                })
+            });
         let mut request = RuntimeRequest::new(config, HostSurface::Headless);
         request.vision_profile = target;
         request.provider = Some(main);
@@ -408,7 +414,7 @@ async fn model_rebuild_mounts_and_unmounts_vision_from_the_active_binding() {
             .unwrap();
         if !available {
             assert!(
-                matches!(&report.state, ModuleState::Inactive { reason } if reason.contains("main model accepts images"))
+                matches!(&report.state, ModuleState::Inactive { reason, .. } if reason.contains("main model accepts images"))
             );
         }
     }
@@ -446,10 +452,10 @@ async fn inactive_and_disabled_modules_need_no_vision_provider() {
             .state;
         match condition {
             "unconfigured" => assert!(
-                matches!(state, ModuleState::Inactive { reason } if reason.contains("no vision model"))
+                matches!(state, ModuleState::Inactive { reason, .. } if reason.contains("no vision model"))
             ),
             "builtins-disabled" => assert!(
-                matches!(state, ModuleState::Inactive { reason } if reason.contains("built-in tools are disabled"))
+                matches!(state, ModuleState::Inactive { reason, .. } if reason.contains("built-in tools are disabled"))
             ),
             _ => assert_eq!(state, &ModuleState::Off),
         }
@@ -722,5 +728,98 @@ async fn plan_posture_keeps_vision_by_default_and_empty_network_list_restores_st
             .unwrap();
         assert_eq!(smith.abilities().names().contains(&"view_image"), allowed);
         assert!(!smith.abilities().names().contains(&"edit"));
+    }
+}
+
+#[tokio::test]
+async fn unset_vision_hint_reaches_requests_stably_and_respects_opt_out_and_posture() {
+    for condition in [
+        "unset",
+        "disabled",
+        "vision-main",
+        "read-only",
+        "strict-read-only",
+        "builtins-off",
+    ] {
+        let config = CONFIG.replace(
+            "vision = \"camera\"",
+            if condition == "disabled" {
+                "vision = false"
+            } else {
+                ""
+            },
+        );
+        let fixture = Fixture::new(&config);
+        let model = if condition == "vision-main" {
+            "seeing"
+        } else {
+            "worker"
+        };
+        let main = provider(
+            model,
+            vec![
+                ScriptedStream::new(stop_events("one")),
+                ScriptedStream::new(stop_events("two")),
+            ],
+        );
+        let mut request = fixture.request(model, main.clone(), vision_provider());
+        if condition.ends_with("read-only") {
+            request.config.agent.profile.posture.value = smith_config::model::AgentPosture::Plan;
+        }
+        if condition == "strict-read-only" {
+            request.config.agent.read_only_network_modules.value.clear();
+        }
+        if condition == "builtins-off" {
+            request.built_in_tools = false;
+        }
+        let host = start(HostSessionRequest::new(request, fixture.project.path()))
+            .await
+            .unwrap();
+        host.session()
+            .run(UserInput {
+                parts: vec![
+                    ContentPart::text("one"),
+                    ContentPart::Image {
+                        url: image_url(),
+                        detail: None,
+                    },
+                ],
+            })
+            .await
+            .unwrap();
+        host.session().run(UserInput::text("two")).await.unwrap();
+        let requests = main.requests();
+        assert_eq!(requests.len(), 2);
+        if condition != "vision-main" {
+            assert!(
+                requests[0]
+                    .messages
+                    .iter()
+                    .any(|message| message.joined_text().contains("[image "))
+            );
+        }
+        let hints = requests
+            .iter()
+            .map(|request| {
+                request
+                    .messages
+                    .iter()
+                    .map(|message| message.joined_text())
+                    .filter(|text| text.contains("Raise a missing capability"))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(hints[0], hints[1], "stable across turns: {condition}");
+        // The default read-only posture still admits `vision`, so the
+        // hint names a fix that works there; a strict list does not.
+        if matches!(condition, "unset" | "read-only") {
+            assert_eq!(hints[0].len(), 1);
+            assert!(hints[0][0].contains("Profiles that accept images: camera"));
+            assert!(hints[0][0].contains("offer to set `vision` to one of these"));
+            assert!(hints[0][0].contains("Activate smith.guide.vision"));
+        } else {
+            assert!(hints[0].is_empty(), "{condition}: {:?}", hints[0]);
+        }
+        host.shutdown().await.unwrap();
     }
 }

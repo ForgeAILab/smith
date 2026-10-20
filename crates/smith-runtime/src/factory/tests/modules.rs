@@ -1202,3 +1202,150 @@ async fn a_child_rebuild_omits_disabled_wasm_schemas_without_disabling_siblings(
 }
 
 mod web;
+
+#[tokio::test]
+async fn capability_hint_fragment_is_stable_revisioned_and_absent_without_hints() {
+    use agent_runtime::context::{FragmentContent, FragmentKind};
+    use smith_module::{ModuleDescriptor, ModuleReport, MountPlan, SetupHint};
+
+    let mut plan = MountPlan::default();
+    assert!(super::super::modules::capability_hints(&plan).is_none());
+    plan.report.push(ModuleReport {
+        descriptor: ModuleDescriptor {
+            id: "vision".into(),
+            description: "vision".into(),
+            default_enabled: true,
+            origin: ModuleOrigin::FirstParty,
+            compiled_in: true,
+        },
+        state: ModuleState::Inactive {
+            reason: "no vision model".into(),
+            setup_hint: None,
+        },
+        health: None,
+    });
+    assert!(super::super::modules::capability_hints(&plan).is_none());
+    plan.report[0].state = ModuleState::Inactive {
+        reason: "no vision model".into(),
+        setup_hint: Some(SetupHint::new(
+            "no vision model is configured, so images can't be viewed",
+            "smith.guide.vision",
+            vec!["visual".into()],
+        )),
+    };
+    let first = super::super::modules::capability_hints(&plan).unwrap();
+    let second = super::super::modules::capability_hints(&plan).unwrap();
+    assert_eq!(first.body, second.body);
+    assert_eq!(first.revision, second.revision);
+    let view = |turn: &str| ContextView {
+        session: agent_runtime_core::ids::SessionId::new("hints"),
+        turn: agent_runtime_core::ids::TurnId::new(turn),
+        history: Arc::from([]),
+        activation: agent_runtime::registry::Fingerprint::of("hints"),
+        state: None,
+    };
+    let patch = first.contribute(&view("one")).await.unwrap();
+    let again = second.contribute(&view("two")).await.unwrap();
+    assert_eq!(patch.fragments, again.fragments);
+    let [fragment] = patch.fragments.as_slice() else {
+        panic!("one fragment")
+    };
+    assert_eq!(fragment.kind, FragmentKind::DeveloperInstruction);
+    let FragmentContent::Text(body) = &fragment.content else {
+        panic!("text")
+    };
+    assert_eq!(body.lines().count(), 2);
+    assert!(body.contains("only when the current request needs it"));
+    assert!(body.contains("vision: no vision model"));
+    assert!(body.contains("Profiles that accept images: visual"));
+    assert!(body.contains("activate smith.guide.vision"));
+    if let ModuleState::Inactive {
+        setup_hint: Some(hint),
+        ..
+    } = &mut plan.report[0].state
+    {
+        hint.candidates.push("another".into());
+    }
+    let changed = super::super::modules::capability_hints(&plan).unwrap();
+    assert_ne!(first.revision, changed.revision);
+    let mut image = plan.report[0].clone();
+    image.descriptor.id = "image-generation".into();
+    image.state = ModuleState::Inactive {
+        reason: "no image binding".into(),
+        setup_hint: Some(SetupHint::new(
+            "images cannot be generated",
+            "smith.guide.setup",
+            vec![],
+        )),
+    };
+    plan.report.push(image);
+    let combined = super::super::modules::capability_hints(&plan).unwrap();
+    let patch = combined.contribute(&view("three")).await.unwrap();
+    assert_eq!(patch.fragments.len(), 1);
+    assert_eq!(patch.fragments[0].id.as_str(), "smith.capability-hints");
+    assert_eq!(combined.body.lines().count(), 3);
+    assert!(
+        combined
+            .body
+            .contains("image-generation: images cannot be generated")
+    );
+}
+
+#[test]
+fn read_only_posture_keeps_hints_only_for_admitted_network_modules() {
+    use smith_module::{ModuleDescriptor, ModulePosture, ModuleReport, MountPlan, SetupHint};
+
+    let inactive = |id: &str| ModuleReport {
+        descriptor: ModuleDescriptor {
+            id: id.into(),
+            description: id.into(),
+            default_enabled: true,
+            origin: ModuleOrigin::FirstParty,
+            compiled_in: true,
+        },
+        state: ModuleState::Inactive {
+            reason: "not configured".into(),
+            setup_hint: Some(SetupHint::new("missing", "smith.guide.setup", vec![])),
+        },
+        health: None,
+    };
+    let hinted = |plan: &MountPlan| {
+        plan.report
+            .iter()
+            .filter(|report| {
+                matches!(
+                    report.state,
+                    ModuleState::Inactive {
+                        setup_hint: Some(_),
+                        ..
+                    }
+                )
+            })
+            .map(|report| report.descriptor.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let plan = || MountPlan {
+        report: vec![inactive("vision"), inactive("image-generation")],
+        ..MountPlan::default()
+    };
+
+    let mut writable = plan();
+    super::super::modules::enforce_posture(
+        &mut writable,
+        ModulePosture::ReadWrite,
+        &["web".into(), "vision".into()],
+    );
+    assert_eq!(hinted(&writable), ["vision", "image-generation"]);
+
+    let mut planning = plan();
+    super::super::modules::enforce_posture(
+        &mut planning,
+        ModulePosture::ReadOnly,
+        &["web".into(), "vision".into()],
+    );
+    assert_eq!(hinted(&planning), ["vision"]);
+
+    let mut strict = plan();
+    super::super::modules::enforce_posture(&mut strict, ModulePosture::ReadOnly, &[]);
+    assert!(hinted(&strict).is_empty());
+}

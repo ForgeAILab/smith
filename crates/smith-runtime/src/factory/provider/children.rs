@@ -132,7 +132,7 @@ pub(in crate::factory) async fn prepare_vision_route(
     {
         return Ok(None);
     }
-    let Some(selected) = &request.config.agent.profile.vision else {
+    let Some(selected) = request.config.agent.profile.vision.selected() else {
         return Ok(None);
     };
     let vision =

@@ -1052,7 +1052,7 @@ kind = "gemini-interactions"
             resolution.config.model_image_input.value,
             ImageInput::Accepts
         );
-        assert!(resolution.config.agent.profile.vision.is_some());
+        assert!(resolution.config.agent.profile.vision.selected().is_some());
         let key = format!("models.\"google/{model}\".input_modalities");
         assert!(
             resolution

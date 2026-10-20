@@ -495,7 +495,10 @@ fn mount(
     bounded(&mounted, &config.limits)?;
     let w::Mounted::Contributions(declarations) = mounted else {
         if let w::Mounted::Inactive(reason) = mounted {
-            return Ok(Mounted::Inactive { reason });
+            return Ok(Mounted::Inactive {
+                reason,
+                setup_hint: None,
+            });
         }
         unreachable!()
     };

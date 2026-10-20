@@ -35,6 +35,8 @@ fn context() -> ModuleContext {
         posture: ModulePosture::ReadWrite,
         transport: Arc::new(ReplayTransport::single(Vec::new())),
         vision: None,
+        vision_unset: true,
+        image_capable_profiles: Vec::new(),
         main_model_accepts_images: false,
         model: None,
         image_binding: Some(ImageBinding {
@@ -97,4 +99,35 @@ fn recent_image_adapter_preserves_newest_first_order_and_short_history_error() {
     );
     let error = source.recent_images(&SessionId::new("s"), 3).unwrap_err();
     assert!(error.message.contains("this session has only 2"));
+}
+
+#[test]
+fn missing_image_binding_offers_setup_only_with_writable_builtin_tools() {
+    let mut base = context();
+    base.image_binding = None;
+    let Mounted::Inactive {
+        setup_hint: Some(hint),
+        ..
+    } = ImageGenerationModule.mount(&base).unwrap()
+    else {
+        panic!("missing binding offers setup");
+    };
+    assert_eq!(hint.guide, "smith.guide.setup");
+    assert!(hint.missing.contains("no image binding"));
+    assert!(hint.candidates.is_empty());
+    for read_only in [true, false] {
+        let mut context = base.clone();
+        if read_only {
+            context.posture = ModulePosture::ReadOnly;
+        } else {
+            context.built_in_tools = false;
+        }
+        assert!(matches!(
+            ImageGenerationModule.mount(&context).unwrap(),
+            Mounted::Inactive {
+                setup_hint: None,
+                ..
+            }
+        ));
+    }
 }

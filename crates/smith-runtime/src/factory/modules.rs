@@ -180,6 +180,17 @@ pub(crate) fn enforce_posture(
                     _ => true,
                 });
         }
+        // A hint must name a fix that works here: only modules this posture
+        // would admit keep theirs.
+        for report in &mut plan.report {
+            let reviewed = matches!(report.descriptor.origin, ModuleOrigin::FirstParty)
+                && network_modules.contains(&report.descriptor.id);
+            if let smith_module::ModuleState::Inactive { setup_hint, .. } = &mut report.state
+                && !reviewed
+            {
+                *setup_hint = None;
+            }
+        }
     }
 }
 
@@ -213,6 +224,11 @@ pub(super) fn context(
         model: None,
         image_binding,
         vision,
+        vision_unset: matches!(
+            request.config.agent.profile.vision,
+            smith_config::resolve::ResolvedVision::Unset
+        ),
+        image_capable_profiles: request.config.agent.image_capable_profiles.clone(),
         web: Some(web),
         main_model_accepts_images: request.config.model_image_input.value
             == smith_config::resolve::ImageInput::Accepts,
@@ -388,7 +404,71 @@ pub(crate) fn apply(mut builder: RuntimeBuilder, plan: &MountPlan) -> RuntimeBui
             | ModuleContribution::Watcher { .. } => builder,
         };
     }
+    if let Some(hints) = capability_hints(plan) {
+        builder = builder.context_contributor(Arc::new(hints));
+    }
     builder
+}
+
+pub(super) fn capability_hints(plan: &MountPlan) -> Option<CapabilityHints> {
+    let lines = plan
+        .report
+        .iter()
+        .filter_map(|report| match &report.state {
+            smith_module::ModuleState::Inactive {
+                setup_hint: Some(hint),
+                ..
+            } => Some(format!("{}: {}", report.descriptor.id, hint.agent_text())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return None;
+    }
+    let body = format!(
+        "Raise a missing capability with the user only when the current request needs it; do not raise setup gaps at session start.\n{}",
+        lines.join("\n"),
+    );
+    use sha2::{Digest, Sha256};
+    let revision = agent_runtime::registry::RegistryRevision::new(format!(
+        "{:x}",
+        Sha256::digest(body.as_bytes())
+    ));
+    Some(CapabilityHints { body, revision })
+}
+
+#[derive(Debug)]
+pub(super) struct CapabilityHints {
+    pub(super) body: String,
+    pub(super) revision: agent_runtime::registry::RegistryRevision,
+}
+
+#[async_trait::async_trait]
+impl agent_runtime::harness::ContextContributor for CapabilityHints {
+    fn descriptor(&self) -> agent_runtime::harness::ComponentDescriptor {
+        agent_runtime::harness::ComponentDescriptor::new(
+            "smith.capability-hints",
+            self.revision.clone(),
+        )
+    }
+
+    async fn contribute(
+        &self,
+        _: &agent_runtime::harness::ContextView,
+    ) -> Result<agent_runtime::harness::ContextPatch, agent_runtime_core::error::RuntimeError> {
+        use agent_runtime::context::{
+            ContextFragment, FragmentContent, FragmentKind, FragmentSource,
+        };
+        Ok(agent_runtime::harness::ContextPatch::new(vec![
+            ContextFragment::new(
+                "smith.capability-hints",
+                FragmentKind::DeveloperInstruction,
+                FragmentSource::Host,
+                self.revision.clone(),
+                FragmentContent::Text(self.body.clone()),
+            ),
+        ]))
+    }
 }
 
 fn reject_sandbox_tool_collisions(plan: &mut MountPlan, request: &RuntimeRequest) {

@@ -1224,3 +1224,79 @@ fn module_hashed_install_alias_is_readable_in_listing_and_config_explain() {
             .starts_with(&format!("modules.\"{id}\".enabled = true"))
     );
 }
+
+#[test]
+fn config_explain_vision_distinguishes_unset_and_disabled_with_overrides() {
+    let fixture = Fixture::new();
+    let output = fixture.run(&["config", "explain", "vision"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        "vision = unset"
+    );
+    let fixture = Fixture::with_config(&format!("vision = false\n{CONFIG}"));
+    let output = fixture.run(&["config", "explain", "vision"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("vision = disabled by"), "{text}");
+    assert!(text.contains(".smith/config.toml` key `vision`"), "{text}");
+    let config = format!(
+        "vision = \"local/seeing\"\n{}\n[models.\"local/seeing\"]\ninput_modalities = [\"image\"]",
+        CONFIG.replace("[profiles.dev]", "[profiles.dev]\nvision = false")
+    );
+    let fixture = Fixture::with_config(&config);
+    let output = fixture.run(&["config", "explain", "vision"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("vision = disabled by"), "{text}");
+    assert!(text.contains("profiles.dev.vision"), "{text}");
+    assert!(text.contains("overrode: local/seeing"), "{text}");
+}
+
+#[test]
+fn config_modules_displays_setup_hints_after_inactive_reasons() {
+    let fixture = Fixture::with_config(&format!(
+        "{CONFIG}\n[modules.image-generation]\nenabled = true"
+    ));
+    let output = fixture.run(&["config", "modules"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    if cfg!(feature = "module-vision") {
+        let line = text
+            .lines()
+            .find(|line| line.starts_with("vision ·"))
+            .unwrap();
+        assert!(
+            line.contains("inactive · no vision model is configured"),
+            "{line}"
+        );
+        assert!(line.contains("set up with smith.guide.vision"), "{line}");
+    }
+    if cfg!(feature = "module-image-generation") {
+        let line = text
+            .lines()
+            .find(|line| line.starts_with("image-generation ·"))
+            .unwrap();
+        assert!(
+            line.contains("inactive · the active provider has no image binding"),
+            "{line}"
+        );
+        assert!(line.contains("set up with smith.guide.setup"), "{line}");
+    }
+}

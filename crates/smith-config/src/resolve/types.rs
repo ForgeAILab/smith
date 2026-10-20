@@ -803,6 +803,8 @@ pub struct ResolvedAgent {
     pub profiles: BTreeMap<String, ResolvedAgentProfile>,
     /// Stable user-facing order of main-enabled profiles.
     pub profile_order: Sourced<Vec<String>>,
+    /// Main-enabled image-input profiles in profile order, excluding the active profile.
+    pub image_capable_profiles: Vec<String>,
     /// The active profile's advisor as configuration resolves it, kept beside
     /// the effective one so a session override can be shown and undone.
     pub configured_advisor: Option<Sourced<AdvisorTarget>>,
@@ -846,6 +848,27 @@ pub enum ImageInput {
 
 /// What a `vision` setting names, sharing advisor target parsing.
 pub type VisionTarget = AdvisorTarget;
+
+/// Effective vision selection, preserving an explicit opt-out and its source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedVision {
+    /// No applicable layer selected a vision model.
+    Unset,
+    /// An explicit `false` disabled vision.
+    Disabled(Source),
+    /// A validated profile or provider/model selection.
+    Selected(Sourced<VisionTarget>),
+}
+
+impl ResolvedVision {
+    /// The selected model, if vision is neither unset nor disabled.
+    pub fn selected(&self) -> Option<&Sourced<VisionTarget>> {
+        match self {
+            Self::Selected(target) => Some(target),
+            Self::Unset | Self::Disabled(_) => None,
+        }
+    }
+}
 
 /// What an `advisor` setting names.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -970,8 +993,8 @@ pub struct ResolvedAgentProfile {
     /// Effective advisor; unset and explicit `false` resolve to none.
     /// The provenance ledger retains an explicit `false` and its source.
     pub advisor: Option<Sourced<AdvisorTarget>>,
-    /// Effective vision model; unset and explicit `false` resolve to none.
-    pub vision: Option<Sourced<VisionTarget>>,
+    /// Effective vision model, explicit opt-out, or unset selection.
+    pub vision: ResolvedVision,
     /// Placements where the profile is selectable.
     pub uses: Sourced<Vec<ProfileUse>>,
     /// Effective provider preference, when declared or inherited.

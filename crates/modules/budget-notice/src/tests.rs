@@ -15,6 +15,8 @@ fn context() -> ModuleContext {
         posture: ModulePosture::ReadWrite,
         transport: Arc::new(ReplayTransport::single(Vec::new())),
         vision: None,
+        vision_unset: true,
+        image_capable_profiles: Vec::new(),
         main_model_accepts_images: false,
         model: None,
         image_binding: None,

@@ -64,6 +64,8 @@ fn context(root: &std::path::Path, transport: Arc<ReplayTransport>) -> ModuleCon
         posture: ModulePosture::ReadWrite,
         transport,
         vision: None,
+        vision_unset: true,
+        image_capable_profiles: Vec::new(),
         main_model_accepts_images: false,
         model: None,
         image_binding: None,

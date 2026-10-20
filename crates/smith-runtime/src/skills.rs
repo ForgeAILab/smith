@@ -374,6 +374,22 @@ impl Named for SmithSkillAbility {
     }
 }
 
+impl SmithSkillAbility {
+    /// Retrieval keywords: an authored `smith.keywords` list when the skill
+    /// carries one, otherwise terms derived from its name and description.
+    ///
+    /// Pre-activation binds any skill whose keywords meet a prompt term, so a
+    /// shipped how-to whose description says "file" or "turn" would load on
+    /// ordinary coding prompts. An authored list keeps those to distinctive
+    /// terms while the description stays readable for `registry.search`.
+    fn keywords(&self) -> Vec<String> {
+        match self.skill.metadata.get(AUTHORED_KEYWORDS) {
+            Some(list) => list.split_whitespace().map(str::to_lowercase).collect(),
+            None => skill_keywords(&self.skill.name, &self.skill.description),
+        }
+    }
+}
+
 impl Ability for SmithSkillAbility {
     fn description(&self) -> &str {
         &self.skill.description
@@ -400,7 +416,7 @@ impl Ability for SmithSkillAbility {
                 "smith".to_owned(),
                 format!("smith-source-{}", self.layer.as_str()),
             ])
-            .with_keywords(skill_keywords(&self.skill.name, &self.skill.description))
+            .with_keywords(self.keywords())
             .with_affordances(["skill-guidance"])
             .with_context_cost(ContextCost::new(0, instruction_tokens))
             .with_input_modalities(["text"])
@@ -455,6 +471,9 @@ fn validate_name(name: &str) -> Result<(), RuntimeError> {
 /// retrieval keywords: activation admits any candidate with a nonzero score,
 /// so one stray "with" in an unrelated prompt would otherwise pull a
 /// multi-thousand-token reference body into every context.
+/// Metadata key naming a skill's whitespace-separated retrieval keywords.
+pub(crate) const AUTHORED_KEYWORDS: &str = "smith.keywords";
+
 const KEYWORD_STOPWORDS: &[&str] = &[
     "activate", "and", "any", "are", "before", "each", "for", "from", "has", "how", "into", "its",
     "not", "one", "only", "over", "that", "the", "them", "then", "this", "use", "using", "was",

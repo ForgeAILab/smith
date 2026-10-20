@@ -72,6 +72,50 @@ about images for a text-only main model.
 mith configuration reference, section "Web t
 ools". Web tools let Smith read public pages
  and search for current information.
+  smith.guide.extending · active · Extend Sm
+ith with skills, file commands, plugins, MCP
+ servers, and modules; install, trust, list,
+ and diagnose extensions.
+  smith.guide.headless · active · Run Smith
+non-interactively with smith -p, pass prompt
+s and images, choose text or JSON output, re
+sume sessions, and integrate scripts and aut
+omation.
+  smith.guide.models-and-thinking · active ·
+ Select or switch Smith models, enable or di
+sable thinking and reasoning, choose effort
+and context windows, and verify model capabi
+lities and limits.
+  smith.guide.overview · active · Find the r
+ight Smith task guide; discover CLI subcomma
+nds, slash commands, setup, models, profiles
+, sessions, extensions, automation, and trou
+bleshooting.
+  smith.guide.profiles-and-advisor · active
+· Create and inherit Smith profiles, switch
+profiles and postures, configure an advisor,
+ and control delegation and capability limit
+s.
+  smith.guide.sessions · active · List, resu
+me, or start Smith sessions; undo, redo, or
+revert a turn's file changes; set multi-turn
+ goals; inspect and follow up child agents;
+read status and history.
+  smith.guide.setup · active · Set up Smith
+with a provider and model, connect credentia
+ls through user-run setup, configure image g
+eneration, and verify configuration and modu
+le availability.
+  smith.guide.troubleshooting · active · Dia
+gnose Smith startup, configuration precedenc
+e, provider and model errors, missing tools,
+ inactive modules, trust, approvals, and ses
+sion recovery.
+  smith.guide.vision · active · Enable Smith
+ image viewing for a text-only model, select
+ a vision profile or provider/model, interpr
+et image placeholders, and diagnose unavaila
+ble view_image.
   smith.headless · active · Outline of the S
 mith headless protocol reference for smith -
 p: input modes, text, json, and stream-json
@@ -199,50 +243,6 @@ not loaded
   broken · it does not start with a --- fr
 ontmatter block declaring a description ·
 <HOME>/.smith/skills/broken/SKILL.md
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

@@ -90,6 +90,83 @@ const HARNESS_REFERENCES: [HarnessReference; 4] = [
     },
 ];
 
+/// Whole task guides with descriptions authored for descriptor retrieval.
+struct HarnessGuide {
+    name: &'static str,
+    description: &'static str,
+    /// Distinctive pre-activation terms; see [`crate::skills::AUTHORED_KEYWORDS`].
+    keywords: &'static str,
+    body: &'static str,
+}
+
+const HARNESS_GUIDES: [HarnessGuide; 9] = [
+    HarnessGuide {
+        name: "smith.guide.overview",
+        description: "Find the right Smith task guide; discover CLI subcommands, slash commands, setup, models, profiles, sessions, extensions, automation, and troubleshooting.",
+        keywords: "smith smith-guides",
+        body: include_str!("../../../docs/guides/overview.md"),
+    },
+    HarnessGuide {
+        name: "smith.guide.setup",
+        description: "Set up Smith with a provider and model, connect credentials through user-run setup, configure image generation, and verify configuration and module availability.",
+        keywords: "providers credentials generate_image",
+        body: include_str!("../../../docs/guides/setup.md"),
+    },
+    HarnessGuide {
+        name: "smith.guide.models-and-thinking",
+        description: "Select or switch Smith models, enable or disable thinking and reasoning, choose effort and context windows, and verify model capabilities and limits.",
+        keywords: "effort reasoning-effort context-window",
+        body: include_str!("../../../docs/guides/models-and-thinking.md"),
+    },
+    HarnessGuide {
+        name: "smith.guide.vision",
+        description: "Enable Smith image viewing for a text-only model, select a vision profile or provider/model, interpret image placeholders, and diagnose unavailable view_image.",
+        keywords: "vision view_image text-only",
+        body: include_str!("../../../docs/guides/vision.md"),
+    },
+    HarnessGuide {
+        name: "smith.guide.profiles-and-advisor",
+        description: "Create and inherit Smith profiles, switch profiles and postures, configure an advisor, and control delegation and capability limits.",
+        keywords: "profiles profile_order advisor posture",
+        body: include_str!("../../../docs/guides/profiles-and-advisor.md"),
+    },
+    HarnessGuide {
+        name: "smith.guide.sessions",
+        description: "List, resume, or start Smith sessions; undo, redo, or revert a turn's file changes; set multi-turn goals; inspect and follow up child agents; read status and history.",
+        keywords: "resume undo redo",
+        body: include_str!("../../../docs/guides/sessions.md"),
+    },
+    HarnessGuide {
+        name: "smith.guide.extending",
+        description: "Extend Smith with skills, file commands, plugins, MCP servers, and modules; install, trust, list, and diagnose extensions.",
+        keywords: "plugins mcp skills",
+        body: include_str!("../../../docs/guides/extending.md"),
+    },
+    HarnessGuide {
+        name: "smith.guide.headless",
+        description: "Run Smith non-interactively with smith -p, pass prompts and images, choose text or JSON output, resume sessions, and integrate scripts and automation.",
+        keywords: "headless stream-json",
+        body: include_str!("../../../docs/guides/headless.md"),
+    },
+    HarnessGuide {
+        name: "smith.guide.troubleshooting",
+        description: "Diagnose Smith startup, configuration precedence, provider and model errors, missing tools, inactive modules, trust, approvals, and session recovery.",
+        keywords: "troubleshoot troubleshooting diagnostics",
+        body: include_str!("../../../docs/guides/troubleshooting.md"),
+    },
+];
+
+/// The shipped task guides, activated whole in every Smith host.
+pub fn harness_guide_skills() -> Vec<Skill> {
+    HARNESS_GUIDES
+        .iter()
+        .map(|guide| {
+            Skill::inline(guide.name, guide.description, guide.body)
+                .with_metadata(crate::skills::AUTHORED_KEYWORDS, guide.keywords)
+        })
+        .collect()
+}
+
 /// The marker a reference document uses for a top-level section.
 const SECTION_MARKER: &str = "## ";
 
@@ -238,7 +315,7 @@ fn outline(
     body
 }
 
-/// Smith's default skill sources: exactly the built-in harness references.
+/// Smith's default skill sources: the built-in references and task guides.
 ///
 /// [`crate::factory::RuntimeRequest::new`] starts from this set so the TUI
 /// and `smith -p` compose one identical index. Assigning
@@ -247,6 +324,7 @@ fn outline(
 pub fn built_in_sources() -> SmithSkillSources {
     harness_reference_skills()
         .into_iter()
+        .chain(harness_guide_skills())
         .fold(SmithSkillSources::new(), SmithSkillSources::with_built_in)
 }
 
@@ -282,11 +360,90 @@ mod tests {
             .map(|reference| split_sections(reference.body).1.len())
             .sum();
         assert!(sections > 0, "the references must carry `##` sections");
-        assert_eq!(index.len(), HARNESS_REFERENCES.len() + sections);
+        assert_eq!(
+            index.len(),
+            HARNESS_REFERENCES.len() + sections + HARNESS_GUIDES.len()
+        );
         for entry in index {
             assert_eq!(entry.layer, SmithSkillLayer::BuiltIn);
             assert!(entry.activatable);
             assert_eq!(entry.trust, TrustClass::HostPolicy);
+        }
+    }
+
+    /// A guide that pre-activates on an everyday coding word would spend its
+    /// instructions on prompts that are not about Smith at all.
+    #[test]
+    fn guides_pre_activate_only_on_their_authored_keywords() {
+        let resolved = built_in_sources().resolve().expect("built-ins resolve");
+        for guide in &HARNESS_GUIDES {
+            let entry = resolved
+                .index()
+                .iter()
+                .find(|entry| entry.name() == guide.name)
+                .expect("guide is indexed");
+            let keywords = &entry.descriptor.card().keywords;
+            // The card keeps its keywords normalized and sorted.
+            let mut authored = guide
+                .keywords
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            authored.sort();
+            assert_eq!(keywords, &authored, "{}", guide.name);
+            for common in [
+                "file", "files", "turn", "model", "models", "image", "session", "edit",
+            ] {
+                assert!(
+                    !keywords.iter().any(|keyword| keyword == common),
+                    "{} pre-activates on `{common}`",
+                    guide.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn guides_activate_whole_and_fit_the_descriptor_token_budget() {
+        use agent_runtime::ability::descriptor::ContextCost;
+
+        for guide in &HARNESS_GUIDES {
+            assert_eq!(body_of(guide.name).as_bytes(), guide.body.as_bytes());
+            let estimate = ContextCost::estimate("", guide.body).instruction_tokens;
+            let limit = if guide.name == "smith.guide.overview" {
+                600
+            } else {
+                1_200
+            };
+            assert!(
+                estimate <= limit,
+                "{} estimates {estimate} tokens, over {limit}",
+                guide.name
+            );
+        }
+    }
+
+    #[test]
+    fn guide_toml_examples_use_the_config_file_model() {
+        for guide in &HARNESS_GUIDES {
+            let mut block = None;
+            for line in guide.body.lines() {
+                let line = line.trim();
+                if line == "```toml" {
+                    block = Some(String::new());
+                } else if line.starts_with("```") {
+                    if let Some(text) = block.take() {
+                        // ConfigFile and its tables reject unknown fields.
+                        toml::from_str::<smith_config::model::ConfigFile>(&text).unwrap_or_else(
+                            |error| panic!("{} has invalid TOML: {error}", guide.name),
+                        );
+                    }
+                } else if let Some(text) = &mut block {
+                    text.push_str(line);
+                    text.push('\n');
+                }
+            }
+            assert!(block.is_none(), "{} has an unclosed TOML fence", guide.name);
         }
     }
 

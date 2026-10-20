@@ -39,6 +39,7 @@ impl Module for WebModule {
         if !context.built_in_tools {
             return Ok(Mounted::Inactive {
                 reason: "built-in tools are disabled".into(),
+                setup_hint: None,
             });
         }
         let settings = context.web.clone().unwrap_or_default();

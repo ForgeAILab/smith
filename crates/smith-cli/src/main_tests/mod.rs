@@ -140,3 +140,5 @@ mod standalone_screens;
 mod submission;
 
 pub(crate) use fixtures::fixture_support;
+
+mod guides;

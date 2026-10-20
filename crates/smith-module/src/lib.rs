@@ -160,6 +160,10 @@ pub struct ModuleContext {
     pub image_binding: Option<ImageBinding>,
     /// Separate vision route, only resolved for a text-only main model.
     pub vision: Option<VisionBinding>,
+    /// Whether vision has no selection, distinct from an explicit opt-out.
+    pub vision_unset: bool,
+    /// Main-enabled image-input profiles in profile order, excluding the active profile.
+    pub image_capable_profiles: Vec<String>,
     /// Resolved web route and private-network policy; absent uses defaults.
     pub web: Option<WebSettings>,
     /// Whether the active main model accepts image input at this composition.
@@ -183,6 +187,8 @@ impl fmt::Debug for ModuleContext {
             .field("has_model", &self.model.is_some())
             .field("has_image_binding", &self.image_binding.is_some())
             .field("has_vision", &self.vision.is_some())
+            .field("vision_unset", &self.vision_unset)
+            .field("image_capable_profiles", &self.image_capable_profiles)
             .field("has_web_settings", &self.web.is_some())
             .field("main_model_accepts_images", &self.main_model_accepts_images)
             .field("has_session_history", &self.session_history.is_some())
@@ -223,6 +229,89 @@ pub trait Module: Send + Sync + fmt::Debug {
     fn mount(&self, context: &ModuleContext) -> Result<Mounted, ModuleError>;
 }
 
+/// Safe guidance for a user-fixable inactive capability. Never include secrets or file contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupHint {
+    /// Short phrase describing the missing capability and its consequence.
+    pub missing: String,
+    /// Built-in task skill that walks the user through setup.
+    pub guide: String,
+    /// At most five profile names or provider/model references from configuration.
+    pub candidates: Vec<String>,
+    /// Configuration key whose value the candidates are for, when one fixes it.
+    pub setting: Option<String>,
+}
+
+impl SetupHint {
+    /// Constructs a hint with a bounded candidate list in the caller's order.
+    pub fn new(
+        missing: impl Into<String>,
+        guide: impl Into<String>,
+        candidates: Vec<String>,
+    ) -> Self {
+        Self {
+            missing: missing.into(),
+            guide: guide.into(),
+            candidates: candidates.into_iter().take(5).collect(),
+            setting: None,
+        }
+    }
+
+    /// Names the configuration key a candidate would be assigned to.
+    #[must_use]
+    pub fn with_setting(mut self, key: impl Into<String>) -> Self {
+        self.setting = Some(key.into());
+        self
+    }
+
+    /// The developer-fragment line: the gap, the candidates, and when to
+    /// raise it.
+    pub fn agent_text(&self) -> String {
+        let mut text = format!("{}.", self.missing);
+        if !self.candidates.is_empty() {
+            text.push_str(&format!(
+                " {}: {}.",
+                self.candidates_label(),
+                self.candidates.join(", ")
+            ));
+        }
+        match &self.setting {
+            // A concrete key and values keep the agent from proposing a
+            // model it read in documentation rather than in this config.
+            Some(key) if !self.candidates.is_empty() => text.push_str(&format!(
+                " When the user's request needs this, tell them and offer to set `{key}` to one of these in their user config; suggest no other value. Activate {} for the steps.",
+                self.guide
+            )),
+            _ => text.push_str(&format!(
+                " When the user's request needs this, tell them and activate {} to walk them through enabling it.",
+                self.guide
+            )),
+        }
+        text
+    }
+
+    /// The short status suffix shown to the user beside the inactive reason.
+    pub fn status_text(&self) -> String {
+        let mut text = format!("set up with {}", self.guide);
+        if !self.candidates.is_empty() {
+            text.push_str(&format!(
+                " · {}: {}",
+                self.candidates_label().to_lowercase(),
+                self.candidates.join(", ")
+            ));
+        }
+        text
+    }
+
+    fn candidates_label(&self) -> &'static str {
+        if self.guide == "smith.guide.vision" {
+            "Profiles that accept images"
+        } else {
+            "Candidates"
+        }
+    }
+}
+
 /// Successful construction or a conditional module's explainable inactivity.
 #[derive(Debug, Clone)]
 pub enum Mounted {
@@ -239,6 +328,8 @@ pub enum Mounted {
     Inactive {
         /// Safe user-facing explanation, never credentials or setting values.
         reason: String,
+        /// Optional user-fixable capability gap, carrying no authority.
+        setup_hint: Option<SetupHint>,
     },
 }
 

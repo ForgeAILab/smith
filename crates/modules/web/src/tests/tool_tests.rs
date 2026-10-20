@@ -27,6 +27,8 @@ fn context() -> ModuleContext {
         image_binding: None,
         vision: None,
         web: None,
+        vision_unset: true,
+        image_capable_profiles: Vec::new(),
         main_model_accepts_images: false,
         session_history: None,
         semantic_summary_enabled: false,
@@ -116,7 +118,7 @@ fn module_defaults_missing_credentials_disabled_route_and_inactive_reasons() {
     assert!(!format!("{:?}", context.web).contains("TOP SECRET"));
     context.built_in_tools = false;
     assert!(
-        matches!(WebModule.mount(&context).unwrap(), Mounted::Inactive { reason } if reason == "built-in tools are disabled")
+        matches!(WebModule.mount(&context).unwrap(), Mounted::Inactive { reason, .. } if reason == "built-in tools are disabled")
     );
 }
 

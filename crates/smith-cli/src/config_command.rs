@@ -144,6 +144,10 @@ pub(super) fn explain_config(key: &str, selection: &Selection) -> Result<()> {
     };
     let diagnostic = prepared.resolution.config.web.search.diagnostic();
     for key in keys {
+        if key == "vision" && provenance.source(key).is_none() {
+            println!("vision = unset");
+            continue;
+        }
         // An unset credential or URL still has an actionable explanation.
         if provenance.source(key).is_none() && diagnostic.is_some_and(|(setting, _)| setting == key)
         {
@@ -152,7 +156,13 @@ pub(super) fn explain_config(key: &str, selection: &Selection) -> Result<()> {
         let explanation = provenance
             .explain(key)
             .map_err(|error| anyhow::anyhow!("{error}"))?;
-        println!("{} = {}", explanation.key, explanation.value);
+        match (key, &prepared.resolution.config.agent.profile.vision) {
+            ("vision", smith_config::resolve::ResolvedVision::Unset) => println!("vision = unset"),
+            ("vision", smith_config::resolve::ResolvedVision::Disabled(source)) => {
+                println!("vision = disabled by {source}");
+            }
+            _ => println!("{} = {}", explanation.key, explanation.value),
+        }
         println!("source: {}", explanation.source);
         for entry in explanation.overridden {
             println!("overrode: {} from {}", entry.value, entry.source);
