@@ -52,6 +52,15 @@ today. Config resolution maps both an unset `vision` and `vision = false` to
   guidance-only contribution. Rejected because `/modules` would then call the
   module active while it offers no tool, and each module would need its own
   fragment.
+- **One hint, two renderings.** The fragment line is written for the agent:
+  the gap, the candidates, and "offer to set `<key>` to one of these; suggest
+  no other value". The `/modules` suffix is written for the user:
+  `set up with <guide> · <candidates>`. In live testing without the key, the
+  agent suggested a model from a documentation example that the user had
+  not configured.
+- **Image generation is usually `off`, not inactive.** Its switch defaults
+  off for providers without an image binding, so the hint appears only when
+  the user has turned image generation on for such a provider.
 - **The hint tells the agent to raise the gap only when relevant**: when the
   user's request needs the missing capability (an image appears and cannot
   be seen, or the user asks for an image to be generated). It is not raised
@@ -89,5 +98,8 @@ constants stay as they are.
 
 ## Open Questions
 
-- Should `/modules` show the hint text next to the inactive reason? Proposed
-  yes: the same text, from the same source.
+- Resolved: `/modules` shows the hint, in its short user-facing form.
+- `smith.guide.overview` pre-activates on the bare word `smith`. That is
+  cheap (about 430 tokens, once per session) but binds in almost every
+  session inside the Smith repository. The owner may prefer `smith-guides`
+  only.

@@ -15,7 +15,9 @@ enabled = false
 
 `/modules` lists every known module, including first-party modules omitted from
 the build. Rows show the description, mount state and reason, deciding key and
-configuration layer, and first-party or named third-party origin. `smith config
+configuration layer, and first-party or named third-party origin. When an
+inactive module can be fixed by a setting, its row also names the guide that
+explains the fix, plus any values from your config that would work. `smith config
 modules` prints the same report without starting a session.
 
 `/modules image-generation on` or `off` previews an edit to the user config,

@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-19T18:00:00Z
-updated_at: 2026-10-19T18:00:00Z
+updated_at: 2026-10-20T01:29:31Z
 ---
 
 ## Why
@@ -17,7 +17,8 @@ can fix. With a text-only main model and no `vision` setting, the vision
 module is just inactive. The agent sees an image placeholder, says it cannot
 see the image, and stops. It does not say that one config line would fix
 this, or which of the user's profiles could serve it. Image generation with
-no image binding fails the same silent way. The owner chose to keep vision
+no image binding has the same problem, though its switch defaults off on
+such providers. The owner chose to keep vision
 opt-in (image bytes go to a second provider), so the fix is to tell the agent
 and the user, not to pick a vision model automatically.
 

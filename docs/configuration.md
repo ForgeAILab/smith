@@ -333,7 +333,14 @@ load time before credential lookup, even when the main model already accepts
 images. Unknown profiles, undeclared providers, and explicit profile
 self-references are errors, as for `advisor`; a top-level default naming the
 active profile is skipped. `smith config explain vision` reports the winner
-and every overridden source.
+and every overridden source. With no selection it prints `vision = unset`, or
+`vision = disabled by <source>` after an explicit `false`.
+
+Leaving `vision` unset is not the same as turning it off. With a text-only
+main model and no selection, `/modules` shows a setup hint naming the profiles
+whose model accepts images. The agent also gets a short note telling it to
+mention the gap when a request needs an image, and to point at
+`smith.guide.vision`. `vision = false` removes both.
 
 When the main model is text-only, the `vision` module offers `view_image` to
 ask about one image and return a text answer. A main model that accepts images

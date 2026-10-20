@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-19T18:00:00Z
-updated_at: 2026-10-19T18:00:00Z
-completed_at:
+updated_at: 2026-10-20T01:29:31Z
+completed_at: 2026-10-20T01:29:31Z
 ---
 
 ## 1. Task guides
