@@ -1,6 +1,71 @@
 use super::*;
 
 #[test]
+fn footer_distinguishes_pending_missing_and_reported_cache_reads() {
+    let theme = Theme::new().without_color().without_motion();
+    for (input, cached, expected) in [
+        (1_000, None, "CH ? (provider did not report cache reads)"),
+        (1_000, Some(0), "CH 0%"),
+        (1_000, Some(800), "CH 80%"),
+        (0, Some(0), "CH ? (prompt input not reported)"),
+    ] {
+        let mut app = App::new("model", "project");
+        let screen = render(&app, 160, 16, theme);
+        assert!(screen.lines().last().unwrap().ends_with("CH –"), "{screen}");
+        let mut events = vec![RuntimeEvent::Usage {
+            record: UsageRecord {
+                source: UsageSource::ProviderAttempt,
+                provenance: Provenance {
+                    request: Some(RequestId::new("request")),
+                    attempt: Some(AttemptId::new("attempt")),
+                    ..Provenance::default()
+                },
+                delta: UsageDelta::new()
+                    .with(CounterKind::InputUncached, input - cached.unwrap_or(0))
+                    .with(CounterKind::InputCached, cached.unwrap_or(0)),
+            },
+        }];
+        if let Some(cached) = cached {
+            events.push(RuntimeEvent::CacheObservation {
+                request: Some(RequestId::new("request")),
+                attempt: Some(AttemptId::new("attempt")),
+                cache_plan: None,
+                cache_identity: None,
+                read_tokens: Some(cached),
+                write_tokens: None,
+            });
+        }
+        events.push(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: true,
+        });
+        for (seq, payload) in events.into_iter().enumerate() {
+            let envelope = EventEnvelope::new(
+                seq as u64,
+                EventId::new(format!("cache-{seq}")),
+                SessionId::new("session"),
+                Some(TurnId::new("turn")),
+                Timestamp::ZERO,
+                payload,
+            );
+            app.status.cache_projection.apply(&envelope);
+        }
+        let screen = render(&app, 160, 16, theme);
+        assert!(
+            screen.lines().last().unwrap().ends_with(expected),
+            "{screen}"
+        );
+        let compact = render(&app, 80, 16, theme);
+        let footer = compact.lines().last().unwrap();
+        assert!(
+            footer.contains(expected.split(" (").next().unwrap()),
+            "{footer}"
+        );
+        assert!(!footer.contains('('), "{footer}");
+    }
+}
+
+#[test]
 fn active_context_window_is_named_in_the_identity_footer() {
     let mut app = App::new("gpt-5.3", "~/work/api");
     app.status.context_window = Some("872k".to_owned());
@@ -234,7 +299,7 @@ fn feedback_keeps_right_identity_at_100_and_44_columns() {
             let footer = screen.lines().last().unwrap();
             let left = "  already using that account";
             let identity = if width == 100 {
-                "example-model · build · ask · <PROJECT> · unknown ctx"
+                "example-model · build · ask · <PROJECT> · unknown ctx · CH –"
             } else {
                 "example-model"
             };
@@ -316,7 +381,7 @@ fn refused_command_feedback_replaces_left_hints_until_the_next_keypress() {
                 .lines()
                 .last()
                 .unwrap()
-                .ends_with("model · build · project · unknown ctx"),
+                .ends_with("model · build · project · unknown ctx · CH –"),
             "{screen}"
         );
         assert_eq!(screen.matches(message).count(), 1, "{screen}");

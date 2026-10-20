@@ -742,7 +742,7 @@ pub(super) fn fixture_screen(app: &App, width: u16) -> String {
         .draw(|frame| smith_tui::draw(frame, app, smith_tui::Theme::new().without_color()))
         .expect("frame");
     let buffer = terminal.backend().buffer();
-    let rows = (0..buffer.area.height)
+    let mut rows = (0..buffer.area.height)
         .map(|y| {
             (0..buffer.area.width)
                 .map(|x| buffer[(x, y)].symbol())
@@ -751,6 +751,19 @@ pub(super) fn fixture_screen(app: &App, width: u16) -> String {
                 .to_owned()
         })
         .collect::<Vec<_>>();
+    // Keep the full-height render, but omit unused transcript space above the
+    // composer's two full-width rules. Preserve report whitespace and everything
+    // from the composer through the footer/agents panel.
+    let rule = "─".repeat(usize::from(width));
+    if let Some(bottom) = rows.iter().rposition(|row| row == &rule)
+        && let Some(top) = rows[..bottom].iter().rposition(|row| row == &rule)
+    {
+        let end = rows[..top]
+            .iter()
+            .rposition(|row| !row.is_empty())
+            .map_or(0, |last| (last + 2).min(top));
+        rows.drain(end..top);
+    }
     format!("{}\n", rows.join("\n").trim_matches('\n'))
 }
 

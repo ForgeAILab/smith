@@ -698,19 +698,25 @@ pub(super) fn draw_identity_footer_with_hint(
             ),
         ),
     );
-    // CH is a completed-root-turn metric. Keep the pre-turn footer unchanged,
-    // then show explicit `0%` or honest `?` once a canonical turn rollup
-    // exists.
-    if app.status.cache_projection.latest_completed().is_some() {
-        let ch = app.status.render_cache_hit_rate();
-        push_segment(
-            &mut identity,
-            theme,
-            Span::styled(
-                format!("CH {ch}"),
-                theme.style(if ch == "?" { Tone::Warning } else { Tone::Dim }),
-            ),
-        );
+    // No completed turn is distinct from a completed turn with missing evidence.
+    let cache = app.status.cache_projection.latest_completed();
+    let ch = cache.map_or_else(|| "–".to_owned(), |summary| summary.render_ch());
+    push_segment(
+        &mut identity,
+        theme,
+        Span::styled(
+            format!("CH {ch}"),
+            theme.style(if ch == "?" { Tone::Warning } else { Tone::Dim }),
+        ),
+    );
+    if ch == "?" {
+        let reason = if cache.is_some_and(|summary| summary.observed_read_tokens.is_none()) {
+            " (provider did not report cache reads)"
+        } else {
+            " (prompt input not reported)"
+        };
+        // Keep the compact metric when the explanation cannot fit in full.
+        identity.push(Span::styled(reason, theme.style(Tone::Dim)));
     }
     let left_width = hint.width().saturating_add(2);
     let gap = usize::from(!hint.is_empty()) * 2;

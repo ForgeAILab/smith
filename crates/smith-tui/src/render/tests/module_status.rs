@@ -14,7 +14,7 @@ fn app_with_status() -> (App, String) {
     app.status.approval_mode = Some("ask".to_owned());
     app.status.context_window = Some("872k".to_owned());
     let built_in = format!(
-        "gpt-5.3 · {} · ask · 872k · ~/work/api · unknown ctx",
+        "gpt-5.3 · {} · ask · 872k · ~/work/api · unknown ctx · CH –",
         app.status.agent
     );
     (app, built_in)

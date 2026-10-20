@@ -196,6 +196,11 @@ latest completed root-turn state, `CH`, expected/observed/missed tokens,
 confidence, cumulative miss count, re-billed tokens, and known derived extra
 cost. Its separate `cache read (session)` line is retained as the cumulative
 raw provider-read total for compatibility; it is not the latest-turn `CH`.
+The footer shows `CH –` before a root turn completes. After completion it
+shows the reported percentage (including `CH 0%`) or `CH ?` when the percentage
+cannot be determined. When space allows, `?` explains whether cache reads or
+prompt-input totals were not reported. Narrow terminals may omit these
+secondary footer fields to preserve actionable keys.
 
 Agent-profile selection follows the same provenance rules. One named profile
 can configure the main agent, an explicit direct child, or both:
