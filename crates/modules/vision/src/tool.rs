@@ -44,9 +44,11 @@ fn effects(endpoint: &str, path: bool) -> ToolEffects {
 #[async_trait]
 impl Tool for ViewImageTool {
     fn spec(&self) -> ToolSpec {
+        // Keep source exclusivity in prepare: some providers reject top-level
+        // oneOf/allOf/anyOf in tool input schemas.
         ToolSpec::new(
             "view_image",
-            "Ask the vision model one question about one image. Inspect an [image <id>: ...] placeholder in the conversation by passing <id> as `image`, or pass a workspace or generated-image `path`.",
+            "Ask the vision model one question about one image. Inspect an [image <id>: ...] placeholder in the conversation by passing <id> as `image`, or pass a workspace or generated-image `path`. Supply exactly one of `image` or `path`.",
             json!({
                 "type": "object",
                 "properties": {
@@ -55,7 +57,6 @@ impl Tool for ViewImageTool {
                     "question": {"type": "string", "minLength": 1, "maxLength": 2000}
                 },
                 "required": ["question"],
-                "oneOf": [{"required": ["image"]}, {"required": ["path"]}],
                 "additionalProperties": false
             }),
             effects(&self.binding.endpoint, true),

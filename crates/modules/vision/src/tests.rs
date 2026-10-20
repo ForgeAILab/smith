@@ -119,6 +119,29 @@ fn module_inactive_reasons_and_recomposition_follow_the_active_model() {
 }
 
 #[test]
+fn mounted_tool_schema_avoids_top_level_composition_for_provider_compatibility() {
+    let Mounted::Contributions(contributions) = VisionModule.mount(&context()).unwrap() else {
+        panic!("vision mounts");
+    };
+    let tool = contributions
+        .into_iter()
+        .find_map(|contribution| match contribution {
+            ModuleContribution::Tool(tool) => Some(tool),
+            _ => None,
+        })
+        .expect("mounted vision tool");
+    let spec = tool.spec();
+    assert_eq!(spec.name, "view_image");
+    assert_eq!(spec.input_schema["type"], "object");
+    for keyword in ["oneOf", "allOf", "anyOf"] {
+        assert!(
+            spec.input_schema.get(keyword).is_none(),
+            "providers reject top-level `{keyword}` in tool input schemas"
+        );
+    }
+}
+
+#[test]
 fn digest_lookup_scans_newest_first_and_retains_nested_source_tool() {
     let url = "data:image/png;base64,one";
     let id = &format!("{:x}", Sha256::digest(url.as_bytes()))[..8];
