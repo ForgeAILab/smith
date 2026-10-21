@@ -414,7 +414,7 @@ async fn a_tool_call_whose_arguments_never_complete_is_a_classified_error_not_a_
 
     let failure = assemble(&events).expect_err("a truncated argument object is refused");
     assert_eq!(failure.kind, ProviderErrorKind::MalformedStream);
-    assert!(failure.message.contains("shell"), "{}", failure.message);
+    assert!(failure.message.contains("index 0"), "{}", failure.message);
 }
 
 // -- usage -------------------------------------------------------------------

@@ -229,6 +229,87 @@ fn tool_results(session: &SessionHandle) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn malformed_shell_arguments_receive_feedback_before_a_corrected_command_runs() {
+    for finish in [FinishReason::ToolCalls, FinishReason::Length] {
+        let dir = project();
+        let mut invalid = tool_call_fragments(
+            0,
+            "invalid-shell",
+            "shell",
+            &format!(
+                "{{\"command\":\"PRIVATE_COMMAND_CANARY{}",
+                "x".repeat(85_465)
+            ),
+        );
+        invalid.push(usage_event(10, 4));
+        invalid.push(ProviderStreamEvent::Finish { reason: finish });
+        let mut corrected = tool_call_fragments(
+            0,
+            "corrected-shell",
+            "shell",
+            r#"{"command":"printf corrected > recovered.txt"}"#,
+        );
+        corrected.push(ProviderStreamEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
+        let fake = Arc::new(FakeProvider::new(
+            "fake",
+            Capabilities::basic_streaming(),
+            vec![
+                ScriptedStream::new(invalid),
+                ScriptedStream::new(corrected),
+                ScriptedStream::new(vec![
+                    ProviderStreamEvent::TextDelta {
+                        text: "done".into(),
+                    },
+                    ProviderStreamEvent::Finish {
+                        reason: FinishReason::Stop,
+                    },
+                ]),
+            ],
+        ));
+        let runtime = build(dir.path(), fake.clone(), Arc::new(AllowAll));
+        let session = runtime.start_session(StartSession::new()).await.unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            session.run(UserInput::text("write the marker")),
+        )
+        .await
+        .expect("recovery completes")
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("recovered.txt")).unwrap(),
+            "corrected"
+        );
+        let requests = fake.requests();
+        assert_eq!(requests.len(), 3, "the model receives a correction attempt");
+        let feedback = requests[1].messages.last().unwrap().joined_text();
+        assert!(feedback.contains("invalid JSON"));
+        assert!(feedback.contains("smaller"));
+        assert!(
+            !serde_json::to_string(&requests[1])
+                .unwrap()
+                .contains("PRIVATE_COMMAND_CANARY")
+        );
+        assert_eq!(
+            tool_results(&session).len(),
+            1,
+            "only the corrected shell call executes"
+        );
+        assert_eq!(
+            session
+                .history()
+                .iter()
+                .flat_map(|message| message.tool_calls())
+                .count(),
+            1
+        );
+        assert!(session.snapshot().usage.records()[0].provenance.failed);
+    }
+}
+
+#[tokio::test]
 async fn a_read_only_tool_runs_without_asking_for_approval() {
     let dir = project();
     let runtime = build(
