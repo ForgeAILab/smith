@@ -62,6 +62,7 @@ mod mcp;
 mod model_catalog;
 mod preflight;
 mod prompts;
+mod retries;
 mod skills_and_memory;
 mod tool_routing;
 
@@ -255,10 +256,10 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
         ],
         "the one factory seals every executable tool as one descriptor-first ability"
     );
-    // The built-in defaults, mapped: two retries is three attempts, an
+    // The built-in defaults, mapped: five retries is six attempts, an
     // unlimited tool loop carries no ceiling at all, and the reserve falls
     // back to the model's own declared ceiling.
-    assert_eq!(policy.max_attempts, 3);
+    assert_eq!(policy.max_attempts, 6);
     assert_eq!(policy.max_tool_steps, None);
     assert_eq!(policy.context_policy.output_reserve, 4_096);
     assert_eq!(policy.context_policy.reasoning_reserve, 0);

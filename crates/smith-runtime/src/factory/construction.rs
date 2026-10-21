@@ -420,8 +420,12 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         });
     }
 
+    let backoff = Arc::new(crate::provider_backoff::ProviderBackoff::new(
+        provider.clone(),
+    ));
     let mut builder = RuntimeBuilder::new(model.clone())
-        .provider(provider.clone())
+        .provider(backoff.clone())
+        .observer(backoff)
         .observer(request.web_search_session.clone())
         .provider_name(provider_name.clone())
         // The profile rather than the catalog: the run must plan against

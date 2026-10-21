@@ -450,7 +450,7 @@ wait_default_timeout_ms = 300000
 wait_max_timeout_ms = 300000
 
 [profiles.work.limits]
-max_retries = 2
+max_retries = 5
 max_tool_steps = 0
 turn_time_limit_ms = 0
 tool_output_limit_bytes = 65536
@@ -1157,7 +1157,7 @@ reserve, or estimated-count slack.
 | `context.cache.resume_capsule` | `true` | Persist the redaction-safe cold-continuation projection |
 | `child_agents.wait_default_timeout_ms` | `300000` | Default five-minute foreground `agent.wait` boundary; zero is an immediate status check |
 | `child_agents.wait_max_timeout_ms` | `300000` | Maximum accepted foreground `agent.wait.timeout_ms`; timeout leaves the child running |
-| `limits.max_retries` | `2` | Retries after the first provider attempt |
+| `limits.max_retries` | `5` | Retries after the first provider attempt (six attempts total). Exponential backoff with equal jitter: 0.5–1s, 1–2s, 2–4s, 4–8s, 8–16s; later waits cap at 15–30s. Longer provider retry hints take precedence; rate limits without a hint wait at least 2s. |
 | `limits.max_tool_steps` | `0` | Tool-loop ceiling per turn; `0` removes it |
 | `limits.turn_time_limit_ms` | `0` | Whole-turn deadline; `0` removes it |
 | `limits.tool_output_limit_bytes` | `65536` | Inline output/offload threshold |

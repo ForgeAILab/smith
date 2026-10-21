@@ -445,7 +445,10 @@ pub(super) fn loop_config(
         // Configuration counts retries *after* the first attempt; the shared
         // policy counts attempts including it.
         max_attempts: config.limits.max_retries.value.saturating_add(1),
-        ..RetryPolicy::default()
+        // The provider supplies equal-jitter waits; the shared policy supplies
+        // their lower bound without overriding the sampled delay at the cap.
+        initial_backoff_ms: crate::provider_backoff::INITIAL_BACKOFF_MS / 2,
+        max_backoff_ms: crate::provider_backoff::MAX_BACKOFF_MS / 2,
     };
     // A configured value of 0 removes the wall-clock ceiling: the limit is
     // optional on the shared loop, and `None` leaves a turn unbounded by time.
