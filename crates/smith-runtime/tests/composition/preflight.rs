@@ -1,5 +1,78 @@
 use super::*;
 
+use agent_runtime_core::provider::ProviderErrorKind;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[tokio::test]
+async fn private_endpoint_validates_reasoning_after_the_request_is_sent() {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        for accepted in [true, false] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let request = loop {
+                    let mut chunk = [0; 4096];
+                    let read = socket.read(&mut chunk).await.unwrap();
+                    assert_ne!(read, 0, "the client closed before sending its request");
+                    bytes.extend_from_slice(&chunk[..read]);
+                    let Some(boundary) = bytes.windows(4).position(|part| part == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let headers = std::str::from_utf8(&bytes[..boundary]).unwrap();
+                    let length: usize = headers.lines().find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().unwrap())
+                    }).expect("a content length");
+                    let start = boundary + 4;
+                    if bytes.len() >= start + length {
+                        break serde_json::from_slice::<serde_json::Value>(&bytes[start..start + length]).unwrap();
+                    }
+                };
+                let (status, content_type, body) = if accepted {
+                    ("200 OK", "text/event-stream", "data: {\"choices\":[{\"delta\":{\"content\":\"accepted\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+                } else {
+                    ("400 Bad Request", "application/json", r#"{"error":{"message":"reasoning_effort ultra is not supported"}}"#)
+                };
+                socket.write_all(format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                ).as_bytes()).await.unwrap();
+                socket.shutdown().await.unwrap();
+                request
+            });
+            let config = format!("{FAKE_CONFIG}\n[profiles.dev.reasoning]\neffort = \"ultra\"\n")
+                .replace("kind = \"fake\"", &format!("kind = \"openai-compatible\"\nbase_url = \"http://{address}/v1\""));
+            let fixture = Fixture::new(&config);
+            let recorder = RecordingObserver::shared();
+            let request = RuntimeRequest {
+                observers: vec![recorder.clone()],
+                ..request(&fixture, HostSurface::Headless)
+            };
+            factory::preflight(&request).await.expect("metadata does not block setup");
+            let smith = factory::build_request(request).await.expect("a compatible runtime");
+            let session = smith.runtime().start_session(StartSession::new()).await.unwrap();
+            session.run(UserInput::text("hello")).await.unwrap();
+            let wire = server.await.unwrap();
+            assert_eq!(wire["reasoning_effort"], "ultra");
+            let failures: Vec<_> = recorder.events().into_iter().filter_map(|event| match event.payload {
+                RuntimeEvent::ProviderAttemptFinished { error, .. } => error,
+                _ => None,
+            }).collect();
+            if accepted {
+                assert!(failures.is_empty(), "{failures:?}");
+                assert!(session.history().iter().any(|message| message.joined_text() == "accepted"));
+            } else {
+                assert_eq!(failures.len(), 1);
+                assert_eq!(failures[0].kind, ProviderErrorKind::BadRequest);
+            }
+            session.shutdown().await.unwrap();
+        }
+    }).await.expect("the endpoint fixtures finish promptly");
+}
+
 /// A profile selecting an adapter this build of Agent Runtime does not ship.
 const UNAVAILABLE_ADAPTER_CONFIG: &str = r#"
 default_profile = "dev"

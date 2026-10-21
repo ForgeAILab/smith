@@ -266,7 +266,10 @@ fn chatgpt_reasoning_defaults_require_the_exact_endpoint_and_trusted_identity() 
             None,
         )
         .expect_err("untrusted bindings reject controls before provider I/O");
-        assert!(error.contains("not adjustable"), "{error}");
+        assert!(
+            error.contains("missing reasoning control metadata"),
+            "{error}"
+        );
     }
 }
 
@@ -352,9 +355,134 @@ fn presence_only_or_unknown_models_reject_controls_instead_of_guessing_a_dialect
         ));
         let error = resolve_reasoning_policy(&config, &model_profile(support), None, None)
             .expect_err("presence-only metadata cannot expose controls");
-        assert!(error.contains("not adjustable"), "{error}");
+        assert!(
+            error.contains("missing reasoning control metadata"),
+            "{error}"
+        );
         assert!(error.contains("presence only"), "{error}");
     }
+}
+
+fn private_endpoint_config(model_reasoning: &str) -> ResolvedConfig {
+    let home = tempfile::tempdir().expect("home");
+    let project = tempfile::tempdir().expect("project");
+    std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+    std::fs::write(
+        project.path().join(".smith/config.toml"),
+        format!(
+            r#"
+default_profile = "security"
+[profiles.security]
+provider = "private"
+model = "selected-large"
+[profiles.security.reasoning]
+effort = "high"
+[providers.private]
+kind = "openai-compatible"
+base_url = "https://private.invalid/v1"
+[models."private/selected-large"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+{model_reasoning}
+"#,
+        ),
+    )
+    .expect("config");
+    resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+        .expect("resolved private endpoint config")
+        .config
+}
+
+#[test]
+fn private_endpoint_missing_metadata_forwards_the_selected_effort() {
+    let config = private_endpoint_config("");
+    for support in [ReasoningSupport::Fixed, ReasoningSupport::Unsupported] {
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(support),
+            Some("https://private.invalid/v1"),
+            None,
+        )
+        .expect("the endpoint validates an explicit effort");
+        assert_eq!(policy.support, ReasoningSupport::Controllable);
+        assert_eq!(policy.dialect, Some(ReasoningDialect::OpenaiEffort));
+        assert_eq!(
+            policy.request_config().unwrap().effort.as_deref(),
+            Some("high")
+        );
+        assert!(policy.capability_source.contains("validated by endpoint"));
+    }
+}
+
+#[test]
+fn private_endpoint_can_receive_efforts_missing_from_the_advertised_list() {
+    let mut config = private_endpoint_config(
+        r#"
+[models."private/selected-large".reasoning]
+dialect = "openai-effort"
+efforts = ["low", "medium", "high"]
+"#,
+    );
+    config.reasoning.effort.as_mut().unwrap().value = "ultra".to_owned();
+    let policy = resolve_reasoning_policy(
+        &config,
+        &model_profile(ReasoningSupport::Unsupported),
+        Some("https://private.invalid/v1"),
+        None,
+    )
+    .expect("a stale advertised ladder does not reject the selected effort");
+    assert_eq!(
+        policy.request_config().unwrap().effort.as_deref(),
+        Some("ultra")
+    );
+    assert_eq!(policy.efforts, ["low", "medium", "high"]);
+}
+
+#[test]
+fn private_endpoint_thinking_switches_reach_the_wire_without_metadata() {
+    for (enabled, expected) in [(true, "medium"), (false, "none")] {
+        let mut config = private_endpoint_config("");
+        config.reasoning.effort = None;
+        config.reasoning.enabled =
+            Some(Sourced::new(enabled, Source::session("reasoning.enabled")));
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Unsupported),
+            Some("https://private.invalid/v1"),
+            None,
+        )
+        .expect("the endpoint validates the thinking switch");
+        assert_eq!(
+            policy.request_config().unwrap().effort.as_deref(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn explicit_private_endpoint_controls_preserve_the_requested_profile_effort() {
+    let config = private_endpoint_config(
+        r#"
+[models."private/selected-large".reasoning]
+dialect = "openai-effort"
+efforts = ["low", "medium", "high"]
+"#,
+    );
+    let policy = resolve_reasoning_policy(
+        &config,
+        &model_profile(ReasoningSupport::Fixed),
+        Some("https://private.invalid/v1"),
+        None,
+    )
+    .expect("explicit controls resolve on a private endpoint");
+
+    assert_eq!(policy.dialect, Some(ReasoningDialect::OpenaiEffort));
+    assert_eq!(policy.effective_effort(), "high");
+    assert_eq!(
+        policy.request_config().unwrap().effort.as_deref(),
+        Some("high")
+    );
 }
 
 #[test]
@@ -638,7 +766,10 @@ fn anthropic_named_models_do_not_infer_an_effort_dialect() {
     let error =
         resolve_reasoning_policy(&config, &model_profile(ReasoningSupport::Fixed), None, None)
             .expect_err("model names do not establish a trusted dialect");
-    assert!(error.contains("not adjustable"), "{error}");
+    assert!(
+        error.contains("missing reasoning control metadata"),
+        "{error}"
+    );
     assert!(error.contains("presence only"), "{error}");
 }
 
@@ -717,6 +848,10 @@ fn openrouter_non_reasoning_models_stay_fail_closed() {
     )
     .expect_err("a non-reasoning model gains no switch from the endpoint");
     assert!(error.contains("not adjustable"), "{error}");
+    assert!(
+        !error.contains("missing reasoning control metadata"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -927,7 +1062,10 @@ fn an_invocation_effort_on_an_uncontrollable_binding_refuses_rather_than_degrade
     let error =
         resolve_reasoning_policy(&config, &model_profile(ReasoningSupport::Fixed), None, None)
             .expect_err("an unknown endpoint grants no reasoning controls");
-    assert!(error.contains("not adjustable"), "{error}");
+    assert!(
+        error.contains("missing reasoning control metadata"),
+        "{error}"
+    );
     assert!(error.contains("presence only"), "{error}");
 
     // Controllable, but with an on/off switch and no ladder to pick from.

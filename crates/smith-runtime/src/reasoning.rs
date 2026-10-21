@@ -1,7 +1,7 @@
 //! Typed reasoning capability resolution and exact provider-wire adaptation.
 //!
-//! A catalog boolean proves only that a model reasons. Adjustable controls
-//! require an exact dialect plus bounded metadata for the selected binding.
+//! Model metadata supplies picker choices, defaults, and native request formats.
+//! Explicit OpenAI-compatible selections are validated by the endpoint.
 
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ use smith_config::catalog::{
     CatalogReasoningControls, GEMINI_ENDPOINT, OPENAI_ENDPOINT, OPENROUTER_ENDPOINT,
     XAI_CATALOG_ENDPOINT, ZAI_CODING_PLAN_ENDPOINT,
 };
-use smith_config::model::ReasoningDialect;
+use smith_config::model::{KIND_OPENAI_COMPATIBLE, ReasoningDialect};
 use smith_config::resolve::{Layer, ResolvedConfig, ResolvedModelReasoning, Source, Sourced};
 use smith_config::setup::{CHATGPT_ENDPOINT, CHATGPT_PROVIDER, trusted_model};
 
@@ -312,7 +312,9 @@ impl ReasoningRuntimePolicy {
 /// the exact selected binding, when the endpoint is catalog-mapped and the
 /// snapshot annotates the model. It refines the per-endpoint defaults; it
 /// never creates controls on an endpoint whose wire dialect is unknown, and
-/// explicit `[models."provider/model".reasoning]` metadata still wins.
+/// explicit `[models."provider/model".reasoning]` metadata still wins. Explicit
+/// OpenAI-compatible selections can also use the adapter's standard wire format
+/// without catalog coverage; the endpoint validates their supported values.
 pub fn resolve_reasoning_policy(
     config: &ResolvedConfig,
     profile: &ResolvedModelProfile,
@@ -546,10 +548,79 @@ pub fn resolve_reasoning_policy(
         .as_ref()
         .map(|value| value.value.trim().to_ascii_lowercase());
     let selection_source = selection_source(config);
+    let has_selection = selected_enabled.is_some() || selected_effort.is_some();
+    if has_selection && config.provider.kind.value == KIND_OPENAI_COMPATIBLE {
+        // Compatible endpoints validate explicit selections themselves. Catalog
+        // coverage is advisory; it must not block private or newly added models.
+        let dialect = match dialect {
+            Some(ReasoningDialect::ZaiThinking) if selected_effort.is_some() => {
+                ReasoningDialect::OpenaiEffort
+            }
+            dialect => dialect.unwrap_or(ReasoningDialect::OpenaiEffort),
+        };
+        let selected_effort = selected_effort.or_else(|| {
+            (selected_enabled == Some(true) && dialect == ReasoningDialect::OpenaiEffort).then(
+                || {
+                    default_effort
+                        .clone()
+                        .unwrap_or_else(|| "medium".to_owned())
+                },
+            )
+        });
+        return Ok(ReasoningRuntimePolicy {
+            support: ReasoningSupport::Controllable,
+            switch: ReasoningSwitch::Optional,
+            efforts,
+            default_enabled,
+            default_effort,
+            selected_enabled,
+            selected_effort,
+            dialect: Some(dialect),
+            capability_source: format!(
+                "{capability_source}; explicit OpenAI-compatible selection validated by endpoint"
+            ),
+            selection_source,
+        });
+    }
+    let known_unsupported = support == ReasoningSupport::Unsupported
+        && endpoint.is_some_and(|endpoint| {
+            [
+                OPENAI_ENDPOINT,
+                OPENROUTER_ENDPOINT,
+                CHATGPT_ENDPOINT,
+                XAI_CATALOG_ENDPOINT,
+                GEMINI_ENDPOINT,
+                ZAI_CODING_PLAN_ENDPOINT,
+            ]
+            .contains(&endpoint)
+        });
 
-    if (selected_enabled.is_some() || selected_effort.is_some())
-        && (support != ReasoningSupport::Controllable || dialect.is_none())
-    {
+    if has_selection && dialect.is_none() && !known_unsupported {
+        let binding = serde_json::to_string(&format!(
+            "{}/{}",
+            config.provider.name.value, config.model.value
+        ))
+        .expect("model binding strings serialize");
+        let selection_locations = [
+            config.reasoning.enabled.as_ref().map(|value| &value.source),
+            config.reasoning.effort.as_ref().map(|value| &value.source),
+        ]
+        .into_iter()
+        .flatten()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+        return Err(format!(
+            "missing reasoning control metadata for provider `{}` model `{}`; \
+             the available model metadata does not establish which controls the endpoint accepts. \
+             Configure `[models.{binding}.reasoning]` with an exact `dialect` and \
+             provider-supported `efforts` or `toggle`. If this endpoint is verified to accept \
+             `reasoning_effort`, use `dialect = \"openai-effort\"`. \
+             Selection source: {selection_locations}; capability source: {capability_source}",
+            config.provider.name.value, config.model.value
+        ));
+    }
+    if has_selection && support != ReasoningSupport::Controllable {
         return Err(format!(
             "reasoning is not adjustable for provider `{}` model `{}`; capability source: {capability_source}",
             config.provider.name.value, config.model.value

@@ -357,11 +357,31 @@ selecting a model applies its provider/model pair atomically; selecting a
 provider with several models cascades into that provider's model list.
 
 `/think [on|off|default]` and `/effort [LEVEL|default]` use the same local
-picker grammar and require an idle turn. They become real controls only when
-the exact provider/model metadata can represent the request; a generic catalog
-reasoning boolean remains fixed. The effective state, effort, and source are
-visible in `/status` and `/context`, and a non-default override is shown in the
-wide footer. These choices can affect latency, token use, and cost.
+picker grammar and require an idle turn. Model metadata supplies picker choices
+and provider-specific request formats. OpenAI-compatible endpoints receive
+explicit reasoning selections even when the model is missing from the catalog
+or its advertised effort list is incomplete; unsupported values are reported
+by the endpoint. The effective state, effort, and source are visible in
+`/status` and `/context`, and a non-default override is shown in the wide
+footer. These choices can affect latency, token use, and cost.
+
+For a private OpenAI-compatible endpoint, an explicit effort is sent as
+top-level `reasoning_effort` unless a different reasoning format is configured.
+Thinking off sends `none`; thinking on uses the configured default effort or
+`medium` when no effort was selected. Omitting a selection preserves the
+provider's defaults. Optional model metadata supplies picker choices and
+request-format overrides:
+
+```toml
+[models."my-provider/my-model".reasoning]
+dialect = "openai-effort"
+efforts = ["low", "medium", "high"]
+```
+
+Set the desired `effort = "high"` in `[profiles.<name>.reasoning]` or use
+`--effort high`. A missing control declaration does not block the request, and
+Smith does not issue extra completion requests to probe support. Other native
+adapters still require reasoning controls their request format can represent.
 
 `smith --resume` likewise opens a project-session picker before any host is
 constructed. `smith --resume <session-id>` remains the explicit form, while
