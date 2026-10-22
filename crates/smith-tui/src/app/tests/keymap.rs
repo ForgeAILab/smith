@@ -414,6 +414,7 @@ mod keymap {
                     && app.scroll_back == 0
                     && app.following
                     && app.composer.text() == before.text
+                    && app.composer.cursor() == before.cursor
                     && app.overlay.as_ref().map(std::mem::discriminant) == before.overlay
             }
             KeyEffect::SearchHistory => {
@@ -600,12 +601,9 @@ mod keymap {
 
     #[tokio::test]
     async fn footer_hint_key_names_have_bindings_in_the_matching_context() {
-        use KeyContext::{
-            AnyComposer, EmptyDraft, EmptyPausedOutput, PausedOutput, QueuedTurn, Working,
-        };
+        use KeyContext::{AnyComposer, EmptyDraft, PausedOutput, QueuedTurn, Working};
         use KeyEffect::{
-            DraftEdge, EditQueuedTurn, FollowNewest, InterruptOrClose, OutputEdge, QueueTurn,
-            ShowShortcuts, Steer,
+            EditQueuedTurn, FollowNewest, InterruptOrClose, QueueTurn, ShowShortcuts, Steer,
         };
         let mut app = fixture(EmptyDraft, false).await.app;
         app.follow_newest();
@@ -619,14 +617,6 @@ mod keymap {
         );
 
         app.scroll_up(10);
-        footer_binding(
-            &mut app,
-            160,
-            "End",
-            KeyChord::new(NamedKey::End, Modifier::None),
-            EmptyPausedOutput,
-            OutputEdge(Edge::End),
-        );
         footer_binding(
             &mut app,
             160,
@@ -650,15 +640,14 @@ mod keymap {
             );
         }
 
-        // End retains its draft meaning when this same hint appears with text.
         app = fixture(AnyComposer, false).await.app;
         footer_binding(
             &mut app,
             160,
-            "End",
-            KeyChord::new(NamedKey::End, Modifier::None),
+            "Ctrl+L",
+            KeyChord::new(NamedKey::Char('l'), Modifier::Control),
             AnyComposer,
-            DraftEdge(Edge::End),
+            FollowNewest,
         );
 
         app = fixture(QueuedTurn, true).await.app;

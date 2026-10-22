@@ -116,6 +116,11 @@ identities remain exact and their bytes are read when the queued turn starts.
 Slash commands, shell shortcuts, child operations, approvals, and
 questionnaires are never queued implicitly.
 
+Use `PageUp` / `PageDown` or the mouse wheel to scroll through a session.
+Press `Ctrl+L` or `Ctrl+End` to jump to the bottom and follow new output
+without changing your draft. The footer shows `Ctrl+L bottom` while scrolled
+back; `/help` and `?` on an empty draft list the shortcuts.
+
 ## File commands
 
 Detected skills appear directly in slash completion as `/<skill-name>`.

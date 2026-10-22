@@ -780,7 +780,7 @@ fn composer_hint(app: &App, width: u16) -> String {
         return "bash mode".to_owned();
     }
     if !app.following {
-        let paused = "▼ following paused · End/Ctrl+L newest";
+        let paused = "▼ following paused · Ctrl+L bottom";
         if app.is_busy() {
             for controls in [
                 "enter to steer · tab to queue · esc to interrupt",
@@ -791,7 +791,7 @@ fn composer_hint(app: &App, width: u16) -> String {
                     return hint;
                 }
             }
-            return "▼ paused · ctrl+l · enter · tab · esc".to_owned();
+            return "▼ ctrl+l bottom · enter · tab · esc".to_owned();
         }
         return paused.to_owned();
     }

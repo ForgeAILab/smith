@@ -232,7 +232,7 @@
         app.scroll_up(3);
         let paused = render_synced(&mut app, 74, 10, Theme::new());
         assert!(paused.contains("following paused"), "{paused}");
-        assert!(paused.contains("End/Ctrl+L newest"), "{paused}");
+        assert!(paused.contains("Ctrl+L bottom"), "{paused}");
     }
 
     #[test]

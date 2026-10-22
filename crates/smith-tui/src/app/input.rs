@@ -151,6 +151,17 @@ impl App {
             self.toggle_work_details();
             return None;
         }
+        if key.modifiers == KeyModifiers::CONTROL
+            && matches!(key.code, KeyCode::Char('l') | KeyCode::End)
+            && matches!(
+                self.overlay,
+                None | Some(Overlay::Palette { .. } | Overlay::Approval { .. })
+            )
+        {
+            self.selection = None;
+            self.follow_newest();
+            return None;
+        }
         // Navigation never resolves a prompt. It remains available during the
         // quiet window, after the guard has seen and accounted for the key.
         if matches!(self.overlay, Some(Overlay::Approval { .. })) {
@@ -160,9 +171,6 @@ impl App {
                 KeyCode::Home | KeyCode::End => {
                     self.selection = None;
                     return self.on_scroll_key(key);
-                }
-                KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
-                    self.follow_newest()
                 }
                 KeyCode::Up => self.approval_scroll = self.approval_scroll.saturating_sub(1),
                 KeyCode::Down => {
@@ -224,10 +232,6 @@ impl App {
                     error: None,
                     restore_on_escape: Some(original),
                 });
-                None
-            }
-            (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
-                self.follow_newest();
                 None
             }
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => {

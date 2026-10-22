@@ -88,7 +88,7 @@
   ? on an empty draft       Show shortcuts
   PageUp / PageDown         Scroll the transcript
   Mouse wheel               Scroll the transcript
-  Ctrl+L                    Follow the newest output
+  Ctrl+L / Ctrl+End         Jump to the bottom and follow new output
   Ctrl+R                    Search input history; Enter restores, Esc closes
   Ctrl+C                    Save the draft in history and clear it
   Ctrl+C twice              Exit (press twice within one second)
