@@ -125,6 +125,18 @@ impl App {
         self.pending_input.ready_submission.take()
     }
 
+    /// Schedules a host-admitted task for the next idle serving-loop iteration.
+    pub fn schedule_prepared(&mut self, submission: PreparedSubmission) {
+        if self.is_busy() || self.has_pending_input() || self.has_pending_prompt() {
+            self.restore_submission(
+                submission,
+                "the session is no longer idle; task preserved".to_owned(),
+            );
+            return;
+        }
+        self.pending_input.ready_submission = Some(submission);
+    }
+
     pub(super) fn push_rejected_followup(&mut self, entry: RejectedFollowup) {
         if self.pending_input.rejected_followups.len() < MAX_REJECTED_FOLLOWUPS {
             self.pending_input.rejected_followups.push_back(entry);

@@ -27,6 +27,7 @@ pub use notice::{Notice, NoticeKind, NoticePersistence};
 pub mod recovery_report;
 pub mod review_report;
 pub mod shell_report;
+pub mod skill_commands;
 pub mod skills_report;
 pub mod status;
 pub mod status_report;

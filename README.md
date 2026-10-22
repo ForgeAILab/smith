@@ -118,6 +118,13 @@ questionnaires are never queued implicitly.
 
 ## File commands
 
+Detected skills appear directly in slash completion as `/<skill-name>`.
+Invoke one alone to activate it for your next prompt, or add a task to activate
+and run it immediately. `/skills use <name>` handles command-name collisions;
+`/skills` lists availability and project trust. These shortcuts use
+provider-backed turns; installed CLI agents use the skill MCP bridge.
+See [Skills](docs/skills.md#invoke-a-detected-skill-directly).
+
 Save a Markdown prompt template at `~/.smith/commands/<name>.md` or
 `<project>/.smith/commands/<name>.md`, then invoke `/<name> args` in the TUI or
 with `smith -p "/<name> args"`. Project commands need `/commands trust <name>`

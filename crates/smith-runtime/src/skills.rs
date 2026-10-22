@@ -25,6 +25,17 @@ use smith_config::trust::TrustStatus;
 
 pub use discovery::{DiscoveredSkill, DiscoveredSkills, SkillProblem, discover, discover_into};
 
+/// Exact skill declaration explicitly selected by the user before a safe rebind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestedSkill {
+    /// Effective catalog name.
+    pub name: String,
+    /// Winning source layer at selection time.
+    pub layer: SmithSkillLayer,
+    /// Pinned descriptor revision at selection time.
+    pub revision: String,
+}
+
 /// Converts inspected plugin metadata into the ordinary digest-pinned skill.
 /// The host verified the bundle and supplies the SHA-256 of these on-disk bytes.
 pub fn plugin_skill(component: &smith_plugin::SkillComponent, digest: [u8; 32]) -> Skill {
@@ -84,6 +95,8 @@ pub struct SkillIndexEntry {
     pub layer: SmithSkillLayer,
     /// Whether host trust admitted the body to the runtime activation view.
     pub activatable: bool,
+    /// Discovery-time content trust decision, retained without body reads.
+    pub trust_status: TrustStatus,
     /// Content trust class used by diagnostics.
     pub trust: TrustClass,
 }
@@ -244,6 +257,7 @@ impl SmithSkillSources {
                     descriptor: ability.descriptor(),
                     layer,
                     activatable: admitted,
+                    trust_status: declaration.trust,
                     trust: ability.trust_class(),
                 });
                 if admitted {
@@ -280,6 +294,35 @@ impl fmt::Debug for ResolvedSmithSkills {
 }
 
 impl ResolvedSmithSkills {
+    /// Resolves the effective admitted declaration without loading its body.
+    pub(crate) fn selection(&self, name: &str) -> Result<RequestedSkill, RuntimeError> {
+        let entry = self
+            .index
+            .iter()
+            .rev()
+            .find(|entry| entry.name() == name && entry.activatable)
+            .ok_or_else(|| {
+                let reason = self
+                    .index
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.name() == name)
+                    .map_or("unknown", |entry| match entry.trust_status {
+                        TrustStatus::Changed => "content changed",
+                        TrustStatus::Denied => "trust denied",
+                        _ => "awaiting trust",
+                    });
+                RuntimeError::config(format!(
+                    "skill `{name}` is {reason}; inspect `/skills` or use `/skills trust {name}`"
+                ))
+            })?;
+        Ok(RequestedSkill {
+            name: name.to_owned(),
+            layer: entry.layer,
+            revision: entry.descriptor.content_revision().as_str().to_owned(),
+        })
+    }
+
     /// Bounded source index, including untrusted workspace metadata.
     pub fn index(&self) -> &[SkillIndexEntry] {
         &self.index

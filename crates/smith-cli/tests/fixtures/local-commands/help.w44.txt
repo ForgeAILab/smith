@@ -59,10 +59,11 @@
   /capabilities  Show capabilities, or deny
                  one for this session
                  [deny ID|allow ID]
-  /skills        Show indexed skills, or
-                 trust one this project
-                 ships
-                 [trust NAME]
+  /skills        List skills, activate one,
+                 or review project skill
+                 trust
+                 [trust NAME|use NAME
+                 [task]]
   /commands      Show file commands, trust
                  one, or reload the catalog
                  [trust NAME|reload]

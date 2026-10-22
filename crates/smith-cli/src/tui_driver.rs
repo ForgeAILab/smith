@@ -41,6 +41,11 @@ use crate::submission::{
 use crate::{FRAME, SPINNER_TICK, interaction, local_command, terminal};
 
 pub(super) enum InteractiveExit {
+    /// Admit a requested skill, then optionally dispatch its prepared task.
+    ActivateSkill {
+        selected: smith_runtime::skills::RequestedSkill,
+        submission: Option<smith_tui::app::PreparedSubmission>,
+    },
     /// A validated cache snapshot can join at an idle boundary.
     CatalogChanged(Arc<smith_config::catalog::CatalogSnapshot>),
     /// A classified root rejection requires the same-session search route to
@@ -486,6 +491,12 @@ where
     B::Error: Send + Sync + 'static,
 {
     let exit = loop {
+        if stop.interrupted() {
+            break tui.on_quit();
+        }
+        if let Some(submission) = tui.app.take_ready_submission() {
+            tui.on_submit(submission, SubmissionTarget::WholeTurn).await;
+        }
         tokio::select! {
             // Stop signals and keyboard input must not be starved by a provider flood.
             biased;

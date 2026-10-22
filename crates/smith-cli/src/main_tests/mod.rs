@@ -130,6 +130,8 @@ mod rendering;
 #[cfg(test)]
 #[allow(clippy::wildcard_imports)]
 mod resources;
+#[allow(clippy::wildcard_imports)]
+mod skill_commands;
 #[cfg(test)]
 #[allow(clippy::wildcard_imports)]
 mod skills;

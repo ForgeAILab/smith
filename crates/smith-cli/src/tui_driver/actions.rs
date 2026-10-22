@@ -75,6 +75,47 @@ impl TuiLoop<'_> {
 
     async fn on_action(&mut self, action: Action) -> Option<InteractiveExit> {
         match action {
+            Action::UseSkill {
+                typed,
+                name,
+                arguments,
+            } => {
+                self.host.set_goal_continuation_enabled(false);
+                match crate::skills::prepare_invocation(
+                    self.host,
+                    &self.app,
+                    typed.clone(),
+                    &name,
+                    &arguments,
+                ) {
+                    Ok(prepared) if prepared.already_active => {
+                        self.app.push_notice(
+                            NoticeKind::Local,
+                            format!("skill `{name}` already active"),
+                        );
+                        if let Some(submission) = prepared.submission {
+                            let Action::Submit { submission, target } =
+                                self.app.submit_prepared(submission)
+                            else {
+                                unreachable!("a prepared task produces a submission");
+                            };
+                            self.on_submit(submission, target).await;
+                        }
+                    }
+                    Ok(prepared) => {
+                        return Some(InteractiveExit::ActivateSkill {
+                            selected: prepared.selected,
+                            submission: prepared.submission,
+                        });
+                    }
+                    Err(error) => {
+                        self.app.transcript.push_error(error);
+                        if self.app.composer.is_empty() {
+                            self.app.composer.replace(&typed);
+                        }
+                    }
+                }
+            }
             Action::Submit { submission, target } => self.on_submit(submission, target).await,
             Action::FileCommand {
                 typed,
@@ -158,7 +199,7 @@ impl TuiLoop<'_> {
         None
     }
 
-    async fn on_submit(
+    pub(super) async fn on_submit(
         &mut self,
         submission: smith_tui::app::PreparedSubmission,
         target: SubmissionTarget,

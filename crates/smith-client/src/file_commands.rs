@@ -205,6 +205,7 @@ pub struct CommandCatalog {
     problems: Vec<CommandProblem>,
     plugins: BTreeMap<String, PluginCommand>,
     unavailable_plugins: BTreeMap<String, String>,
+    skills: Vec<crate::skill_commands::SkillCommand>,
 }
 
 #[derive(Debug, Clone)]
@@ -245,6 +246,25 @@ impl PluginCommand {
 }
 
 impl CommandCatalog {
+    /// Adds bounded skill metadata while preserving existing command names.
+    pub fn with_skills(mut self, mut skills: Vec<crate::skill_commands::SkillCommand>) -> Self {
+        for skill in &mut skills {
+            skill.alias = if is_reserved_name(&skill.name) || self.recognizes(&skill.name) {
+                format!("skills use {}", skill.name)
+            } else {
+                skill.name.clone()
+            };
+        }
+        skills.sort_by(|left, right| left.name.cmp(&right.name));
+        self.skills = skills;
+        self
+    }
+
+    /// Skill shortcuts; no instruction bodies are retained here.
+    pub fn skills(&self) -> &[crate::skill_commands::SkillCommand] {
+        &self.skills
+    }
+
     /// An empty catalog for clients that have no file-command basis.
     pub fn empty() -> Self {
         Self::default()

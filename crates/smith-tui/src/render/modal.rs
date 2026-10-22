@@ -167,6 +167,13 @@ pub(super) fn draw_palette(
             lines.push(list_row(
                 &format!("/{}", command.name()),
                 &match command {
+                    commands::MenuRow::Skill(skill) if skill.disabled_reason.is_some() => {
+                        format!(
+                            "{} · {}",
+                            skill.description,
+                            skill.disabled_reason.as_deref().unwrap_or_default()
+                        )
+                    }
                     commands::MenuRow::File(entry)
                         if entry.state != smith_client::file_commands::CommandState::Runnable =>
                     {
@@ -209,6 +216,10 @@ pub(super) fn draw_palette(
 fn palette_detail(command: commands::MenuRow<'_>) -> String {
     let hint = command.argument_hint().unwrap_or_default();
     match command {
+        commands::MenuRow::Skill(skill) => match &skill.disabled_reason {
+            Some(reason) => format!("{hint} · {reason}"),
+            None => format!("{hint} · activate skill"),
+        },
         commands::MenuRow::File(entry)
             if entry.state != smith_client::file_commands::CommandState::Runnable =>
         {

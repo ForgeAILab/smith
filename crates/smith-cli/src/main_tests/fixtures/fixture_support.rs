@@ -148,12 +148,17 @@ impl Normalizer {
                         | "idle_compaction_latency_ms"
                         | "backoff_ms"
                         | "delay_ms"
+                        | "retry_delay_ms"
+                        | "retry_after_ms"
                 ) {
                     let mut value_end = value_at;
                     while bytes.get(value_end).is_some_and(u8::is_ascii_digit) {
                         value_end += 1;
                     }
-                    if value_end > value_at {
+                    if value_end > value_at
+                        && !(matches!(key, "retry_delay_ms" | "retry_after_ms")
+                            && &captured[value_at..value_end] == "0")
+                    {
                         spans.push((value_at, value_end));
                     }
                 }
@@ -560,6 +565,14 @@ fn fixtures_normalization_keeps_values_and_order() {
     assert_eq!(
         normalizer.normalize("tokens: 120 · cost $0.002 · 75%"),
         "tokens: 120 · cost $0.002 · 75%"
+    );
+    assert_eq!(
+        normalizer.normalize(r#"{"retry_delay_ms":848,"retry_after_ms":848,"max_attempts":6}"#),
+        r#"{"retry_delay_ms":"<DURATION>","retry_after_ms":"<DURATION>","max_attempts":6}"#
+    );
+    assert_eq!(
+        normalizer.normalize(r#"{"retry_delay_ms":0,"retry_after_ms":null}"#),
+        r#"{"retry_delay_ms":0,"retry_after_ms":null}"#
     );
     assert_eq!(
         normalizer.normalize(r#"trailing quote ""#),

@@ -2,6 +2,76 @@ use super::*;
 
 use smith_config::trust::{Executable, ExecutableKind, TrustDecision, TrustStore};
 
+fn skill_shortcut(name: &str) -> SkillCommand {
+    SkillCommand {
+        name: name.to_owned(),
+        alias: name.to_owned(),
+        description: "Review changed code".to_owned(),
+        source: "skill · user".to_owned(),
+        disabled_reason: None,
+    }
+}
+
+#[test]
+fn detected_skill_shortcuts_share_parsing_completion_help_and_collision_rules() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("commands")).unwrap();
+    std::fs::write(
+        root.path().join("commands/audit.md"),
+        "---\ndescription: File audit\n---\nAudit.",
+    )
+    .unwrap();
+    let trust = TrustStore::open(root.path()).unwrap();
+    let catalog = CommandCatalog::discover(Some(root.path()), None, &trust).with_skills(
+        ["rust-review", "plugin:review", "status", "audit"]
+            .map(skill_shortcut)
+            .to_vec(),
+    );
+    let rows = matches_with("/rust-r", &catalog);
+    assert_eq!(rows.len(), 1);
+    assert!(matches!(rows[0], MenuRow::Skill(_)));
+    assert_eq!(completion_with(rows[0]), "/rust-review ");
+    assert_eq!(rows[0].description(), "Review changed code");
+    assert_eq!(rows[0].layer_label(), Some("skill · user"));
+    for (text, name) in [
+        ("/rust-review \t first  path\nsecond path\n", "rust-review"),
+        (
+            "/plugin:review \t first  path\nsecond path\n",
+            "plugin:review",
+        ),
+        ("/skills use audit \t first  path\nsecond path\n", "audit"),
+    ] {
+        let ParsedInput::Skill(invocation) = parse_with(text, &catalog).unwrap() else {
+            panic!("skill route")
+        };
+        assert_eq!(invocation.name, name);
+        assert_eq!(invocation.arguments, "first  path\nsecond path\n");
+    }
+    assert!(matches!(
+        parse_with("/status", &catalog).unwrap(),
+        ParsedInput::BuiltIn(_)
+    ));
+    assert!(matches!(
+        parse_with("/audit", &catalog).unwrap(),
+        ParsedInput::File { .. }
+    ));
+    assert!(
+        catalog
+            .skills()
+            .iter()
+            .any(|skill| skill.alias == "skills use status")
+    );
+    assert!(parse_with("/not-a-skill", &catalog).is_err());
+    assert!(parse_with("/skills use", &catalog).is_err());
+    assert!(parse("/skills trust").is_err());
+    assert_eq!(help_with(&catalog).skills.len(), 4);
+    assert!(has_exact_name_with("/plugin:review", &catalog));
+    assert!(matches!(
+        parse("/skills use review check this").unwrap(),
+        Command::Skill(_)
+    ));
+}
+
 #[test]
 fn slash_commands_parses_list_trust_and_reload_with_the_skill_policy() {
     for (input, action) in [
@@ -425,8 +495,8 @@ fn slash_skills_parses_its_list_and_trust_forms() {
     );
     let error = parse("/skills trust").expect_err("a name is required");
     assert!(error.contains("requires a skill name"), "{error}");
-    let error = parse("/skills deploy").expect_err("trust is the only verb");
-    assert!(error.contains("is neither"), "{error}");
+    let error = parse("/skills deploy").expect_err("an explicit trust or use verb is required");
+    assert!(error.contains("is not a valid invocation"), "{error}");
 }
 
 #[test]

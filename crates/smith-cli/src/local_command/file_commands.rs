@@ -50,6 +50,11 @@ impl CommandContext {
         self.catalog.lock().expect("command catalog").clone()
     }
 
+    pub(crate) fn set_skills(&self, skills: Vec<smith_client::skill_commands::SkillCommand>) {
+        let mut catalog = self.catalog.lock().expect("command catalog");
+        *catalog = catalog.clone().with_skills(skills);
+    }
+
     fn trust_store(&self) -> Result<TrustStore, String> {
         TrustStore::open(&self.user_root).map_err(|error| error.message)
     }
@@ -64,6 +69,7 @@ impl CommandContext {
                 .map_err(|error| error.to_string())?;
             catalog = plugins.commands(catalog);
         }
+        catalog = catalog.with_skills(self.catalog().skills().to_vec());
         *self.catalog.lock().expect("command catalog") = catalog.clone();
         Ok(catalog)
     }

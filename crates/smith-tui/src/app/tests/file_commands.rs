@@ -1,5 +1,92 @@
 // file command submission behavior tests.
 
+fn skill_app() -> App {
+    let mut app = app();
+    app.set_command_catalog(
+        smith_client::file_commands::CommandCatalog::empty().with_skills(vec![
+            smith_client::skill_commands::SkillCommand {
+                name: "rust-review".into(),
+                alias: "rust-review".into(),
+                description: "Review changed code".into(),
+                source: "skill · user".into(),
+                disabled_reason: None,
+            },
+        ]),
+    );
+    app
+}
+
+#[test]
+fn skill_shortcuts_complete_without_activation_then_route_exact_task_text() {
+    let mut app = skill_app();
+    for ch in "/rust-r".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert!(
+        app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .is_none()
+    );
+    assert_eq!(app.composer.text(), "/rust-review ");
+    assert!(app.transcript.is_empty());
+    app.composer.replace("/rust-review inspect  src/lib.rs");
+    assert!(
+        matches!(app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        Some(Action::UseSkill { typed, name, arguments })
+        if typed == "/rust-review inspect  src/lib.rs" && name == "rust-review" && arguments == "inspect  src/lib.rs")
+    );
+    app.composer.replace("/skills use rust-review");
+    assert!(
+        matches!(app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        Some(Action::UseSkill { name, arguments, .. }) if name == "rust-review" && arguments.is_empty())
+    );
+}
+
+#[test]
+fn unavailable_skill_shortcuts_preserve_the_draft() {
+    let mut app = skill_app();
+    let mut skills = app.command_catalog.skills().to_vec();
+    skills[0].disabled_reason = Some("awaiting trust".into());
+    app.set_command_catalog(app.command_catalog.clone().with_skills(skills));
+    app.composer.replace("/rust-review");
+    assert!(
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .is_none()
+    );
+    assert_eq!(app.composer.text(), "/rust-review");
+    assert!(!app.transcript.is_empty());
+}
+
+#[test]
+fn skill_completion_escape_returns_to_the_composer_without_activation() {
+    let mut app = skill_app();
+    for ch in "/rust-r".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert!(app.overlay.is_some());
+    assert!(
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .is_none()
+    );
+    assert!(app.overlay.is_none());
+    assert!(app.transcript.is_empty());
+}
+
+#[test]
+fn busy_skill_shortcuts_leave_the_running_turn_and_draft_untouched() {
+    let mut app = skill_app();
+    app.whole_turn_dispatched(
+        TurnId::new("active"),
+        &PreparedSubmission::from_file_command("work".into(), "work".into()),
+    );
+    app.composer.replace("/rust-review");
+    assert!(
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .is_none()
+    );
+    assert_eq!(app.composer.text(), "/rust-review");
+    assert!(app.is_busy());
+}
+
 #[test]
 fn file_command_submission_displays_the_invocation_and_commits_the_expansion() {
     let mut app = app();

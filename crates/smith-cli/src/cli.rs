@@ -139,6 +139,8 @@ pub(crate) struct Selection {
     pub advisor: Option<smith_config::resolve::AdvisorOverride>,
     /// Capability patterns `/capabilities deny` added for this session.
     pub capability_denials: Vec<String>,
+    /// Exact skill pins requested for the next safe session rebind.
+    pub requested_skills: Vec<smith_runtime::skills::RequestedSkill>,
     /// An approval policy override.
     pub approval: Option<ApprovalMode>,
     /// A background-exit policy override.

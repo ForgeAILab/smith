@@ -235,6 +235,7 @@ async fn start_host_with_modules(
     .context("rooting the project workspace")?;
     runtime.web_search_session = web_search_session;
     runtime.capability_denials = selection.capability_denials.clone();
+    runtime.requested_skills = selection.requested_skills.clone();
     // Folded on here rather than inside the factory so that a direct embedder
     // still gets exactly the sources it supplied: discovery is a property of
     // the Smith *host*, which is the only layer that knows a user state root, a
@@ -766,6 +767,7 @@ async fn run_interactive_hosts(
     let mut advisor_change: Option<Option<AdvisorOverride>> = None;
     // Likewise the session's denials before a pending `/capabilities` change.
     let mut capability_change: Option<Vec<String>> = None;
+    let mut skill_change: Option<crate::skills::PendingSkillActivation> = None;
     let mut module_change: Option<(
         smith_config::user_config::CommittedConfigEdit,
         smith_client::commands::ModuleSwitchRequest,
@@ -775,7 +777,7 @@ async fn run_interactive_hosts(
         smith_client::commands::PluginSwitchRequest,
     )> = None;
     let mut mcp: Option<Arc<crate::mcp::McpContext>> = None;
-    let mut app = None;
+    let mut app: Option<crate::tui_driver::InteractiveApp> = None;
     let mut wasm_sessions = crate::modules::ModuleSessions::default();
     let mut wasm_session_id: Option<String> = None;
     let mut web_search_session = Arc::new(smith_runtime::factory::WebSearchSession::default());
@@ -840,6 +842,23 @@ async fn run_interactive_hosts(
                 );
                 continue;
             }
+            Err(error) if skill_change.is_some() => {
+                let crate::skills::PendingSkillActivation {
+                    previous,
+                    selected,
+                    submission,
+                } = skill_change.take().expect("pending skill activation");
+                args.selection.requested_skills = previous;
+                if let (Some(app), Some(submission)) = (app.as_mut(), submission) {
+                    app.app.composer.replace(submission.display_text());
+                }
+                if let Some(app) = app.as_mut() {
+                    app.app
+                        .transcript
+                        .push_error(format!("skill `{}` unchanged · {error:#}", selected.name));
+                }
+                continue;
+            }
             Err(error) if advisor_change.is_some() => {
                 args.selection.advisor = advisor_change.take().flatten();
                 host_notice = Some(format!("advisor unchanged · {error:#}"));
@@ -876,6 +895,23 @@ async fn run_interactive_hosts(
                     crate::plugins::switch_outcome(&request.name, request.enabled, resolved)
                 });
             committed.accept();
+        }
+        if let Some(crate::skills::PendingSkillActivation {
+            selected,
+            submission,
+            ..
+        }) = skill_change.take()
+        {
+            args.selection.requested_skills.clear();
+            if let Some(app) = app.as_mut() {
+                app.app.push_notice(
+                    smith_client::NoticeKind::Local,
+                    format!("skill `{}` active", selected.name),
+                );
+            }
+            if let (Some(app), Some(submission)) = (app.as_mut(), submission) {
+                app.app.schedule_prepared(submission);
+            }
         }
         if capability_change.take().is_some() {
             host_notice = Some(if args.selection.capability_denials.is_empty() {
@@ -963,6 +999,20 @@ async fn run_interactive_hosts(
         .await?;
         app = Some(retained);
         match exit {
+            InteractiveExit::ActivateSkill {
+                selected,
+                submission,
+            } => {
+                let previous = args.selection.requested_skills.clone();
+                args.selection.requested_skills = vec![selected.clone()];
+                skill_change = Some(crate::skills::PendingSkillActivation {
+                    previous,
+                    selected,
+                    submission,
+                });
+                resume = Some(current_session);
+                frozen_catalog = Some(catalog);
+            }
             InteractiveExit::Quit(usage, price, cache, stopped, shutdown_error) => {
                 terminal.restore().context("restoring the terminal")?;
                 report_session_usage(

@@ -256,6 +256,12 @@ async fn seed_host_state(
     );
     runtime_resources.capability_denials = resources.capability_denials.clone();
     app.set_resources(runtime_resources);
+    resources
+        .commands
+        .set_skills(smith_client::skill_commands::for_session(
+            host.runtime(),
+            host.session(),
+        ));
     app.set_command_catalog(resources.commands.catalog());
     app.status.account = account_status(resources.credential_pool.as_ref());
     let children = host

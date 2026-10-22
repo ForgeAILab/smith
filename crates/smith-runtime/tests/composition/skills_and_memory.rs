@@ -1,6 +1,302 @@
 use super::*;
 
 #[tokio::test]
+async fn explicit_skill_activation_precedes_the_first_request_and_survives_resume() {
+    use smith_runtime::session::{FileSessionStore, ProjectId, SessionPaths};
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let paths = SessionPaths::new(fixture.home.path(), &ProjectId::new("skill-test").unwrap());
+    let store = Arc::new(FileSessionStore::new(paths));
+    let provider = Arc::new(FakeProvider::text_reply("done"));
+    let sources = SmithSkillSources::new()
+        .with_user(Skill::inline(
+            "inspection",
+            "Examine boundaries",
+            "EXPLICIT_SKILL_BODY_MARKER",
+        ))
+        .with_workspace(
+            Skill::inline(
+                "inspection",
+                "Untrusted replacement",
+                "WITHHELD_BODY_MARKER",
+            ),
+            TrustStatus::Untrusted,
+        );
+    let build = |selected| RuntimeRequest {
+        provider: Some(provider.clone()),
+        skills: sources.clone(),
+        requested_skills: selected,
+        session_store: Some(store.clone()),
+        ..request(&fixture, HostSurface::Headless)
+    };
+    let original = factory::build_request(build(Vec::new())).await.unwrap();
+    let session = original
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .unwrap();
+    let id = session.id().clone();
+    let selected = original
+        .prepare_skill_activation(&session, "inspection")
+        .unwrap();
+    assert_eq!(selected.layer, smith_runtime::skills::SmithSkillLayer::User);
+    assert!(provider.requests().is_empty());
+    session.shutdown().await.unwrap();
+
+    let activated = factory::build_request(build(vec![selected.clone()]))
+        .await
+        .unwrap();
+    let session = activated
+        .runtime()
+        .start_session(StartSession::resume(id.clone()))
+        .await
+        .unwrap();
+    assert_eq!(session.id(), &id);
+    assert!(provider.requests().is_empty());
+    assert!(
+        session
+            .activation_epoch()
+            .unwrap()
+            .activated()
+            .iter()
+            .any(|(id, _)| id.qualified() == "skill:inspection")
+    );
+    assert_eq!(
+        activated
+            .prepare_skill_activation(&session, "inspection")
+            .unwrap(),
+        selected
+    );
+    session.run(UserInput::text("Hello.")).await.unwrap();
+    let wire = serde_json::to_string(&provider.requests()[0].messages).unwrap();
+    assert_eq!(wire.matches("EXPLICIT_SKILL_BODY_MARKER").count(), 1);
+    assert!(!wire.contains("WITHHELD_BODY_MARKER"));
+    assert!(
+        !session
+            .history()
+            .iter()
+            .any(|message| message.joined_text().contains("EXPLICIT_SKILL_BODY_MARKER"))
+    );
+    session.shutdown().await.unwrap();
+
+    let resumed = factory::build_request(build(Vec::new())).await.unwrap();
+    let session = resumed
+        .runtime()
+        .start_session(StartSession::resume(id.clone()))
+        .await
+        .unwrap();
+    assert!(
+        session
+            .activation_epoch()
+            .unwrap()
+            .activated()
+            .iter()
+            .any(|(id, _)| id.qualified() == "skill:inspection")
+    );
+    session.shutdown().await.unwrap();
+
+    let mut narrowed = build(Vec::new());
+    narrowed.capability_denials = vec!["skill:inspection".to_owned()];
+    let narrowed = factory::build_request(narrowed).await.unwrap();
+    let session = narrowed
+        .runtime()
+        .start_session(StartSession::resume(id))
+        .await
+        .unwrap();
+    assert!(
+        !session
+            .activation_epoch()
+            .unwrap()
+            .activated()
+            .iter()
+            .any(|(id, _)| id.qualified() == "skill:inspection")
+    );
+    assert!(
+        narrowed
+            .prepare_skill_activation(&session, "inspection")
+            .is_err()
+    );
+    session.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn explicit_skill_refusals_leave_the_current_session_usable() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let path = fixture.project.path().join("skill.md");
+    let body = b"PINNED_SKILL_BODY_MARKER";
+    std::fs::write(&path, body).unwrap();
+    let provider = Arc::new(FakeProvider::text_reply("still usable"));
+    let sources = SmithSkillSources::new()
+        .with_user(Skill::from_verified_file(
+            "inspection",
+            "Examine boundaries",
+            &path,
+            Sha256::digest(body).into(),
+        ))
+        .with_user(Skill::inline(
+            "large",
+            "Large manual guide",
+            "x".repeat(200_000),
+        ))
+        .with_workspace(
+            Skill::inline("withheld", "Needs trust", "WITHHELD_BODY_MARKER"),
+            TrustStatus::Untrusted,
+        );
+    let mut input = request(&fixture, HostSurface::Headless);
+    input.provider = Some(provider.clone());
+    input.skills = sources;
+    let smith = factory::build_request(input).await.unwrap();
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .unwrap();
+    let selected = smith
+        .prepare_skill_activation(&session, "inspection")
+        .unwrap();
+    for name in ["unknown", "withheld", "large"] {
+        let error = smith.prepare_skill_activation(&session, name).unwrap_err();
+        assert!(error.to_string().contains(name), "{error}");
+    }
+    std::fs::write(&path, "CHANGED_BODY_MARKER").unwrap();
+    assert!(
+        smith
+            .prepare_skill_activation(&session, "inspection")
+            .is_err()
+    );
+    assert!(provider.requests().is_empty());
+    let mut changed = request(&fixture, HostSurface::Headless);
+    changed.skills = SmithSkillSources::new().with_user(Skill::from_verified_file(
+        "inspection",
+        "Examine boundaries",
+        &path,
+        Sha256::digest(b"CHANGED_BODY_MARKER").into(),
+    ));
+    changed.requested_skills = vec![selected];
+    assert!(
+        factory::build_request(changed)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("changed since selection")
+    );
+    session.run(UserInput::text("Hello.")).await.unwrap();
+    assert_eq!(provider.requests().len(), 1);
+    session.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn explicit_skill_requests_cannot_bypass_profile_denials() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let sources = SmithSkillSources::new().with_user(Skill::inline(
+        "inspection",
+        "Examine boundaries",
+        "Skill instructions",
+    ));
+    let mut input = request(&fixture, HostSurface::Headless);
+    input.skills = sources.clone();
+    let smith = factory::build_request(input).await.unwrap();
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .unwrap();
+    let selected = smith
+        .prepare_skill_activation(&session, "inspection")
+        .unwrap();
+    for profile_denial in [false, true] {
+        let mut denied = request(&fixture, HostSurface::Headless);
+        denied.skills = sources.clone();
+        denied.requested_skills = vec![selected.clone()];
+        if profile_denial {
+            denied.config.agent.profile.capabilities.deny =
+                Some(smith_config::resolve::Sourced::new(
+                    vec!["skill:*".to_owned()],
+                    smith_config::resolve::Source::built_in("test"),
+                ));
+        } else {
+            denied.capability_denials = vec!["skill:*".to_owned()];
+        }
+        assert!(
+            factory::build_request(denied)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("denied")
+        );
+    }
+    session.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn explicit_skill_pins_still_enforce_the_runtime_instruction_budget() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let sources = SmithSkillSources::new().with_user(Skill::inline(
+        "large",
+        "Large manual guide",
+        "x".repeat(200_000),
+    ));
+    let mut input = request(&fixture, HostSurface::Headless);
+    input.skills = sources.clone();
+    let smith = factory::build_request(input).await.unwrap();
+    let entry = &smith.skill_index()[0];
+    let selected = smith_runtime::skills::RequestedSkill {
+        name: entry.name().to_owned(),
+        layer: entry.layer,
+        revision: entry.descriptor.content_revision().as_str().to_owned(),
+    };
+    let mut input = request(&fixture, HostSurface::Headless);
+    input.skills = sources;
+    input.requested_skills = vec![selected];
+    let result = match factory::build_request(input).await {
+        Err(error) => error.to_string(),
+        Ok(smith) => smith
+            .runtime()
+            .start_session(StartSession::new())
+            .await
+            .unwrap_err()
+            .to_string(),
+    };
+    assert!(result.contains("budget"), "{result}");
+}
+
+#[tokio::test]
+async fn explicit_skill_activation_is_unavailable_on_installed_cli_backends() {
+    use smith_config::resolve::{ResolvedHarness, Source, Sourced};
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let mut input = request(&fixture, HostSurface::Headless);
+    input.skills = SmithSkillSources::new().with_user(Skill::inline(
+        "inspection",
+        "Examine boundaries",
+        "Skill instructions",
+    ));
+    input.config.harness = Some(ResolvedHarness {
+        kind: Sourced::new("codex".to_owned(), Source::built_in("test")),
+        model: Sourced::new("test-model".to_owned(), Source::built_in("test")),
+        program: "codex".to_owned(),
+        executable: Some(Sourced::new(
+            "/bin/true".to_owned(),
+            Source::built_in("test"),
+        )),
+        args: Vec::new(),
+        env: Default::default(),
+        allow_own_tools: Sourced::new(false, Source::built_in("test")),
+    });
+    let smith = factory::build_request(input).await.unwrap();
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .unwrap();
+    let error = smith
+        .prepare_skill_activation(&session, "inspection")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("installed CLI"), "{error}");
+    assert!(error.contains("MCP bridge"), "{error}");
+    session.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn trusted_workspace_skill_loads_only_after_factory_descriptor_resolution() {
     const BODY: &[u8] = b"TRUSTED_SKILL_BODY_MARKER: inspect unsafe boundaries first.";
 

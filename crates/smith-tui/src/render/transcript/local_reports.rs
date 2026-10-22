@@ -346,7 +346,8 @@ pub(in crate::render) fn render_help_report(
         .iter()
         .chain(&report.primary)
         .chain(&report.advanced)
-        .chain(&report.file_commands);
+        .chain(&report.file_commands)
+        .chain(&report.skills);
     let names = commands
         .map(|command| format!("/{}", command.name))
         .collect::<Vec<_>>();
@@ -382,6 +383,17 @@ pub(in crate::render) fn render_help_report(
             theme.style(Tone::Heading),
         ));
         for command in &report.file_commands {
+            lines.extend(render_help_command(command, name_width, width, theme));
+        }
+    }
+    if !report.skills.is_empty() {
+        lines.push(Line::default());
+        lines.extend(reports::text(
+            HelpReport::SKILLS_HEADING,
+            width,
+            theme.style(Tone::Heading),
+        ));
+        for command in &report.skills {
             lines.extend(render_help_command(command, name_width, width, theme));
         }
     }

@@ -5,6 +5,7 @@
 
 use crate::file_commands::{CatalogEntry, CommandCatalog};
 use crate::help_report::{HelpCommand, HelpKey, HelpReport};
+use crate::skill_commands::{SkillCommand, SkillInvocation};
 
 /// A command routed to the executor that can handle it.
 ///
@@ -18,6 +19,8 @@ use crate::help_report::{HelpCommand, HelpKey, HelpReport};
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    /// Explicit skill activation, optionally followed by a task.
+    Skill(SkillInvocation),
     /// A local application transition.
     Ui(UiCommand),
     /// A command executed against the hosted runtime.
@@ -270,6 +273,8 @@ pub enum MenuRow<'a> {
     BuiltIn(&'static CommandSpec),
     /// A file winner, including a withheld project command without a fallback.
     File(&'a CatalogEntry),
+    /// Effective skill descriptor, with its source and availability.
+    Skill(&'a SkillCommand),
 }
 
 impl MenuRow<'_> {
@@ -278,6 +283,7 @@ impl MenuRow<'_> {
         match self {
             Self::BuiltIn(spec) => spec.name,
             Self::File(entry) => &entry.command.name,
+            Self::Skill(skill) => &skill.alias,
         }
     }
 
@@ -286,6 +292,7 @@ impl MenuRow<'_> {
         match self {
             Self::BuiltIn(spec) => spec.description,
             Self::File(entry) => &entry.command.description,
+            Self::Skill(skill) => &skill.description,
         }
     }
 
@@ -294,6 +301,7 @@ impl MenuRow<'_> {
         match self {
             Self::BuiltIn(spec) => (!spec.argument_hint.is_empty()).then_some(spec.argument_hint),
             Self::File(entry) => entry.command.argument_hint.as_deref(),
+            Self::Skill(_) => Some("[task]"),
         }
     }
 
@@ -301,6 +309,7 @@ impl MenuRow<'_> {
     pub fn layer_label(&self) -> Option<&str> {
         match self {
             Self::BuiltIn(_) => None,
+            Self::Skill(skill) => Some(&skill.source),
             Self::File(entry) => Some(
                 entry
                     .command
@@ -314,6 +323,8 @@ impl MenuRow<'_> {
 /// Parsed routing data, before any file command is prepared or submitted.
 #[derive(Debug, Clone)]
 pub enum ParsedInput {
+    /// A resolved skill name and its unmodified remaining task text.
+    Skill(SkillInvocation),
     /// A registry command with its existing typed grammar.
     BuiltIn(ParsedCommand),
     /// A file command's name and unmodified remaining argument text.
@@ -609,11 +620,11 @@ command_registry! {
     /// Show indexed skills, or trust one this project ships.
     Host Skills(SkillsAction) => CommandSpec {
         name: "skills",
-        argument_hint: "[trust NAME]",
-        description: "Show indexed skills, or trust one this project ships",
+        argument_hint: "[trust NAME|use NAME [task]]",
+        description: "List skills, activate one, or review project skill trust",
         requires_idle: false,
         advanced: false,
-        grammar: ArgumentGrammar::Subcommand(parse_skills),
+        grammar: ArgumentGrammar::WholeValue(parse_skills),
         usage_example: "/skills trust deploy",
         complete_without_value: false,
     },
@@ -783,6 +794,7 @@ pub fn matches_with<'a>(input: &str, catalog: &'a CommandCatalog) -> Vec<MenuRow
                 })
                 .map(MenuRow::File),
         )
+        .chain(catalog.skills().iter().map(MenuRow::Skill))
         .collect::<Vec<_>>();
     let name_matches = rows
         .iter()
@@ -804,10 +816,9 @@ pub fn has_exact_name_with(input: &str, catalog: &CommandCatalog) -> bool {
         return true;
     }
     let query = input.trim().trim_start_matches('/');
-    query
-        .split_whitespace()
-        .next()
-        .is_some_and(|name| catalog.recognizes(name))
+    query.split_whitespace().next().is_some_and(|name| {
+        catalog.recognizes(name) || catalog.skills().iter().any(|skill| skill.alias == name)
+    })
 }
 
 /// Parses built-ins first; file arguments retain internal and trailing whitespace.
@@ -817,6 +828,14 @@ pub fn has_exact_name_with(input: &str, catalog: &CommandCatalog) -> bool {
 /// Preserves built-in grammar errors and the existing unknown-command diagnostic.
 pub fn parse_with(input: &str, catalog: &CommandCatalog) -> Result<ParsedInput, String> {
     if has_exact_name(input) {
+        let text = input.trim_start().trim_start_matches('/');
+        if let Some(rest) = text.strip_prefix("skills")
+            && rest.starts_with(char::is_whitespace)
+            && let Some(rest) = rest.trim_start().strip_prefix("use")
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            return parse_skill_invocation(rest).map(ParsedInput::Skill);
+        }
         return parse(input).map(ParsedInput::BuiltIn);
     }
     let text = input.trim_start().trim_start_matches('/').trim_start();
@@ -824,6 +843,9 @@ pub fn parse_with(input: &str, catalog: &CommandCatalog) -> Result<ParsedInput, 
         return parse(input).map(ParsedInput::BuiltIn);
     };
     if !catalog.recognizes(name) {
+        if catalog.skills().iter().any(|skill| skill.alias == name) {
+            return parse_skill_invocation(text).map(ParsedInput::Skill);
+        }
         return parse(input).map(ParsedInput::BuiltIn);
     }
     let arguments = text.strip_prefix(name).unwrap_or_default().trim_start();
@@ -848,6 +870,7 @@ pub fn completion_with(command: MenuRow<'_>) -> String {
     match command {
         MenuRow::BuiltIn(spec) => completion(spec),
         MenuRow::File(entry) => format!("/{} ", entry.command.name),
+        MenuRow::Skill(skill) => format!("/{} ", skill.alias),
     }
 }
 
@@ -999,17 +1022,32 @@ fn parse_capabilities(argument: Option<String>, second: Option<String>) -> Resul
     Ok(Command::Host(HostCommand::Capabilities(action)))
 }
 
-fn parse_skills(argument: Option<String>, second: Option<String>) -> Result<Command, String> {
-    match (argument.as_deref(), second) {
+fn parse_skill_invocation(value: &str) -> Result<SkillInvocation, String> {
+    let value = value.trim_start();
+    let name = value.split_whitespace().next().ok_or_else(|| {
+        "`/skills use` requires a skill name; run `/skills` to list them".to_owned()
+    })?;
+    Ok(SkillInvocation {
+        name: name.to_owned(),
+        arguments: value[name.len()..].trim_start().to_owned(),
+    })
+}
+
+fn parse_skills(value: &str) -> Result<Command, String> {
+    let mut words = value.split_whitespace();
+    match (words.next(), words.next()) {
         (None, _) => Ok(Command::Host(HostCommand::Skills(SkillsAction::List))),
-        (Some("trust"), Some(skill)) => Ok(Command::Host(HostCommand::Skills(
-            SkillsAction::Trust(skill),
-        ))),
+        (Some("use"), _) => {
+            parse_skill_invocation(value.trim_start_matches("use")).map(Command::Skill)
+        }
+        (Some("trust"), Some(skill)) if words.next().is_none() => Ok(Command::Host(
+            HostCommand::Skills(SkillsAction::Trust(skill.to_owned())),
+        )),
         (Some("trust"), None) => {
             Err("`/skills trust` requires a skill name — run `/skills` to list them".to_owned())
         }
         (Some(other), _) => Err(format!(
-            "`/skills` takes no value, or `trust NAME`; `{other}` is neither"
+            "`/skills` takes no value, `trust NAME`, or `use NAME [task]`; `{other}` is not a valid invocation"
         )),
     }
 }
@@ -1104,6 +1142,7 @@ pub fn help() -> HelpReport {
             .map(help_command)
             .collect(),
         file_commands: Vec::new(),
+        skills: Vec::new(),
         composer: [
             "? or /help shows this local guide without contacting the model.",
             "Tab cycles the configured profile order only while empty and idle.",
@@ -1144,6 +1183,22 @@ pub fn help_with(catalog: &CommandCatalog) -> HelpReport {
             ),
         })
         .collect();
+    report
+        .skills
+        .extend(catalog.skills().iter().map(|skill| HelpCommand {
+            name: skill.alias.clone(),
+            argument_hint: "[task]".to_owned(),
+            description: format!(
+                "skill · {} · {}{}",
+                skill.source,
+                skill.description,
+                skill
+                    .disabled_reason
+                    .as_ref()
+                    .map(|reason| format!(" · {reason}"))
+                    .unwrap_or_default()
+            ),
+        }));
     report
 }
 

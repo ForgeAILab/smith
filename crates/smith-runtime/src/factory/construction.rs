@@ -66,6 +66,32 @@ pub(super) fn prepare_prompt_stage(
         None => SmithPromptContributor::new(&prompt_context),
     };
     let skills = request.skills.resolve().map_err(FactoryError::Runtime)?;
+    let limits = crate::capability_limits::CapabilityLimits::for_session(
+        &request.config.agent.profile.capabilities,
+        &request.capability_denials,
+    );
+    for selected in &request.requested_skills {
+        if request.config.harness.is_some() {
+            return Err(FactoryError::Runtime(RuntimeError::config(
+                "direct skill activation is unavailable on installed CLI backends; use their skill MCP bridge",
+            )));
+        }
+        let current = skills
+            .selection(&selected.name)
+            .map_err(FactoryError::Runtime)?;
+        if current != *selected {
+            return Err(FactoryError::Runtime(RuntimeError::config(format!(
+                "skill `{}` changed since selection; inspect `/skills` before invoking it again",
+                selected.name
+            ))));
+        }
+        if !limits.admits(&agent_runtime::registry::RegistryId::skill(&selected.name)) {
+            return Err(FactoryError::Runtime(RuntimeError::config(format!(
+                "skill `{}` is denied by this profile or session",
+                selected.name
+            ))));
+        }
+    }
     let memory = request
         .memory
         .clone()
@@ -463,6 +489,12 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         .pinned_abilities(crate::capability_limits::pinned_core(
             &capabilities.abilities,
         ))
+        .pinned_abilities(
+            request
+                .requested_skills
+                .iter()
+                .map(|skill| agent_runtime::registry::RegistryId::skill(&skill.name)),
+        )
         .scope_inputs(scope_inputs)
         .capability_resolver(Arc::new(CapabilityResolver::new()))
         .activation_policy(Arc::new(FailClosedPolicy))
@@ -638,6 +670,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         profile: Arc::new(profile),
         abilities: Arc::new(capabilities.abilities),
         skill_index: Arc::from(prompt.skills.index().to_vec().into_boxed_slice()),
+        skill_catalog: prompt.skills,
         checkpoint_store: durability.root_store,
         artifact_store: request.artifact_store,
         surface: request.surface,

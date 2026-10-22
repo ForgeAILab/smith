@@ -179,6 +179,7 @@ pub(crate) mod modules;
 mod persistence;
 mod provider;
 mod resolve;
+mod skill_activation;
 mod web;
 
 pub use web::WebSearchSession;
@@ -387,6 +388,8 @@ pub struct RuntimeRequest {
     pub change_recorder: Option<Arc<smith_tools::ChangeRecorder>>,
     /// Smith-owned, descriptor-first skill sources.
     pub skills: SmithSkillSources,
+    /// Exact skill selections to admit through the shared activation machinery.
+    pub requested_skills: Vec<crate::skills::RequestedSkill>,
     /// Host-admitted plugin content for each resolved profile, including child
     /// and advisor routes. An absent entry preserves ordinary host inheritance.
     pub plugin_profiles: BTreeMap<String, PluginProfile>,
@@ -473,6 +476,7 @@ impl RuntimeRequest {
             background_services: None,
             change_recorder: None,
             skills: crate::built_in_skills::built_in_sources(),
+            requested_skills: Vec::new(),
             plugin_profiles: BTreeMap::new(),
             memory: None,
             semantic_summary: None,
@@ -722,6 +726,7 @@ pub struct SmithRuntime {
     profile: Arc<ProfileResolution>,
     abilities: Arc<SealedAbilities>,
     skill_index: Arc<[SkillIndexEntry]>,
+    skill_catalog: ResolvedSmithSkills,
     checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     artifact_store: Option<Arc<dyn ArtifactStore>>,
     surface: HostSurface,

@@ -19,6 +19,50 @@ use smith_config::trust::{
 };
 use smith_runtime::skills::{SkillProblem, SmithSkillSources};
 
+pub(super) struct PreparedSkillInvocation {
+    pub(super) selected: smith_runtime::skills::RequestedSkill,
+    pub(super) submission: Option<smith_tui::app::PreparedSubmission>,
+    pub(super) already_active: bool,
+}
+
+pub(super) struct PendingSkillActivation {
+    pub(super) previous: Vec<smith_runtime::skills::RequestedSkill>,
+    pub(super) selected: smith_runtime::skills::RequestedSkill,
+    pub(super) submission: Option<smith_tui::app::PreparedSubmission>,
+}
+
+pub(super) fn prepare_invocation(
+    host: &smith_runtime::host::HostSession,
+    app: &smith_tui::app::App,
+    typed: String,
+    name: &str,
+    arguments: &str,
+) -> Result<PreparedSkillInvocation, String> {
+    if app.is_busy() || app.has_pending_input() || app.has_pending_prompt() {
+        return Err(format!("skill `{name}` requires an idle turn"));
+    }
+    let submission = if arguments.trim().is_empty() {
+        None
+    } else {
+        Some(app.prepare_file_command_submission(typed, arguments)?)
+    };
+    let selected = host
+        .runtime()
+        .prepare_skill_activation(host.session(), name)
+        .map_err(|error| error.to_string())?;
+    let already_active = smith_runtime::capability_limits::catalog(host.session(), &[])
+        .iter()
+        .any(|row| {
+            row.id == format!("skill:{name}")
+                && row.standing == smith_runtime::capability_limits::CapabilityStanding::Active
+        });
+    Ok(PreparedSkillInvocation {
+        selected,
+        submission,
+        already_active,
+    })
+}
+
 /// Everything `/skills` needs, owned for the life of one composed session.
 ///
 /// Unlike the MCP context this is rebuilt at each composition rather than

@@ -28,7 +28,7 @@ Primary
 /modules [ID on|off] — List modules or turn one on or off
 /plugins [NAME on|off] — List plugin bundles or turn one on or off
 /capabilities [deny ID|allow ID] — Show capabilities, or deny one for this session
-/skills [trust NAME] — Show indexed skills, or trust one this project ships
+/skills [trust NAME|use NAME [task]] — List skills, activate one, or review project skill trust
 /commands [trust NAME|reload] — Show file commands, trust one, or reload the catalog
 /diff [SCOPE] — Inspect workspace changes
 /review [SCOPE] — Run a read-only change review

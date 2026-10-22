@@ -42,6 +42,15 @@ pub struct CapabilityLimits {
 }
 
 impl CapabilityLimits {
+    /// Whether the declared session limits admit this exact registry id.
+    pub(crate) fn admits(&self, id: &RegistryId) -> bool {
+        let matches = |pattern: &String| {
+            agent_runtime::hub::CapabilityPattern::parse(pattern)
+                .is_ok_and(|pattern| pattern.matches(id))
+        };
+        !self.deny.iter().any(matches) && (self.allow.is_empty() || self.allow.iter().any(matches))
+    }
+
     /// A profile's limits plus the denials the session added on top.
     pub fn for_session(profile: &ResolvedCapabilityLimits, session_denials: &[String]) -> Self {
         let mut limits = Self::from_profile(profile);

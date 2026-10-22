@@ -204,6 +204,15 @@ pub const LEGACY_AGENT_PROFILE_PREFIX: &str = "legacy-agent:";
 /// Something the host loop must do on the app's behalf.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    /// Activate an indexed skill before optionally submitting its task.
+    UseSkill {
+        /// Exactly what the user typed.
+        typed: String,
+        /// Resolved skill name.
+        name: String,
+        /// Ordinary task text, with paste placeholders expanded.
+        arguments: String,
+    },
     /// Dispatch one already-prepared ordinary input with the stated intent.
     Submit {
         /// Exact process-local submission material.

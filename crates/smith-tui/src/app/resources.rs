@@ -564,6 +564,7 @@ impl App {
         parsed: commands::ParsedInput,
     ) -> Option<Action> {
         match parsed {
+            commands::ParsedInput::Skill(invocation) => self.dispatch_skill(invocation),
             commands::ParsedInput::BuiltIn(command) => self.dispatch_command(command),
             commands::ParsedInput::File { name, arguments } => {
                 if self.overlay.as_ref().is_some_and(Overlay::is_prompt)
@@ -582,6 +583,41 @@ impl App {
                 Some(action)
             }
         }
+    }
+
+    fn dispatch_skill(
+        &mut self,
+        invocation: smith_client::skill_commands::SkillInvocation,
+    ) -> Option<Action> {
+        if self.is_busy() || self.has_pending_input() || self.has_pending_prompt() {
+            self.push_notice(
+                NoticeKind::CommandRefused,
+                format!(
+                    "/{} requires an idle turn; draft preserved",
+                    invocation.name
+                ),
+            );
+            return None;
+        }
+        if let Some(reason) = self
+            .command_catalog
+            .skills()
+            .iter()
+            .find(|skill| skill.name == invocation.name)
+            .and_then(|skill| skill.disabled_reason.as_ref())
+        {
+            self.transcript
+                .push_error(format!("skill `{}`: {reason}", invocation.name));
+            return None;
+        }
+        let action = Action::UseSkill {
+            typed: self.composer.text().to_owned(),
+            name: invocation.name,
+            arguments: self.expand_pasted(&invocation.arguments),
+        };
+        self.overlay = None;
+        self.accept_composer_input();
+        Some(action)
     }
 
     pub(super) fn dispatch_command(&mut self, parsed: ParsedCommand) -> Option<Action> {
@@ -632,6 +668,7 @@ impl App {
         self.overlay = None;
         let restore = self.composer.text().to_owned();
         match command {
+            Command::Skill(invocation) => self.dispatch_skill(invocation),
             Command::Ui(UiCommand::Help) => self.show_command_help(),
             Command::Ui(UiCommand::Details) => {
                 self.accept_composer_input();

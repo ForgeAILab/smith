@@ -113,6 +113,38 @@ project's trust.
 project-relative path and the content digest, records the decision, and the
 session picks the skill up at the next idle boundary without restarting.
 
+### Invoke a detected skill directly
+
+Detected skills appear in slash completion, `Ctrl+P`, and `/help` with their
+descriptions and source layers. In the interactive TUI, use `/<skill-name>`
+to activate a skill for the current session without starting a model turn.
+Add task text to activate it and immediately run that task:
+
+```text
+/rust-review
+/rust-review inspect the error handling in src/server.rs
+```
+
+These examples assume a detected skill named `rust-review`. Tab completes a
+name; Enter invokes it. A skill-only invocation leaves the composer ready for
+your next prompt. Instructions remain active under the normal session
+activation and resume rules, and selecting an active skill again adds no
+duplicate instructions.
+
+Built-in and file commands keep their existing names. If a skill collides with
+one, invoke it explicitly with `/skills use <name> [task]`; its completion row
+uses that spelling too. `/skills` still lists the catalog and trust decisions.
+
+Activation requires an idle session. Unknown, untrusted, edited, denied, or
+over-budget skills produce a local reason before any task is submitted. Skill
+selection does not approve project content or grant tools or credentials.
+Opening completion reads only descriptors, and activation verifies the pinned
+content before adding its instructions.
+
+Direct shortcuts apply to provider-backed Smith turns. Installed coding agents
+use the skill MCP bridge described below; their shortcut rows explain why
+direct host activation is unavailable.
+
 ### Skills on an installed coding agent
 
 When a turn runs on an installed CLI (`cli/claude-code/...`,
