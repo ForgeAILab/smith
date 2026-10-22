@@ -2,11 +2,11 @@
 resolver = "3"
 [package]
 name = "smith-wasm-module-hello"
-version = "0.7.8"
+version = "0.7.9"
 edition = "2024"
 rust-version = "1.88"
 publish = false
 [lib]
 crate-type = ["cdylib"]
 [dependencies]
-smith-module-sdk = { path = "../../crates/smith-module-sdk", version = "0.7.8" }
+smith-module-sdk = { path = "../../crates/smith-module-sdk", version = "0.7.9" }
