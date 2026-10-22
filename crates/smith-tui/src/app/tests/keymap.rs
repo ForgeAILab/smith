@@ -527,19 +527,32 @@ mod keymap {
                     );
                     if case.context == KeyContext::SlashDraft {
                         assert!(app.composer.text().starts_with('/'));
-                        assert!(
-                            matches!(
-                                app.overlay,
-                                Some(Overlay::Palette {
-                                    selected: 0,
-                                    error: None,
-                                    ..
-                                })
-                            ),
-                            "{} did not refresh the palette: {:?}",
-                            binding.label,
-                            app.overlay
-                        );
+                        if case.effect == KeyEffect::FollowNewest {
+                            assert!(
+                                matches!(
+                                    &app.overlay,
+                                    Some(Overlay::Palette { selected: 2, error: Some(error), .. })
+                                        if error == "previous refusal"
+                                ),
+                                "{} changed the palette: {:?}",
+                                binding.label,
+                                app.overlay
+                            );
+                        } else {
+                            assert!(
+                                matches!(
+                                    app.overlay,
+                                    Some(Overlay::Palette {
+                                        selected: 0,
+                                        error: None,
+                                        ..
+                                    })
+                                ),
+                                "{} did not refresh the palette: {:?}",
+                                binding.label,
+                                app.overlay
+                            );
+                        }
                     }
                     if let Some(approval) = approval {
                         if case.effect != KeyEffect::InterruptOrClose

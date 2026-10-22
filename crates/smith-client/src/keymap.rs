@@ -511,6 +511,8 @@ pub const KEY_BINDINGS: &[KeyBinding] = &[
         label: "Ctrl+L / Ctrl+End",
         description: "Jump to the bottom and follow new output",
         cases: &[
+            BindingCase::key(AnyComposer, Key::Char('l'), Control, FollowNewest),
+            BindingCase::key(AnyComposer, Key::End, Control, FollowNewest),
             BindingCase::key(PausedOutput, Key::Char('l'), Control, FollowNewest),
             BindingCase::key(PausedOutput, Key::End, Control, FollowNewest),
             BindingCase::key(SlashDraft, Key::Char('l'), Control, FollowNewest),
