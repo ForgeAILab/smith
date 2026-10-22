@@ -614,13 +614,17 @@ fn help_lists_the_effort_flag() {
 }
 
 #[test]
-fn non_adjustable_models_refuse_an_invocation_effort() {
+fn models_without_reasoning_metadata_refuse_an_invocation_effort() {
     let fixed = Fixture::new();
     let refused = fixed.run(&["-p", "hello", "--effort", "low", "--output-format", "json"]);
     assert!(!refused.status.success());
+    assert!(refused.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&refused.stderr).into_owned();
-    assert!(stderr.contains("reasoning"), "{stderr}");
-    assert!(stderr.contains("not adjustable"), "{stderr}");
+    assert!(
+        stderr.contains("missing reasoning control metadata"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("command-line flag `--effort`"), "{stderr}");
 }
 
 /// A live local endpoint whose model advertises an exact effort ladder and
