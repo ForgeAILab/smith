@@ -580,9 +580,7 @@ fn config_explain_reports_the_selected_profile_source() {
     assert!(text.contains("selected profile"), "{text}");
 }
 
-/// A binding with an exact dialect and an advertised ladder, reached through
-/// a credential that does not exist: anything the run rejects about the effort
-/// is therefore proven to happen before the credential is looked up.
+/// A compatible binding with advertised effort choices and no credential.
 const LADDER_CONFIG: &str = r#"
 default_profile = "dev"
 
@@ -616,31 +614,7 @@ fn help_lists_the_effort_flag() {
 }
 
 #[test]
-fn an_unsupported_invocation_effort_fails_with_alternatives_and_no_provider_work() {
-    let fixture = Fixture::with_config(LADDER_CONFIG);
-
-    let refused = fixture.run(&[
-        "-p",
-        "hello",
-        "--effort",
-        "ludicrous",
-        "--output-format",
-        "json",
-    ]);
-    assert!(!refused.status.success());
-    assert!(refused.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&refused.stderr).into_owned();
-    assert!(stderr.contains("ludicrous"), "{stderr}");
-    assert!(stderr.contains("low, medium, high"), "{stderr}");
-    // The credential is unresolvable and the endpoint is closed, so naming the
-    // effort proves the refusal preceded both.
-    assert!(
-        !stderr.contains("SMITH_TEST_KEY_THAT_DOES_NOT_EXIST"),
-        "{stderr}"
-    );
-
-    // A model with no adjustable reasoning at all says so rather than
-    // ignoring the flag.
+fn non_adjustable_models_refuse_an_invocation_effort() {
     let fixed = Fixture::new();
     let refused = fixed.run(&["-p", "hello", "--effort", "low", "--output-format", "json"]);
     assert!(!refused.status.success());
@@ -682,48 +656,51 @@ dialect = "openai-effort"
 }
 
 #[test]
-fn an_invocation_effort_overrides_a_profiles_effort_all_the_way_to_the_wire() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
-    let address = listener.local_addr().expect("a listener address");
-    let server = thread::spawn(move || serve_one_openai_request(listener));
-    let fixture = Fixture::with_config(&effort_ladder_config(address));
+fn an_invocation_effort_reaches_the_compatible_endpoint_even_if_unadvertised() {
+    for effort in ["high", "ludicrous"] {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let address = listener.local_addr().expect("a listener address");
+        let server = thread::spawn(move || serve_one_openai_request(listener));
+        let fixture = Fixture::with_config(&effort_ladder_config(address));
 
-    let output = support::run_command(
-        fixture
-            .command()
-            .args([
-                "-p",
-                "hello",
-                "--profile",
-                "prod",
-                "--effort",
-                "high",
-                "--output-format",
-                "json",
-            ])
-            .env("ACME_API_KEY", "sk-effort-contract"),
-        support::Deadline::after(Duration::from_secs(30)),
-    );
-    let request = String::from_utf8_lossy(&server.join().expect("provider server")).into_owned();
+        let output = support::run_command(
+            fixture
+                .command()
+                .args([
+                    "-p",
+                    "hello",
+                    "--profile",
+                    "prod",
+                    "--effort",
+                    effort,
+                    "--output-format",
+                    "json",
+                ])
+                .env("ACME_API_KEY", "sk-effort-contract"),
+            support::Deadline::after(Duration::from_secs(30)),
+        );
+        let request =
+            String::from_utf8_lossy(&server.join().expect("provider server")).into_owned();
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let result = json(&output);
-    assert_eq!(result["reasoning"]["effort"], "high");
-    assert_eq!(
-        result["reasoning"]["source"],
-        "command-line flag `--effort`"
-    );
-    assert!(
-        request.contains(r#""reasoning_effort":"high""#),
-        "{request}"
-    );
-    // Everything else the profile pins is still the profile's.
-    assert_eq!(result["provider"], "remote");
-    assert_eq!(result["model"], "test-model");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result = json(&output);
+        assert_eq!(result["reasoning"]["effort"], effort);
+        assert_eq!(
+            result["reasoning"]["source"],
+            "command-line flag `--effort`"
+        );
+        assert!(
+            request.contains(&format!(r#""reasoning_effort":"{effort}""#)),
+            "{request}"
+        );
+        // Everything else the profile pins is still the profile's.
+        assert_eq!(result["provider"], "remote");
+        assert_eq!(result["model"], "test-model");
+    }
 }
 
 #[test]
