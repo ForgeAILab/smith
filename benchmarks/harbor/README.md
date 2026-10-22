@@ -1,8 +1,10 @@
 # Smith Harbor evaluation
 
 This isolated project runs Smith as a custom Harbor installed agent against the
-pinned 82-task Harbor Index 1.0 package. The serving path is Smith's supported
-ChatGPT/Codex OAuth provider with `gpt-5.6-luna` and `max` reasoning.
+pinned 82-task Harbor Index 1.0 package. The default serving path is Smith's
+supported ChatGPT/Codex OAuth provider with `gpt-5.6-luna` and `max` reasoning;
+a second pinned serving runs `glm-5.3` through the z.ai OpenAI-compatible API
+with an environment-delivered API key.
 
 The benchmark never writes credential values into a repository file, Harbor
 configuration, command, log, trajectory, or artifact. Each trial receives a
@@ -63,20 +65,29 @@ target, platform, command, ELF machine, SHA-256, byte size, and verified
 `smith --version` output. Each Harbor trial verifies the selected digest and
 version again after upload.
 
-## Live Luna Max gates
+## Live serving gates
 
 Run the isolated host canary before spending on Harbor tasks:
 
 ```sh
 uv run smith-harbor canary --output reports/canary.json
+uv run smith-harbor canary --serving glm-5.3 --output reports/canary-glm.json
 uv run smith-harbor probe --output reports/base-footprint.json
 ```
 
-The canary requires provider `chatgpt`, model `gpt-5.6-luna`, effective effort
-`max`, a successful terminal result, and provider-reported usage. The base
-report keeps Smith's estimated/planned segment counts separate from the
-provider-observed first-attempt counters. OAuth subscription cost is always
-`unknown`; OpenAI Platform prices and zero marginal cost are not substituted.
+The canary validates the selected serving's identity (provider, model, and
+effort when the serving pins one), a successful terminal result, and
+provider-reported usage. The default serving is `luna-max`: ChatGPT OAuth with
+`gpt-5.6-luna` at `max` effort. The `glm-5.3` serving uses the z.ai
+OpenAI-compatible API with `glm-5.3` and no effort flag. The base report keeps
+Smith's estimated/planned segment counts separate from the provider-observed
+first-attempt counters. OAuth subscription cost is always `unknown`; the GLM
+serving is per-token metered and the bridge never substitutes estimated prices.
+
+For the `glm-5.3` serving, resolve the API key at launch — export
+`ZAI_API_KEY` or keep `[providers.zai] api_key` in `~/.smith/config.toml`.
+The key reaches each sandboxed trial only through the process environment and
+is audited out of every completed job like the OAuth entry.
 
 ## Run Harbor Index
 
@@ -87,6 +98,10 @@ uv run smith-harbor run smoke
 uv run smith-harbor run dev
 uv run smith-harbor run full
 ```
+
+Add `--serving glm-5.3` to run any profile on the GLM serving. Jobs on
+different servings are never compared pairwise; use `analyze
+--descriptive-only` for the cross-serving baseline.
 
 - `smoke`: 3 fixed tasks × 1 rollout.
 - `dev`: 26 fixed tasks spanning the Index task families × 1 rollout.

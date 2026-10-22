@@ -21,7 +21,7 @@ def _event(sequence: int, payload: dict[str, Any]) -> dict[str, Any]:
         "schema_version": 3,
         "type": "runtime_event",
         "event": {
-            "schema_version": 13,
+            "schema_version": 16,
             "seq": sequence,
             "timestamp": 1_700_000_000_000 + sequence,
             "session": "session-1",
@@ -206,7 +206,7 @@ def test_parser_rejects_sequence_gaps_and_schema_drift() -> None:
     wrapper = json.loads(schema_drift[0])
     wrapper["event"]["schema_version"] = 12
     schema_drift[0] = json.dumps(wrapper)
-    with pytest.raises(ProtocolError, match="schema must be 13"):
+    with pytest.raises(ProtocolError, match="schema must be 16"):
         parse_stream(schema_drift)
 
 

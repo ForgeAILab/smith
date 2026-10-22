@@ -28,16 +28,15 @@ from smith_harbor.auth import (
     default_auth_path,
     merge_refreshed_auth,
     minimal_auth_file,
+    resolve_provider_api_key,
     select_auth,
 )
 from smith_harbor.constants import (
     APPROVAL,
     ARTIFACT_MANIFEST_PATH,
     BRIDGE_VERSION,
-    EFFORT,
-    HARBOR_MODEL,
-    MODEL,
-    PROVIDER,
+    Serving,
+    load_serving,
     smith_config_toml,
 )
 from smith_harbor.protocol import ProtocolError, failure_atif, load_stream, to_atif
@@ -62,13 +61,18 @@ class SmithAgent(BaseInstalledAgent):
         *,
         profile_name: str = "smoke",
         variant_name: str = "current",
+        serving_name: str = "luna-max",
         run_invariants: Mapping[str, object] | None = None,
         allow_concurrent_oauth: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(logs_dir, version=BRIDGE_VERSION, **kwargs)
-        if self.model_name != HARBOR_MODEL:
-            raise ValueError(f"Smith Harbor requires model_name={HARBOR_MODEL!r}")
+        self.serving: Serving = load_serving(serving_name)
+        if self.model_name != self.serving.harbor_model:
+            raise ValueError(
+                f"Smith Harbor serving {self.serving.name!r} requires "
+                f"model_name={self.serving.harbor_model!r}"
+            )
         self.profile_name = profile_name
         self.variant = load_variant(variant_name)
         self.run_invariants = dict(run_invariants or {})
@@ -76,6 +80,7 @@ class SmithAgent(BaseInstalledAgent):
         self._artifact: VerifiedArtifact | None = None
         self._selected_auth: SelectedAuth | None = None
         self._remote_auth_path: PurePosixPath | None = None
+        self._api_key: str | None = None
 
     @staticmethod
     @override
@@ -154,15 +159,16 @@ class SmithAgent(BaseInstalledAgent):
         if result.return_code != 0:
             raise RuntimeError("sandbox lacks bounded TLS/digest runtime dependencies")
 
-    async def _upload_private_config_and_auth(
+    async def _upload_config_files(
         self,
         environment: BaseEnvironment,
         *,
+        auth_path: Path | None,
         remote_home: str,
         uid: int,
         gid: int,
-    ) -> SelectedAuth:
-        selected = select_auth(default_auth_path(), "chatgpt")
+    ) -> None:
+        """Upload the trial config (and OAuth auth file, when the serving uses one)."""
         with tempfile.TemporaryDirectory(prefix="smith-harbor-config-") as raw_dir:
             directory = Path(raw_dir)
             directory.chmod(0o700)
@@ -171,12 +177,13 @@ class SmithAgent(BaseInstalledAgent):
                 smith_config_toml(
                     profile_instructions=self.variant.instructions,
                     delegation=self.variant.delegation,
+                    serving=self.serving,
                 ),
                 encoding="utf-8",
             )
             config_path.chmod(0o600)
-            with minimal_auth_file(selected) as auth_path:
-                await environment.upload_file(config_path, "/tmp/smith-harbor-config.toml")
+            await environment.upload_file(config_path, "/tmp/smith-harbor-config.toml")
+            if auth_path is not None:
                 await environment.upload_file(auth_path, "/tmp/smith-harbor-auth.json")
 
         remote_smith = PurePosixPath(remote_home) / ".smith"
@@ -184,18 +191,55 @@ class SmithAgent(BaseInstalledAgent):
             f"install -d -m 0700 -o {uid} -g {gid} {shlex.quote(str(remote_smith))}; "
             f"install -m 0600 -o {uid} -g {gid} /tmp/smith-harbor-config.toml "
             f"{shlex.quote(str(remote_smith / 'config.toml'))}; "
-            f"install -m 0600 -o {uid} -g {gid} /tmp/smith-harbor-auth.json "
-            f"{shlex.quote(str(remote_smith / 'auth.json'))}; "
-            "rm -f /tmp/smith-harbor-config.toml /tmp/smith-harbor-auth.json"
         )
+        if auth_path is not None:
+            install += (
+                f"install -m 0600 -o {uid} -g {gid} /tmp/smith-harbor-auth.json "
+                f"{shlex.quote(str(remote_smith / 'auth.json'))}; "
+                "rm -f /tmp/smith-harbor-config.toml /tmp/smith-harbor-auth.json"
+            )
+        else:
+            install += "rm -f /tmp/smith-harbor-config.toml"
         result = await environment.exec(command=install, user="root", timeout_sec=30)
         if result.return_code != 0:
             raise RuntimeError("could not install Smith's private trial configuration")
-        self._remote_auth_path = remote_smith / "auth.json"
+
+    async def _upload_private_config_and_auth(
+        self,
+        environment: BaseEnvironment,
+        *,
+        remote_home: str,
+        uid: int,
+        gid: int,
+    ) -> SelectedAuth | None:
+        if not self.serving.oauth:
+            if self.serving.credential_env_var is None or self._api_key is None:
+                raise RuntimeError("API-key serving lacks resolved credential material")
+            await self._upload_config_files(
+                environment,
+                auth_path=None,
+                remote_home=remote_home,
+                uid=uid,
+                gid=gid,
+            )
+            self._remote_auth_path = None
+            return None
+        selected = select_auth(default_auth_path(), "chatgpt")
+        with minimal_auth_file(selected) as auth_path:
+            await self._upload_config_files(
+                environment,
+                auth_path=auth_path,
+                remote_home=remote_home,
+                uid=uid,
+                gid=gid,
+            )
+        self._remote_auth_path = PurePosixPath(remote_home) / ".smith" / "auth.json"
         return selected
 
     async def _capture_refreshed_auth(self, environment: BaseEnvironment) -> None:
         """Return only the selected rotated entry to Smith's supported auth store."""
+        if not self.serving.oauth:
+            return
         if self._selected_auth is None or self._remote_auth_path is None:
             raise RuntimeError("Smith OAuth refresh handoff was not initialized")
         source_path = default_auth_path()
@@ -228,14 +272,21 @@ class SmithAgent(BaseInstalledAgent):
             "bridge_version": BRIDGE_VERSION,
             "profile": self.profile_name,
             **variant_provenance(self.variant),
-            "provider": PROVIDER,
-            "model": MODEL,
-            "effort": EFFORT,
+            "serving": self.serving.name,
+            "provider": self.serving.provider,
+            "provider_kind": self.serving.provider_kind,
+            "model": self.serving.model,
+            "effort": self.serving.effort,
             "approval": APPROVAL,
+            "credential_policy": self.serving.credential_policy,
             "oauth_copy_policy": (
-                "unsupported-risk-concurrent-refresh-handoff"
-                if self.allow_concurrent_oauth
-                else "serial-selected-entry-refresh-handoff"
+                (
+                    "unsupported-risk-concurrent-refresh-handoff"
+                    if self.allow_concurrent_oauth
+                    else "serial-selected-entry-refresh-handoff"
+                )
+                if self.serving.oauth
+                else "environment-exec-only-no-oauth-handoff"
             ),
             "smith_revision": self._artifact.revision,
             "smith_dirty": self._artifact.dirty,
@@ -244,7 +295,11 @@ class SmithAgent(BaseInstalledAgent):
             "artifact_version": self._artifact.version,
             "run_invariants": self.run_invariants,
             "cost_usd": None,
-            "cost_provenance": "unknown_subscription_oauth",
+            "cost_provenance": (
+                "unknown_subscription_oauth"
+                if self.serving.oauth
+                else "per_token_api_key_metered"
+            ),
         }
         with tempfile.TemporaryDirectory(prefix="smith-harbor-provenance-") as raw_dir:
             path = Path(raw_dir) / "provenance.json"
@@ -299,6 +354,12 @@ class SmithAgent(BaseInstalledAgent):
             raise RuntimeError("installed Smith digest/version verification failed")
 
         remote_home, uid, gid = await self._remote_identity(environment)
+        if not self.serving.oauth:
+            if self.serving.credential_env_var is None:
+                raise RuntimeError("API-key serving lacks a credential environment variable")
+            self._api_key = resolve_provider_api_key(
+                self.serving.credential_env_var, self.serving.provider
+            )
         self._selected_auth = await self._upload_private_config_and_auth(
             environment,
             remote_home=remote_home,
@@ -306,6 +367,41 @@ class SmithAgent(BaseInstalledAgent):
             gid=gid,
         )
         await self._write_safe_provenance(environment)
+
+    @staticmethod
+    def _smith_command(instruction: str, serving: Serving) -> str:
+        """Build the sandboxed Smith invocation for one serving.
+
+        The returned script embeds only serving identity, never credential
+        material: API-key servings receive their key through the exec
+        environment instead.
+        """
+        remote_binary = SmithAgent._REMOTE_BINARY
+        remote_stream = SmithAgent._REMOTE_STREAM
+        remote_stderr = SmithAgent._REMOTE_STDERR
+        remote_exit = SmithAgent._REMOTE_EXIT
+        effort_flag = f"--effort {serving.effort} " if serving.effort else ""
+        effort_arm = (
+            f'\'"effort":"{serving.effort}"\'*) ;; ' if serving.effort else "*) ;; "
+        )
+        return (
+            f"{remote_binary} --project . -p {shlex.quote(instruction)} "
+            f"--provider {serving.provider} --model {serving.model} "
+            f"{effort_flag}"
+            f"--approval {APPROVAL} --output-format stream-json "
+            f">{remote_stream} 2>{remote_stderr}; "
+            "code=$?; "
+            f"printf '%s\\n' \"$code\" >{remote_exit}; "
+            'if [ "$code" -eq 0 ]; then '
+            f"terminal=$(tail -n 1 {remote_stream}); "
+            'case "$terminal" in *\'"schema_version":3\'*\'"type":"result"\'*'
+            f'\'"status":"ok"\'*\'"provider":"{serving.provider}"\'*'
+            f'\'"model":"{serving.model}"\'*'
+            f"{effort_arm}"
+            "*) code=86; printf '%s\\n' "
+            "'Smith terminal result violated pinned run invariants' >&2 ;; esac; fi; "
+            'exit "$code"'
+        )
 
     @override
     async def run(
@@ -320,28 +416,20 @@ class SmithAgent(BaseInstalledAgent):
             instruction_path = Path(raw_dir) / "instruction.txt"
             instruction_path.write_text(instruction, encoding="utf-8")
             await environment.upload_file(instruction_path, "/logs/agent/instruction.txt")
-        smith_command = (
-            f"{self._REMOTE_BINARY} --project . -p {shlex.quote(instruction)} "
-            f"--provider {PROVIDER} --model {MODEL} --effort {EFFORT} "
-            f"--approval {APPROVAL} --output-format stream-json "
-            f">{self._REMOTE_STREAM} 2>{self._REMOTE_STDERR}; "
-            "code=$?; "
-            f"printf '%s\\n' \"$code\" >{self._REMOTE_EXIT}; "
-            'if [ "$code" -eq 0 ]; then '
-            f"terminal=$(tail -n 1 {self._REMOTE_STREAM}); "
-            'case "$terminal" in *\'"schema_version":3\'*\'"type":"result"\'*'
-            f'\'"status":"ok"\'*\'"provider":"{PROVIDER}"\'*'
-            f'\'"model":"{MODEL}"\'*\'"effort":"{EFFORT}"\'*) ;; '
-            "*) code=86; printf '%s\\n' "
-            "'Smith terminal result violated pinned run invariants' >&2 ;; esac; fi; "
-            'exit "$code"'
-        )
+        smith_command = self._smith_command(instruction, self.serving)
         command = self._task_login_command(smith_command)
+        run_environment = {"SMITH_PERSISTENCE_ENABLED": "false"}
+        if (
+            not self.serving.oauth
+            and self.serving.credential_env_var is not None
+            and self._api_key is not None
+        ):
+            run_environment[self.serving.credential_env_var] = self._api_key
         try:
             result = await environment.exec(
                 command=command,
                 user=environment.default_user,
-                env={"SMITH_PERSISTENCE_ENABLED": "false"},
+                env=run_environment,
             )
         except BaseException:
             try:
@@ -370,7 +458,7 @@ class SmithAgent(BaseInstalledAgent):
             if self._artifact is None:
                 raise ProtocolError("Smith artifact provenance is unavailable")
             stream_path = self.logs_dir / self._REMOTE_STREAM.name
-            parsed = load_stream(stream_path)
+            parsed = load_stream(stream_path, serving=self.serving)
             trajectory_dict = to_atif(
                 parsed,
                 instruction,
@@ -394,7 +482,11 @@ class SmithAgent(BaseInstalledAgent):
                 "status": "ok",
                 "smith_status": parsed.result["status"],
                 "cost_usd": None,
-                "cost_provenance": "unknown_subscription_oauth",
+                "cost_provenance": (
+                    "unknown_subscription_oauth"
+                    if self.serving.oauth
+                    else "per_token_api_key_metered"
+                ),
             }
         except (OSError, ProtocolError, ValueError) as exc:
             diagnostics["error_type"] = type(exc).__name__
@@ -406,6 +498,7 @@ class SmithAgent(BaseInstalledAgent):
                     smith_revision=self._artifact.revision,
                     artifact_sha256=self._artifact.sha256,
                     failure_kind=type(exc).__name__,
+                    serving=self.serving,
                 )
                 trajectory = Trajectory.model_validate(fallback)
                 (self.logs_dir / "trajectory.json").write_text(

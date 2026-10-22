@@ -11,12 +11,11 @@ from typing import Any
 
 from smith_harbor.constants import (
     ATIF_SCHEMA_VERSION,
-    EFFORT,
-    MODEL,
     OUTPUT_SCHEMA_VERSION,
-    PROVIDER,
     RUNTIME_EVENT_SCHEMA_VERSION,
     SEGMENT_KINDS,
+    Serving,
+    load_serving,
 )
 
 USAGE_KEYS = ("input_uncached", "input_cached", "cache_write", "output", "reasoning")
@@ -87,7 +86,9 @@ def _object(value: object, label: str) -> dict[str, Any]:
     return value
 
 
-def load_stream(path: Path, *, max_bytes: int = 128 * 1024 * 1024) -> ParsedRun:
+def load_stream(
+    path: Path, *, max_bytes: int = 128 * 1024 * 1024, serving: Serving | None = None
+) -> ParsedRun:
     try:
         size = path.stat().st_size
     except OSError as exc:
@@ -98,16 +99,18 @@ def load_stream(path: Path, *, max_bytes: int = 128 * 1024 * 1024) -> ParsedRun:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError) as exc:
         raise ProtocolError("Smith stream is not readable UTF-8") from exc
-    return parse_stream(lines)
+    return parse_stream(lines, serving=serving)
+
+
+AUXILIARY_ENVELOPE_TYPES = frozenset({"cache_controller", "module_notification"})
 
 
 def parse_stream(
     lines: Iterable[str],
     *,
-    expected_provider: str = PROVIDER,
-    expected_model: str = MODEL,
-    expected_effort: str = EFFORT,
+    serving: Serving | None = None,
 ) -> ParsedRun:
+    selected_serving = serving or load_serving()
     documents: list[dict[str, Any]] = []
     for ordinal, line in enumerate(lines, start=1):
         if not line.strip():
@@ -128,13 +131,16 @@ def parse_stream(
     status = terminal.get("status")
     if status not in TERMINAL_STATUSES:
         raise ProtocolError(f"Smith result has unsupported status {status!r}")
-    if terminal.get("provider") != expected_provider:
+    if terminal.get("provider") != selected_serving.provider:
         raise ProtocolError("Smith result provider does not match the pinned profile")
-    if terminal.get("model") != expected_model:
+    if terminal.get("model") != selected_serving.model:
         raise ProtocolError("Smith result model does not match the pinned profile")
     reasoning = _object(terminal.get("reasoning"), "Smith result reasoning")
-    if reasoning.get("effort") != expected_effort or reasoning.get("state") != "on":
-        raise ProtocolError("Smith result did not apply the pinned reasoning effort")
+    if selected_serving.effort is not None:
+        if reasoning.get("effort") != selected_serving.effort or reasoning.get("state") != "on":
+            raise ProtocolError("Smith result did not apply the pinned reasoning effort")
+    elif reasoning.get("effort") != "provider default" or reasoning.get("state") != "on":
+        raise ProtocolError("Smith result did not apply the serving's default reasoning policy")
 
     events: list[dict[str, Any]] = []
     prior_sequence: int | None = None
@@ -142,10 +148,14 @@ def parse_stream(
     if not isinstance(session_id, str) or not session_id:
         raise ProtocolError("Smith result lacks a session identity")
     for ordinal, wrapper in enumerate(documents[:-1], start=1):
-        if (
-            wrapper.get("schema_version") != OUTPUT_SCHEMA_VERSION
-            or wrapper.get("type") != "runtime_event"
-        ):
+        if wrapper.get("schema_version") != OUTPUT_SCHEMA_VERSION:
+            raise ProtocolError(f"Smith stream line {ordinal} is not schema version 3")
+        kind = wrapper.get("type")
+        if kind in AUXILIARY_ENVELOPE_TYPES:
+            # Interleaved envelopes (cache controller snapshots, module
+            # notifications) carry no trajectory steps; validated and skipped.
+            continue
+        if kind != "runtime_event":
             raise ProtocolError(f"Smith stream line {ordinal} is not a schema-v3 runtime event")
         event = _object(wrapper.get("event"), f"Smith stream event {ordinal}")
         if event.get("schema_version") != RUNTIME_EVENT_SCHEMA_VERSION:
@@ -424,8 +434,10 @@ def failure_atif(
     smith_revision: str,
     artifact_sha256: str,
     failure_kind: str,
+    serving: Serving | None = None,
 ) -> dict[str, Any]:
     """Create a minimal valid ATIF record without inventing missing agent output."""
+    selected_serving = serving or load_serving()
     failure = {
         "conversion_status": "failed",
         "failure_kind": failure_kind,
@@ -436,10 +448,10 @@ def failure_atif(
         "agent": {
             "name": "smith",
             "version": smith_version.removeprefix("smith "),
-            "model_name": MODEL,
+            "model_name": selected_serving.model,
             "extra": {
-                "provider": PROVIDER,
-                "reasoning_effort": EFFORT,
+                "provider": selected_serving.provider,
+                "reasoning_effort": selected_serving.effort,
                 "smith_revision": smith_revision,
                 "artifact_sha256": artifact_sha256,
             },
@@ -452,9 +464,9 @@ def failure_atif(
         "final_metrics": {"total_steps": 1, "extra": failure},
         "extra": {
             **failure,
-            "provider": PROVIDER,
-            "model": MODEL,
-            "effort": EFFORT,
+            "provider": selected_serving.provider,
+            "model": selected_serving.model,
+            "effort": selected_serving.effort,
             "smith_revision": smith_revision,
             "artifact_sha256": artifact_sha256,
         },

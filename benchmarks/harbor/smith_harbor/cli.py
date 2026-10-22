@@ -13,10 +13,16 @@ from smith_harbor.artifacts import verify_artifact
 from smith_harbor.audit import audit_job
 from smith_harbor.auth import default_auth_path, select_auth
 from smith_harbor.build_artifacts import build_all
-from smith_harbor.constants import ARTIFACT_MANIFEST_PATH, SUPPORTED_TARGETS, default_jobs_dir
+from smith_harbor.constants import (
+    ARTIFACT_MANIFEST_PATH,
+    DEFAULT_SERVING_NAME,
+    SERVINGS,
+    SUPPORTED_TARGETS,
+    default_jobs_dir,
+)
 from smith_harbor.experiment import run_experiment, write_manifest
 from smith_harbor.local_run import default_local_binary, run_base_probe, run_canary
-from smith_harbor.profiles import load_profile, resume_job, run_profile
+from smith_harbor.profiles import load_profile, preflight, resume_job, run_profile
 from smith_harbor.variants import VARIANTS
 
 
@@ -39,17 +45,19 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--manifest", type=Path, default=ARTIFACT_MANIFEST_PATH)
 
     for name, help_text in (
-        ("canary", "run one isolated live Luna Max OAuth canary"),
+        ("canary", "run one isolated live serving canary"),
         ("probe", "measure planned base footprint and observed first-request usage"),
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--binary", type=Path, default=default_local_binary())
         command.add_argument("--output", type=Path)
+        command.add_argument("--serving", choices=sorted(SERVINGS), default=None)
         if name == "canary":
             command.add_argument("--variant", choices=sorted(VARIANTS), default="current")
 
     validate = commands.add_parser("validate-profile", help="validate a frozen run profile")
     validate.add_argument("profile", choices=["smoke", "dev", "full"])
+    validate.add_argument("--serving", choices=sorted(SERVINGS), default=None)
 
     run = commands.add_parser("run", help="run a frozen Harbor profile")
     run.add_argument("profile", choices=["smoke", "dev", "full"])
@@ -58,12 +66,14 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--unsafe-concurrency", type=int)
     run.add_argument("--print-config", action="store_true")
     run.add_argument("--variant", choices=sorted(VARIANTS), default="current")
+    run.add_argument("--serving", choices=sorted(SERVINGS), default=None)
 
     resume = commands.add_parser("resume", help="resume a Smith Harbor job")
     resume.add_argument("job_path", type=Path)
 
-    audit = commands.add_parser("audit-job", help="scan a completed job for OAuth material")
+    audit = commands.add_parser("audit-job", help="scan a completed job for credential material")
     audit.add_argument("job_path", type=Path)
+    audit.add_argument("--serving", choices=sorted(SERVINGS), default=None)
 
     compare = commands.add_parser("analyze", help="compare two Harbor jobs")
     compare.add_argument("baseline", type=Path)
@@ -112,18 +122,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"{target}\t{artifact.sha256}\t{artifact.version}")
         return 0
     if args.command == "canary":
-        run_canary(args.binary, args.output, variant_name=args.variant)
+        run_canary(
+            args.binary,
+            args.output,
+            variant_name=args.variant,
+            serving_name=args.serving,
+        )
         return 0
     if args.command == "probe":
-        run_base_probe(args.binary, args.output)
+        run_base_probe(args.binary, args.output, serving_name=args.serving)
         return 0
     if args.command == "validate-profile":
         profile = load_profile(args.profile)
+        preflight(profile, serving_name=args.serving)
         print(
             json.dumps(
                 {
                     "schema_version": 1,
                     "profile": profile.name,
+                    "serving": (args.serving or DEFAULT_SERVING_NAME),
                     "tasks": len(profile.tasks),
                     "rollouts": profile.rollouts,
                     "concurrency": profile.concurrency,
@@ -141,11 +158,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             unsafe_concurrency=args.unsafe_concurrency,
             print_config=args.print_config,
             variant_name=args.variant,
+            serving_name=args.serving,
         )
     if args.command == "resume":
         return resume_job(args.job_path)
     if args.command == "audit-job":
-        print(json.dumps(audit_job(args.job_path), indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                audit_job(args.job_path, serving_name=args.serving), indent=2, sort_keys=True
+            )
+        )
         return 0
     if args.command == "analyze":
         report = analysis.compare_jobs(

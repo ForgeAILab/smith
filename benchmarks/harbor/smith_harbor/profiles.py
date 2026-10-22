@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from smith_harbor.artifacts import verify_artifact
-from smith_harbor.auth import default_auth_path, select_auth
+from smith_harbor.auth import (
+    ApiKeyPreflightError,
+    default_auth_path,
+    resolve_provider_api_key,
+    select_auth,
+)
 from smith_harbor.constants import (
     APPROVAL,
     ARTIFACT_MANIFEST_PATH,
@@ -26,16 +31,13 @@ from smith_harbor.constants import (
     DATASET_NAME,
     DATASET_REF,
     DATASET_TASK_COUNT,
-    EFFORT,
-    HARBOR_MODEL,
     HARBOR_VERSION,
-    MODEL,
     PACKAGE_ROOT,
     PROFILES_DIR,
-    PROVIDER,
-    PROVIDER_KIND,
     SUPPORTED_TARGETS,
+    Serving,
     default_jobs_dir,
+    load_serving,
 )
 from smith_harbor.variants import Variant, load_variant, variant_provenance
 
@@ -215,9 +217,14 @@ def _artifact_set_sha256() -> str:
 
 
 def run_invariants(
-    profile: RunProfile, *, concurrency: int, variant: Variant | None = None
+    profile: RunProfile,
+    *,
+    concurrency: int,
+    variant: Variant | None = None,
+    serving: Serving | None = None,
 ) -> dict[str, object]:
-    selected = variant or load_variant("current")
+    selected_variant = variant or load_variant("current")
+    selected_serving = serving or load_serving()
     return {
         "harbor_version": HARBOR_VERSION,
         "bridge_version": BRIDGE_VERSION,
@@ -225,10 +232,17 @@ def run_invariants(
         "dataset_ref": DATASET_REF,
         "task_count": len(profile.tasks),
         "task_set_sha256": task_set_sha256(profile.tasks),
-        "provider": PROVIDER,
-        "provider_kind": PROVIDER_KIND,
-        "model": MODEL,
-        "effort": EFFORT,
+        "serving": selected_serving.name,
+        "provider": selected_serving.provider,
+        "provider_kind": selected_serving.provider_kind,
+        "model": selected_serving.model,
+        "effort": selected_serving.effort or "none",
+        "credential_policy": selected_serving.credential_policy,
+        "serving_limits": {
+            "context_tokens": selected_serving.context_tokens,
+            "max_input_tokens": selected_serving.max_input_tokens,
+            "max_output_tokens": selected_serving.max_output_tokens,
+        },
         "approval": APPROVAL,
         "persistence": False,
         "rollouts": profile.rollouts,
@@ -238,12 +252,16 @@ def run_invariants(
         "docker_context": docker_context(),
         "network_policy": {
             "task_declared": True,
-            "agent_extra_allowed_hosts": ["auth.openai.com", "chatgpt.com"],
+            "agent_extra_allowed_hosts": list(selected_serving.allowed_hosts),
         },
         "oauth_concurrency": concurrency,
-        "cost_provenance": "unknown_subscription_oauth",
+        "cost_provenance": (
+            "unknown_subscription_oauth"
+            if selected_serving.oauth
+            else "per_token_api_key_metered"
+        ),
         "smith_artifact_set_sha256": _artifact_set_sha256(),
-        **variant_provenance(selected),
+        **variant_provenance(selected_variant),
     }
 
 
@@ -254,12 +272,19 @@ def job_config(
     jobs_dir: Path,
     concurrency: int = 1,
     variant: Variant | None = None,
+    serving: Serving | None = None,
 ) -> dict[str, object]:
     if concurrency < 1:
         raise ProfileError("concurrency must be positive")
     unsafe = concurrency > 1
-    selected = variant or load_variant("current")
-    invariants = run_invariants(profile, concurrency=concurrency, variant=selected)
+    selected_variant = variant or load_variant("current")
+    selected_serving = serving or load_serving()
+    invariants = run_invariants(
+        profile,
+        concurrency=concurrency,
+        variant=selected_variant,
+        serving=selected_serving,
+    )
     return {
         "job_name": job_name,
         "jobs_dir": str(jobs_dir.resolve()),
@@ -271,9 +296,9 @@ def job_config(
         "agents": [
             {
                 "import_path": "smith_harbor.smith_agent:SmithAgent",
-                "model_name": HARBOR_MODEL,
+                "model_name": selected_serving.harbor_model,
                 "n_concurrent": concurrency,
-                "extra_allowed_hosts": ["auth.openai.com", "chatgpt.com"],
+                "extra_allowed_hosts": list(selected_serving.allowed_hosts),
                 "include_logs": [
                     "instruction.txt",
                     "smith-stream.jsonl",
@@ -285,7 +310,8 @@ def job_config(
                 ],
                 "kwargs": {
                     "profile_name": profile.name,
-                    "variant_name": selected.name,
+                    "variant_name": selected_variant.name,
+                    "serving_name": selected_serving.name,
                     "run_invariants": invariants,
                     "allow_concurrent_oauth": unsafe,
                 },
@@ -302,8 +328,21 @@ def job_config(
     }
 
 
-def preflight(profile: RunProfile) -> None:
-    select_auth(default_auth_path(), "chatgpt")
+def preflight(profile: RunProfile, *, serving_name: str | None = None) -> None:
+    selected_serving = load_serving(serving_name)
+    if selected_serving.oauth:
+        select_auth(default_auth_path(), "chatgpt")
+    else:
+        if selected_serving.credential_env_var is None:
+            raise ProfileError(
+                f"serving {selected_serving.name!r} lacks a credential environment variable"
+            )
+        try:
+            resolve_provider_api_key(
+                selected_serving.credential_env_var, selected_serving.provider
+            )
+        except ApiKeyPreflightError as exc:
+            raise ProfileError(str(exc)) from exc
     if importlib.metadata.version("harbor") != HARBOR_VERSION:
         raise ProfileError(f"installed Harbor must be exactly {HARBOR_VERSION}")
     for target in SUPPORTED_TARGETS:
@@ -317,22 +356,39 @@ def write_job_provenance(
     profile: RunProfile,
     concurrency: int,
     variant: Variant | None = None,
+    serving: Serving | None = None,
 ) -> None:
-    selected = variant or load_variant("current")
+    selected_variant = variant or load_variant("current")
+    selected_serving = serving or load_serving()
     artifact_manifest = json.loads(ARTIFACT_MANIFEST_PATH.read_text(encoding="utf-8"))
-    document = {
-        "schema_version": 1,
-        "profile": dataclasses.asdict(profile),
-        "run_invariants": run_invariants(profile, concurrency=concurrency, variant=selected),
-        "variant": variant_provenance(selected),
-        "smith_artifacts": artifact_manifest,
-        "credentials": {
+    if selected_serving.oauth:
+        credentials = {
             "provider_path": "chatgpt-responses OAuth",
             "selected_entry": "chatgpt",
             "copy_policy": "serial_selected_entry_refresh_handoff",
             "host_merge": "locked_compare_and_swap_selected_entry_only",
             "credential_values_recorded": False,
-        },
+        }
+    else:
+        credentials = {
+            "provider_path": f"{selected_serving.provider_kind} API key",
+            "reference": selected_serving.credential,
+            "delivery": "environment_exec_only",
+            "copy_policy": "no_oauth_handoff",
+            "credential_values_recorded": False,
+        }
+    document = {
+        "schema_version": 1,
+        "profile": dataclasses.asdict(profile),
+        "run_invariants": run_invariants(
+            profile,
+            concurrency=concurrency,
+            variant=selected_variant,
+            serving=selected_serving,
+        ),
+        "variant": variant_provenance(selected_variant),
+        "smith_artifacts": artifact_manifest,
+        "credentials": credentials,
     }
     path = job_dir / "smith-harbor-provenance.json"
     temporary = job_dir / ".smith-harbor-provenance.json.tmp"
@@ -348,9 +404,11 @@ def run_profile(
     unsafe_concurrency: int | None = None,
     print_config: bool = False,
     variant_name: str = "current",
+    serving_name: str | None = None,
 ) -> int:
     profile = load_profile(profile_name)
     variant = load_variant(variant_name)
+    serving = load_serving(serving_name)
     jobs_dir = jobs_dir or default_jobs_dir()
     concurrency = unsafe_concurrency or profile.concurrency
     if concurrency > 1 and unsafe_concurrency is None:
@@ -363,11 +421,12 @@ def run_profile(
         jobs_dir=jobs_dir,
         concurrency=concurrency,
         variant=variant,
+        serving=serving,
     )
     if print_config:
         print(json.dumps(config, indent=2, sort_keys=True))
         return 0
-    preflight(profile)
+    preflight(profile, serving_name=serving.name)
     context = docker_context()
     jobs_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="smith-harbor-job-") as raw_dir:
@@ -382,7 +441,9 @@ def run_profile(
         finally:
             job_dir = jobs_dir / job_name
             if job_dir.is_dir():
-                write_job_provenance(job_dir, profile, concurrency, variant)
+                write_job_provenance(
+                    job_dir, profile, concurrency, variant, serving=serving
+                )
     return return_code
 
 
@@ -390,7 +451,8 @@ def resume_job(job_path: Path) -> int:
     resolved = job_path.expanduser().resolve()
     if not (resolved / "config.json").is_file():
         raise ProfileError("Harbor job path does not contain config.json")
-    preflight(load_profile(_profile_name_from_job(resolved)))
+    serving = _serving_from_job(resolved)
+    preflight(load_profile(_profile_name_from_job(resolved)), serving_name=serving.name)
     provenance = _load_json(resolved / "smith-harbor-provenance.json")
     invariants = provenance.get("run_invariants")
     context = invariants.get("docker_context") if isinstance(invariants, dict) else None
@@ -401,6 +463,22 @@ def resume_job(job_path: Path) -> int:
         cwd=PACKAGE_ROOT,
         env={**os.environ, "DOCKER_CONTEXT": context},
     )
+
+
+def _serving_from_job(job_path: Path) -> Serving:
+    """Recover a job's serving from its recorded invariants, failing closed."""
+    provenance = _load_json(job_path / "smith-harbor-provenance.json")
+    invariants = provenance.get("run_invariants")
+    name = invariants.get("serving") if isinstance(invariants, dict) else None
+    if not isinstance(name, str):
+        raise ProfileError("job provenance does not record a serving; resume refused")
+    serving = load_serving(name)
+    if isinstance(invariants, dict) and (
+        invariants.get("provider") != serving.provider
+        or invariants.get("model") != serving.model
+    ):
+        raise ProfileError("job provenance serving identity does not match the serving table")
+    return serving
 
 
 def _profile_name_from_job(job_path: Path) -> str:

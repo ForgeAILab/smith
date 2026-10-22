@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import tempfile
+import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -17,6 +18,10 @@ from smith_harbor.constants import AUTH_FILE_MAX_BYTES
 
 class AuthPreflightError(ValueError):
     """An auth file failed a bounded, content-safe preflight."""
+
+
+class ApiKeyPreflightError(ValueError):
+    """An API-key provider credential could not be resolved; no content is logged."""
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,53 @@ def select_auth(path: Path, entry: str = "chatgpt") -> SelectedAuth:
             f"Smith OAuth entry {entry!r} is unavailable; no credential content was logged"
         )
     return SelectedAuth(entry=entry, value=value)
+
+
+def default_config_path() -> Path:
+    """Resolve the supported Smith configuration override without printing it."""
+    override = os.environ.get("SMITH_HARBOR_CONFIG_FILE")
+    return Path(override).expanduser() if override else Path.home() / ".smith" / "config.toml"
+
+
+def resolve_provider_api_key(env_var: str, provider: str) -> str:
+    """Resolve an API-key provider credential into memory only.
+
+    The documented environment variable wins; otherwise the operator's Smith
+    configuration ``[providers.<provider>]`` block supplies the key. The value
+    is returned for in-process use only and never appears in errors, files,
+    commands, or logs.
+    """
+    from_environment = os.environ.get(env_var)
+    if from_environment:
+        return from_environment
+    path = default_config_path()
+    try:
+        with path.open("rb") as handle:
+            document = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        raise ApiKeyPreflightError(
+            f"set {env_var} or provide [providers.{provider}] api_key in the "
+            "Smith configuration; no credential content was logged"
+        ) from None
+    providers = document.get("providers")
+    if not isinstance(providers, dict):
+        raise ApiKeyPreflightError(
+            f"Smith configuration has no providers table; set {env_var} instead"
+        )
+    block = providers.get(provider)
+    if not isinstance(block, dict):
+        raise ApiKeyPreflightError(
+            f"set {env_var} or provide [providers.{provider}] api_key in the "
+            "Smith configuration; no credential content was logged"
+        )
+    raw_key = block.get("api_key")
+    if not isinstance(raw_key, str) or not raw_key:
+        raise ApiKeyPreflightError(
+            f"set {env_var} or provide [providers.{provider}] api_key in the "
+            "Smith configuration; no credential content was logged"
+        )
+    return raw_key
+
 
 
 def _open_private_lock(path: Path) -> int:
