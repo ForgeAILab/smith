@@ -1,0 +1,93 @@
+Child transcript terminal walkthrough
+Runtime: bba8996c213f2f65287d84befc1c7dc6ced3241a
+Deterministic provider: speaks, reads a real fixture file, pauses, completes.
+The test also restarts the host and reads retained child history without resuming it.
+Expanded tool details use the main transcript renderer.
+Command: cargo test -q -p smith-cli --bin smith late_child_inspection_renders_task_tools_and_answer_without_resuming -- --nocapture
+
+
+running 1 test
+Paused child after late subscription:
+● child-1 · running
+
+  last observed: provider request started · 0s ago
+
+> Read the marker and report its contents.
+
+● I will read the marker before reporting.
+
+● Read(transcript-marker.txt)
+  ⎿  1  retained tool evidence
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ↑↓ agents · esc back to main · enter continues child-1
+
+  ○ main
+  ● child-1  provider request started
+Completed child:
+● child-1 · idle
+
+  last observed: turn completed · 0s ago
+
+> Read the marker and report its contents.
+
+● I will read the marker before reporting.
+
+● Read(transcript-marker.txt)
+  ⎿  1  retained tool evidence
+
+● The marker contains retained tool evidence.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ↑↓ agents · esc back to main · enter continues child-1
+
+  ○ main
+  ● child-1  idle · durable
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 414 filtered out; finished in 0.89s

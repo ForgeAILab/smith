@@ -26,6 +26,25 @@ impl Transcript {
         saved: &[RestoredShellShortcut],
         hosted: &[RestoredHostedSearch],
     ) {
+        self.replace_from_history_with_observations(history, saved, hosted, &[], |_, _| {});
+    }
+
+    /// Restores event-only observations at their original canonical boundaries.
+    /// The caller uses the shared conversation fold for native-agent events.
+    pub fn replace_from_history_with_observations(
+        &mut self,
+        history: &[Message],
+        saved: &[RestoredShellShortcut],
+        hosted: &[RestoredHostedSearch],
+        observations: &[(usize, smith_runtime::client::SmithEvent)],
+        mut fold: impl FnMut(&mut Self, &smith_runtime::client::SmithEvent),
+    ) {
+        let mut observations = observations
+            .iter()
+            .filter(|(anchor, _)| *anchor <= history.len())
+            .collect::<Vec<_>>();
+        observations.sort_by_key(|(anchor, event)| (*anchor, event.seq));
+        let mut observations = observations.into_iter().peekable();
         let mut hosted = hosted
             .iter()
             .filter(|search| search.anchor <= history.len())
@@ -42,6 +61,10 @@ impl Transcript {
         shortcuts.sort_by_key(|shortcut| shortcut.anchor);
         let mut shortcuts = shortcuts.into_iter().peekable();
         for (anchor, message) in history.iter().enumerate() {
+            while observations.peek().is_some_and(|(at, _)| *at == anchor) {
+                let (_, event) = observations.next().expect("anchored observation");
+                fold(self, event);
+            }
             while hosted.peek().is_some_and(|search| search.anchor == anchor) {
                 let search = hosted.next().expect("anchored hosted search");
                 self.push_hosted_search(
@@ -130,6 +153,9 @@ impl Transcript {
                     }
                 }
             }
+        }
+        for (_, event) in observations {
+            fold(self, event);
         }
         for search in hosted {
             self.push_hosted_search(

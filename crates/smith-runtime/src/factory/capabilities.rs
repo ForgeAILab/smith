@@ -89,7 +89,12 @@ pub(super) fn prepare(
         tools.push(Arc::new(
             AgentTool::new(slot.clone())
                 .with_profiles(agent_tool_profiles)
-                .with_wait_policy(wait_policy),
+                .with_wait_policy(wait_policy)
+                .with_transcript_output(
+                    request.artifact_store.clone(),
+                    request.persistence_redactor.clone().unwrap_or_default(),
+                    crate::tool_output::ToolOutputContextPolicy::from_config(&request.config),
+                ),
         ) as Arc<dyn Tool>);
         ability_sources.push(agent_runtime::registry::RegistrySource::BuiltIn);
         Some(slot)

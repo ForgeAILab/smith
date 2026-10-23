@@ -245,10 +245,12 @@ fn assistant_markdown_fences_show_only_dim_labels_and_indented_code() {
                         assert!(span.style.add_modifier.contains(Modifier::DIM));
                     }
                     if span.content.contains("**literal**") {
-                        assert!(!span
-                            .style
-                            .add_modifier
-                            .intersects(Modifier::BOLD | Modifier::ITALIC));
+                        assert!(
+                            !span
+                                .style
+                                .add_modifier
+                                .intersects(Modifier::BOLD | Modifier::ITALIC)
+                        );
                     }
                 }
                 assert!(rows.iter().all(|row| row.width() <= usize::from(width)));
@@ -288,12 +290,7 @@ fn assistant_markdown_constructs_have_visible_structure_without_color() {
         ),
         (
             "```text\n> literal\n- item\n# heading\n```",
-            &[
-                "● text",
-                "    > literal",
-                "    - item",
-                "    # heading",
-            ],
+            &["● text", "    > literal", "    - item", "    # heading"],
         ),
         (
             "**bold *italic*** and *italic **bold*** and ***both***",
@@ -804,13 +801,18 @@ fn child_markdown_uses_the_same_renderer_before_and_after_commit() {
             }),
         );
         for (width, theme, live) in before {
-            assert_eq!(
-                live,
-                transcript_lines(&app, theme, width),
-                "{name}: child commit at {width}"
-            );
             let root = super::super::markdown::render_assistant_lines(text, theme, width, true);
             assert!(live.ends_with(&root), "{name}: child shares root Markdown");
+            let committed = transcript_lines(&app, theme, width);
+            assert!(
+                committed.ends_with(&root),
+                "{name}: child commit shares root Markdown at {width}"
+            );
+            assert_eq!(
+                &live[live.len() - root.len()..],
+                &committed[committed.len() - root.len()..],
+                "{name}: child conversation is unchanged by commit at {width}"
+            );
         }
     }
 }

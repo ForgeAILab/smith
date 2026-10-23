@@ -147,7 +147,15 @@ the answer back to that child with an explicit agent follow_up. Reuse a relevant
 with follow_up so its prior conversation remains available. Use resume only for an interrupted \
 child with an exact compatible checkpoint: resume continues that unfinished turn, while \
 follow_up starts a new turn. Never replace a missing, incompatible, or non-resumable child by \
-silently spawning another one.";
+silently spawning another one. After spawning, continue independent work or finish your \
+turn and let the session park: completed child outcomes are delivered automatically, with \
+readable artifact references for large replies. Do not repeatedly poll wait, result, list, \
+or transcript to obtain completion. Use agent action transcript on demand to understand \
+or diagnose a child's committed conversation, following its pages and artifact references \
+when needed. A transcript page is an observation, not a completed task result. Use agent \
+action stop with child_id to stop a child; task_output and task_stop control background \
+shell tasks, not child agents. Describe observed activity and uncertainty accurately; a \
+running status or silence does not establish that a child is thinking or fetching.";
 
 const ADVISOR: &str = "\
 Consult advisor before substantive work, when stuck or when results do not fit, and before \
@@ -462,7 +470,7 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
         (
             "delegation",
             DELEGATION,
-            "smith-prompt-delegation-2",
+            "smith-prompt-delegation-3",
             context.delegation,
         ),
         (

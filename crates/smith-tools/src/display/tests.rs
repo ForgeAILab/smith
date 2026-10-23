@@ -751,6 +751,13 @@ fn agent_addressed_actions_name_their_child() {
     assert_eq!(
         invocation(
             "agent",
+            json!({"action": "transcript", "child_id": "child-2", "page_size": 20})
+        ),
+        "Agent(transcript · child-2)"
+    );
+    assert_eq!(
+        invocation(
+            "agent",
             json!({"action": "follow_up", "child_id": "child-1", "task": "keep going"})
         ),
         "Agent(follow_up · child-1 · \"keep going\")"

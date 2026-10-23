@@ -137,12 +137,12 @@ impl TuiLoop<'_> {
                                     )
                                 });
                             self.app.set_child_usage_binding(child.as_str(), binding);
-                            subscribe_to_child(self.host, child, self.child_tx.clone());
+                            self.subscribe_child(child, false).await;
                         }
                         RuntimeEvent::ChildProgress {
                             child,
                             phase: ChildPhase::ResumeStarted { .. },
-                        } => subscribe_to_child(self.host, child, self.child_tx.clone()),
+                        } => self.subscribe_child(child, true).await,
                         _ => {}
                     }
                 }
@@ -194,8 +194,12 @@ impl TuiLoop<'_> {
         }
     }
 
-    pub(super) fn on_child_event(&mut self, child_event: Option<(ChildId, EventEnvelope)>) {
+    pub(super) async fn on_child_event(&mut self, child_event: Option<(ChildId, EventEnvelope)>) {
         if let Some((child, envelope)) = child_event {
+            let missed_events = self
+                .app
+                .child_next_event_sequence(child.as_str())
+                .is_some_and(|next| envelope.seq > next);
             self.app.apply_child(child.as_str(), &envelope);
             // The child's events withhold argument values and result
             // text exactly as the root's do. Both are resolved the
@@ -213,7 +217,98 @@ impl TuiLoop<'_> {
                         .set_child_tool_result_preview(child.as_str(), call.as_str(), text);
                 }
             }
+            if missed_events
+                || matches!(
+                    envelope.payload,
+                    RuntimeEvent::ProviderAttemptStarted { .. }
+                )
+            {
+                match self.host.child_transcript(&child).await {
+                    Ok(snapshot) => self.restore_child_snapshot(snapshot),
+                    Err(error) => self
+                        .app
+                        .set_child_history_unavailable(child.as_str(), error.to_string()),
+                }
+            }
             self.dirty = true;
+        }
+    }
+
+    pub(super) async fn restore_child_subscriptions(&mut self) {
+        let children = self
+            .host
+            .runtime()
+            .delegation()
+            .and_then(|delegation| delegation.coordinator())
+            .map(|coordinator| coordinator.list())
+            .unwrap_or_default();
+        for status in children {
+            self.subscribe_child(&status.child, false).await;
+        }
+    }
+
+    async fn subscribe_child(&mut self, child: &ChildId, replace: bool) {
+        if !replace && self.hydrated_children.contains(child.as_str()) {
+            return;
+        }
+        if let Some(task) = self.child_subscriptions.remove(child.as_str()) {
+            task.abort();
+        }
+        match subscribe_to_child(self.host, child, self.child_tx.clone()).await {
+            Ok((snapshot, task)) => {
+                self.restore_child_snapshot(snapshot);
+                self.hydrated_children.insert(child.as_str().to_owned());
+                if let Some(task) = task {
+                    self.child_subscriptions
+                        .insert(child.as_str().to_owned(), task);
+                }
+            }
+            Err(error) => self
+                .app
+                .set_child_history_unavailable(child.as_str(), error.to_string()),
+        }
+        self.dirty = true;
+    }
+
+    fn restore_child_snapshot(&mut self, snapshot: smith_runtime::host::ChildTranscriptSnapshot) {
+        let child = snapshot.status.child.as_str();
+        self.app.restore_child_terminal_detail(
+            child,
+            snapshot
+                .status
+                .last_error
+                .as_ref()
+                .map(|error| error.message.as_str()),
+        );
+        if snapshot.history.is_empty()
+            && snapshot.unavailable_reason.is_some()
+            && self.app.child_history_loaded(child)
+        {
+            if let Some(reason) = snapshot.unavailable_reason {
+                self.app.set_child_history_unavailable(child, reason);
+            }
+            return;
+        }
+        self.app.restore_child_transcript_with_observations(
+            child,
+            &snapshot.history,
+            snapshot.next_event_sequence,
+            &[],
+            &snapshot.observations,
+        );
+        for (call, display) in snapshot.tool_displays {
+            self.app
+                .set_child_tool_display(child, call.as_str(), display);
+        }
+        for (call, result) in snapshot.tool_results {
+            self.app
+                .set_child_tool_result_preview(child, call.as_str(), result);
+        }
+        for event in snapshot.pending_events {
+            self.app.restore_child_pending_event(child, &event);
+        }
+        if let Some(reason) = snapshot.unavailable_reason {
+            self.app.set_child_history_unavailable(child, reason);
         }
     }
 

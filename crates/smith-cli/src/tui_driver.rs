@@ -1,6 +1,6 @@
 //! Interactive terminal event loop and TUI action routing.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use agent_runtime_core::cancel::CancelReason;
@@ -381,35 +381,26 @@ pub(super) async fn run_interactive(
 /// A dormant child has no live stream, so this is a no-op for one recovered
 /// from a durable record; its canonical history is what the inspector shows
 /// instead. The forwarding task ends with the child's stream.
-fn subscribe_to_child(
+pub(super) async fn subscribe_to_child(
     host: &HostSession,
     child: &ChildId,
     events: tokio::sync::mpsc::UnboundedSender<(ChildId, EventEnvelope)>,
-) {
-    let Some(coordinator) = host
-        .runtime()
-        .delegation()
-        .and_then(|delegation| delegation.coordinator())
-    else {
-        return;
-    };
-    let Some(mut stream) = coordinator.child_events(child) else {
-        return;
-    };
-    let child = child.clone();
-    tokio::spawn(async move {
-        while let Some(envelope) = stream.next().await {
-            if events
-                .send((
-                    child.clone(),
-                    smith_runtime::client::SmithEvent::project_or_unknown(&envelope),
-                ))
-                .is_err()
-            {
-                break;
+) -> Result<(
+    smith_runtime::host::ChildTranscriptSnapshot,
+    Option<tokio::task::JoinHandle<()>>,
+)> {
+    let subscription = host.subscribe_child_transcript(child).await?;
+    let task = subscription.events.map(|mut stream| {
+        let child = child.clone();
+        tokio::spawn(async move {
+            while let Some(envelope) = stream.next().await {
+                if events.send((child.clone(), envelope)).is_err() {
+                    break;
+                }
             }
-        }
+        })
     });
+    Ok((subscription.snapshot, task))
 }
 
 pub(super) struct TuiRunInputs<'a> {
@@ -457,6 +448,8 @@ struct TuiLoop<'a> {
     shell_shortcuts: ShellShortcuts,
     child_tx: tokio::sync::mpsc::UnboundedSender<(ChildId, EventEnvelope)>,
     child_rx: tokio::sync::mpsc::UnboundedReceiver<(ChildId, EventEnvelope)>,
+    child_subscriptions: BTreeMap<String, tokio::task::JoinHandle<()>>,
+    hydrated_children: BTreeSet<String>,
     mcp_changes: Option<tokio::sync::watch::Receiver<u64>>,
     catalog_changes: tokio::sync::watch::Receiver<crate::model_sync::CatalogUpdate>,
     catalog_update_pending: bool,
@@ -490,6 +483,7 @@ where
     B: ratatui::backend::Backend,
     B::Error: Send + Sync + 'static,
 {
+    tui.restore_child_subscriptions().await;
     let exit = loop {
         if stop.interrupted() {
             break tui.on_quit();
@@ -544,7 +538,7 @@ where
             }
 
             child_event = tui.child_rx.recv() => {
-                tui.on_child_event(child_event);
+                tui.on_child_event(child_event).await;
             }
 
             outcome = tui.local_rx.recv() => {
@@ -584,6 +578,9 @@ where
             break exit;
         }
     };
+    for task in tui.child_subscriptions.values() {
+        task.abort();
+    }
     // A normal exit clears the title exactly once, ahead of a new host's
     // tracker or the caller's terminal restore. An I/O error through `?` skips
     // this and leaves the last title standing until the shell's own prompt hook
@@ -683,6 +680,8 @@ impl<'a> TuiLoop<'a> {
             shell_shortcuts,
             child_tx,
             child_rx,
+            child_subscriptions: BTreeMap::new(),
+            hydrated_children: BTreeSet::new(),
             mcp_changes,
             catalog_changes: crate::model_sync::subscribe(),
             catalog_update_pending: false,

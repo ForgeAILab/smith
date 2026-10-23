@@ -68,6 +68,7 @@ mod durable_children;
 mod model_routes;
 mod profile_selection;
 mod result_delivery;
+mod transcript;
 
 const FAKE_CONFIG: &str = r#"
 default_profile = "dev"

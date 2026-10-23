@@ -443,7 +443,7 @@
     }
 
     #[test]
-    fn a_long_running_child_keeps_a_bounded_log_tail() {
+    fn a_long_running_child_keeps_earlier_conversation_rows() {
         let mut app = app();
         let child = ChildId::new("child-busy");
         app.apply(&event(RuntimeEvent::ChildSpawned {
@@ -453,7 +453,7 @@
             max_tokens: None,
             deadline_ms: None,
         }));
-        for index in 0..MAX_CHILD_BLOCKS + 50 {
+        for index in 0..250 {
             let call = format!("call-{index}");
             let name = format!("read{index}");
             app.apply_child(child.as_str(), &event(tool_requested(&call, &name)));
@@ -463,13 +463,14 @@
         let log = child_log(&app, child.as_str());
         assert_eq!(
             log.len(),
-            MAX_CHILD_BLOCKS,
+            251,
             "a call and its outcome are one row, not two"
         );
+        assert_eq!(log.get(1).map(String::as_str), Some("ok read0"));
         assert_eq!(
             log.last().map(String::as_str),
-            Some(format!("ok read{}", MAX_CHILD_BLOCKS + 49).as_str()),
-            "the newest activity is what a bounded tail keeps"
+            Some("ok read249"),
+            "the newest activity follows the retained earlier rows"
         );
     }
 
@@ -1071,17 +1072,16 @@
     }
 
     #[test]
-    fn an_enormous_child_answer_is_still_bounded() {
+    fn a_large_child_answer_remains_complete_in_the_inspector() {
         let mut app = app();
         let child = spawned_child(&mut app, "child-flood");
         app.apply(&event(RuntimeEvent::ChildCompleted {
             child: child.clone(),
-            result: "x".repeat(MAX_CHILD_ANSWER_CHARS * 2),
+            result: "x".repeat(16_000),
         }));
 
         let Some(Block::Assistant { text, .. }) = app.child_blocks(child.as_str()).last() else {
             panic!("the answer is assistant prose");
         };
-        assert_eq!(text.chars().count(), MAX_CHILD_ANSWER_CHARS + 1);
-        assert!(text.ends_with('…'), "the clip says that it clipped");
+        assert_eq!(text, &"x".repeat(16_000));
     }

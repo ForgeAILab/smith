@@ -3,10 +3,204 @@
 use super::*;
 use crate::status::SessionUsage;
 use crate::transcript::{Block, safe_tool_name};
+use agent_runtime_core::content::Message;
 use agent_runtime_core::usage::{UsageDelta, UsageSource};
 use smith_runtime::client::SmithEventKind as RuntimeEvent;
 
 impl App {
+    /// Rebuilds the inspector from the child's retained canonical history.
+    /// The host subscribes before capturing this exclusive event boundary.
+    pub fn restore_child_transcript(
+        &mut self,
+        child: &str,
+        history: &[Message],
+        next_event_sequence: u64,
+        hosted: &[crate::transcript::RestoredHostedSearch],
+    ) {
+        self.restore_child_transcript_with_observations(
+            child,
+            history,
+            next_event_sequence,
+            hosted,
+            &[],
+        );
+    }
+
+    /// Includes retained native-agent and provider activity in canonical order.
+    pub fn restore_child_transcript_with_observations(
+        &mut self,
+        child: &str,
+        history: &[Message],
+        next_event_sequence: u64,
+        hosted: &[crate::transcript::RestoredHostedSearch],
+        observations: &[(usize, EventEnvelope)],
+    ) {
+        let conversation = self
+            .child_conversations
+            .entry(child.to_owned())
+            .or_default();
+        for (anchor, event) in observations {
+            if matches!(event.payload, RuntimeEvent::HostedSearch { .. }) {
+                conversation
+                    .hosted
+                    .insert(event.seq, (*anchor, event.clone()));
+            }
+        }
+        let observed_sequences = observations
+            .iter()
+            .map(|(_, event)| event.seq)
+            .collect::<BTreeSet<_>>();
+        let observations = observations
+            .iter()
+            .chain(
+                conversation
+                    .hosted
+                    .iter()
+                    .filter(|(sequence, _)| !observed_sequences.contains(sequence))
+                    .map(|(_, observation)| observation),
+            )
+            .cloned()
+            .collect::<Vec<_>>();
+        conversation.speculative.clear();
+        let speculative = &mut conversation.speculative;
+        conversation
+            .transcript
+            .replace_from_history_with_observations(
+                history,
+                &[],
+                hosted,
+                &observations,
+                |transcript, event| {
+                    super::super::conversation::ConversationMut {
+                        transcript,
+                        speculative: &mut *speculative,
+                    }
+                    .apply(&event.payload);
+                },
+            );
+        conversation.next_sequence = Some(next_event_sequence);
+        conversation.history_loaded = true;
+        conversation.history_len = history.len();
+        conversation.history_unavailable = None;
+        conversation.live = true;
+        if let Some((_, event)) = observations.iter().max_by_key(|(_, event)| event.seq) {
+            restore_observed_progress(conversation, event);
+            if conversation.progress_sequence == Some(event.seq) {
+                self.refresh_child_observed_detail(child, &event.payload);
+            }
+        }
+    }
+
+    /// Records a read failure without replacing the conversation already read.
+    pub fn set_child_history_unavailable(&mut self, child: &str, reason: impl Into<String>) {
+        let conversation = self
+            .child_conversations
+            .entry(child.to_owned())
+            .or_default();
+        conversation.history_unavailable = Some(reason.into());
+        if conversation.history_len == 0 && conversation.speculative.in_flight() == 0 {
+            conversation.live = false;
+        }
+    }
+
+    /// Seeds uncommitted output captured atomically with canonical history.
+    /// These pre-boundary events are presentation state, not fresh usage.
+    pub fn restore_child_pending_event(&mut self, child: &str, envelope: &EventEnvelope) {
+        let conversation = self
+            .child_conversations
+            .entry(child.to_owned())
+            .or_default();
+        let already_restored = retain_hosted_search(conversation, envelope);
+        if !already_restored {
+            conversation.as_mut().apply(&envelope.payload);
+        }
+        restore_observed_progress(conversation, envelope);
+        if conversation.progress_sequence == Some(envelope.seq) {
+            self.refresh_child_observed_detail(child, &envelope.payload);
+        }
+    }
+
+    /// Whether canonical history has been read, independently of live activity.
+    pub fn child_history_loaded(&self, child: &str) -> bool {
+        self.child_conversations
+            .get(child)
+            .is_some_and(|conversation| conversation.history_loaded)
+    }
+
+    /// Exclusive sequence boundary for gap detection on the child's live tail.
+    pub fn child_next_event_sequence(&self, child: &str) -> Option<u64> {
+        self.child_conversations
+            .get(child)
+            .and_then(|conversation| conversation.next_sequence)
+    }
+
+    /// A host-provided explanation for unavailable retained history.
+    pub fn child_history_unavailable(&self, child: &str) -> Option<&str> {
+        self.child_conversations
+            .get(child)
+            .and_then(|conversation| conversation.history_unavailable.as_deref())
+    }
+
+    /// Restores retained failure evidence without adding duplicate messages.
+    pub fn restore_child_terminal_detail(&mut self, child: &str, detail: Option<&str>) {
+        self.child_conversations
+            .entry(child.to_owned())
+            .or_default()
+            .terminal_detail = detail.map(str::to_owned);
+    }
+
+    /// Coordinator-provided terminal detail, separate from canonical messages.
+    pub fn child_terminal_detail(&self, child: &str) -> Option<&str> {
+        self.child_conversations
+            .get(child)
+            .and_then(|conversation| conversation.terminal_detail.as_deref())
+    }
+
+    /// Observed activity, without interpreting provider silence.
+    pub fn child_last_activity(&self, child: &str) -> Option<&str> {
+        self.child_conversations
+            .get(child)
+            .and_then(|conversation| conversation.progress.as_ref())
+            .map(|(activity, _)| activity.as_str())
+    }
+
+    /// Time since the last progress event this process actually observed.
+    pub fn child_progress_age(&self, child: &str) -> Option<Duration> {
+        self.child_progress_age_at(child, Instant::now())
+    }
+
+    pub(crate) fn child_progress_age_at(&self, child: &str, now: Instant) -> Option<Duration> {
+        self.child_conversations
+            .get(child)
+            .and_then(|conversation| conversation.progress.as_ref())
+            .and_then(|(_, observed)| *observed)
+            .map(|observed| now.saturating_duration_since(observed))
+    }
+
+    fn conversation_viewport(&self) -> ConversationViewport {
+        ConversationViewport {
+            following: self.following,
+            scroll_back: self.scroll_back,
+            scroll_limit: self.scroll_limit,
+            scroll_to_block: self.scroll_to_block,
+            result_scroll_revision: self.result_scroll_revision,
+        }
+    }
+
+    fn restore_conversation_viewport(&mut self, viewport: Option<ConversationViewport>) {
+        if let Some(viewport) = viewport {
+            self.following = viewport.following;
+            self.scroll_back = viewport.scroll_back;
+            self.scroll_limit = viewport.scroll_limit;
+            self.scroll_to_block = viewport.scroll_to_block;
+            self.result_scroll_revision = viewport.result_scroll_revision;
+        } else {
+            self.follow_newest();
+            self.scroll_limit = 0;
+        }
+        self.selection = None;
+    }
+
     /// The ticking or frozen elapsed time for one delegated child.
     ///
     /// Absent for children known only through durable recovery: their live
@@ -29,6 +223,9 @@ impl App {
         let Some(conversation) = self.child_conversations.get(child) else {
             return;
         };
+        if conversation.progress.is_some() && !conversation.last_activity_was_tool {
+            return;
+        }
         let Some(Block::Tool {
             name,
             display,
@@ -54,6 +251,25 @@ impl App {
         };
         if let Some(summary) = self.children.get_mut(child) {
             summary.detail = Some(detail);
+        }
+    }
+
+    fn refresh_child_observed_detail(&mut self, child: &str, event: &RuntimeEvent) {
+        if !matches!(
+            event,
+            RuntimeEvent::ProviderAttemptStarted { .. }
+                | RuntimeEvent::TextDelta { .. }
+                | RuntimeEvent::ExternalText { .. }
+                | RuntimeEvent::ReasoningDelta { .. }
+                | RuntimeEvent::ExternalReasoning { .. }
+                | RuntimeEvent::HostedSearch { .. }
+        ) {
+            return;
+        }
+        if let Some(summary) = self.children.get_mut(child)
+            && summary.state.is_running()
+        {
+            summary.detail = observed_activity(event);
         }
     }
 
@@ -197,16 +413,19 @@ impl App {
             // another's name until the next redraw.
             self.inspected_detail = None;
             if let Some(left) = self.inspected_child.take() {
+                self.child_viewports
+                    .insert(left.clone(), self.conversation_viewport());
                 self.arm_child_dismissal(&left);
+            } else {
+                self.root_viewport = Some(self.conversation_viewport());
             }
+            let viewport = self.child_viewports.get(&child).copied();
+            self.restore_conversation_viewport(viewport);
         }
         // Reading a row is the opposite of ignoring it: whatever countdown it
         // was under stops here and restarts when the reader moves on.
         self.child_dismiss_at.remove(child.as_str());
         self.inspected_child = Some(child);
-        // The two views scroll independently; carrying one's offset into the
-        // other would open a log part-way up for no reason the user can see.
-        self.follow_newest();
     }
 
     /// The host's latest coordinator card for the inspected child.
@@ -255,8 +474,11 @@ impl App {
         let left = self.inspected_child.take();
         self.inspected_detail = None;
         if let Some(left) = &left {
+            self.child_viewports
+                .insert(left.clone(), self.conversation_viewport());
             self.arm_child_dismissal(left);
-            self.follow_newest();
+            let viewport = self.root_viewport.take();
+            self.restore_conversation_viewport(viewport);
         }
         left.is_some()
     }
@@ -326,7 +548,6 @@ impl App {
     ) {
         let conversation = self.child_conversation_mut(child);
         conversation.transcript.push_notice(kind, text);
-        conversation.transcript.retain_newest(MAX_CHILD_BLOCKS);
     }
 
     /// Settles the child's still-open tool rows when the child itself is done.
@@ -349,25 +570,15 @@ impl App {
         {
             return;
         }
-        let bounded: String = if text.chars().count() > MAX_CHILD_ANSWER_CHARS {
-            text.chars()
-                .take(MAX_CHILD_ANSWER_CHARS)
-                .chain(std::iter::once('…'))
-                .collect()
-        } else {
-            text.to_owned()
-        };
         let conversation = self.child_conversation_mut(child);
-        conversation.transcript.push_text_delta(&bounded);
+        conversation.transcript.push_text_delta(text);
         conversation.transcript.close_open();
-        conversation.transcript.retain_newest(MAX_CHILD_BLOCKS);
     }
 
     /// Records a failure the child reported.
     pub(in crate::app) fn push_child_error(&mut self, child: &str, message: impl Into<String>) {
         let conversation = self.child_conversation_mut(child);
         conversation.transcript.push_error(message);
-        conversation.transcript.retain_newest(MAX_CHILD_BLOCKS);
     }
 
     /// Folds one event from a child's own stream into that child's
@@ -377,16 +588,66 @@ impl App {
     /// transcript. Nothing here touches session status, the plan, or the turn
     /// clock: a child working is not the user's session working.
     pub fn apply_child(&mut self, child: &str, envelope: &EventEnvelope) {
-        let conversation = self.child_conversation_mut(child);
+        self.apply_child_at(child, envelope, Instant::now());
+    }
+
+    pub(crate) fn apply_child_at(&mut self, child: &str, envelope: &EventEnvelope, now: Instant) {
+        let before_history = self
+            .child_conversations
+            .get(child)
+            .is_some_and(|conversation| {
+                conversation
+                    .next_sequence
+                    .is_some_and(|next| envelope.seq < next)
+            });
+        let usage = matches!(envelope.payload, RuntimeEvent::Usage { .. });
+        if before_history && !usage {
+            return;
+        }
+        if usage
+            && self
+                .child_conversations
+                .get(child)
+                .is_some_and(|conversation| {
+                    conversation.history_loaded
+                        && conversation
+                            .usage_next_sequence
+                            .is_some_and(|next| envelope.seq < next)
+                })
+        {
+            return;
+        }
+        let conversation = if before_history {
+            self.child_conversations
+                .entry(child.to_owned())
+                .or_default()
+        } else {
+            self.child_conversation_mut(child)
+        };
         conversation.live = true;
-        let handled = conversation.as_mut().apply(&envelope.payload);
-        conversation.transcript.retain_newest(MAX_CHILD_BLOCKS);
+        if !before_history && conversation.next_sequence.is_some() {
+            conversation.next_sequence = Some(envelope.seq.saturating_add(1));
+        }
+        if usage {
+            conversation.usage_next_sequence = Some(envelope.seq.saturating_add(1));
+        }
+        if !before_history && let Some(activity) = observed_activity(&envelope.payload) {
+            conversation.progress = Some((activity, Some(now)));
+            conversation.progress_sequence = Some(envelope.seq);
+            conversation.last_activity_was_tool = is_tool_activity(&envelope.payload);
+        }
+        let already_restored = retain_hosted_search(conversation, envelope);
+        let handled =
+            !before_history && !already_restored && conversation.as_mut().apply(&envelope.payload);
 
         // The panel row answers "what is that agent doing right now" in one
         // line, using the same reviewed tool display projection the
         // transcript uses; see `refresh_child_tool_detail`.
         match &envelope.payload {
-            RuntimeEvent::ToolCallRequested { .. } | RuntimeEvent::ToolCallCompleted { .. } => {
+            RuntimeEvent::ToolCallRequested { .. }
+            | RuntimeEvent::ToolCallCompleted { .. }
+            | RuntimeEvent::ExternalToolInvoked { .. }
+            | RuntimeEvent::ExternalToolCompleted { .. } => {
                 self.refresh_child_tool_detail(child);
             }
             // Delegated usage is accounted separately from the root's own
@@ -439,10 +700,11 @@ impl App {
             }
             _ => {}
         }
+        if !before_history {
+            self.refresh_child_observed_detail(child, &envelope.payload);
+        }
 
-        if handled && self.inspected_child.as_deref() == Some(child) {
-            // The reader is looking at this child; a new block below the fold
-            // is why they are looking.
+        if handled && self.inspected_child.as_deref() == Some(child) && self.following {
             self.follow_newest();
         }
     }
@@ -568,6 +830,83 @@ impl App {
             profile,
         });
     }
+}
+
+fn restore_observed_progress(conversation: &mut Conversation, event: &EventEnvelope) {
+    if conversation
+        .progress_sequence
+        .is_some_and(|sequence| event.seq < sequence)
+    {
+        return;
+    }
+    let Some(activity) = observed_activity(&event.payload) else {
+        return;
+    };
+    let observed = (event.timestamp != Timestamp::ZERO)
+        .then(|| {
+            let wall_now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            let age = wall_now.saturating_sub(Duration::from_millis(event.timestamp.as_millis()));
+            Instant::now().checked_sub(age)
+        })
+        .flatten();
+    conversation.progress = Some((activity, observed));
+    conversation.progress_sequence = Some(event.seq);
+    conversation.last_activity_was_tool = is_tool_activity(&event.payload);
+}
+
+fn is_tool_activity(event: &RuntimeEvent) -> bool {
+    matches!(
+        event,
+        RuntimeEvent::ToolCallRequested { .. }
+            | RuntimeEvent::ToolCallCompleted { .. }
+            | RuntimeEvent::ExternalToolInvoked { .. }
+            | RuntimeEvent::ExternalToolCompleted { .. }
+    )
+}
+
+fn retain_hosted_search(conversation: &mut Conversation, envelope: &EventEnvelope) -> bool {
+    if !matches!(envelope.payload, RuntimeEvent::HostedSearch { .. }) {
+        return false;
+    }
+    if conversation.hosted.contains_key(&envelope.seq) {
+        return true;
+    }
+    conversation
+        .hosted
+        .insert(envelope.seq, (conversation.history_len, envelope.clone()));
+    false
+}
+
+fn observed_activity(event: &RuntimeEvent) -> Option<String> {
+    let label = match event {
+        RuntimeEvent::ProviderAttemptStarted { .. } => "provider request started",
+        RuntimeEvent::TextDelta { .. } | RuntimeEvent::ExternalText { .. } => {
+            "receiving assistant output"
+        }
+        RuntimeEvent::ReasoningDelta { .. } | RuntimeEvent::ExternalReasoning { .. } => {
+            "receiving provider reasoning"
+        }
+        RuntimeEvent::HostedSearch { .. } => "provider web activity",
+        RuntimeEvent::ProviderAttemptOutputCommitted { .. } => "provider output committed",
+        RuntimeEvent::ProviderAttemptOutputDiscarded { .. } => "provider output discarded",
+        RuntimeEvent::ProviderAttemptFinished { .. } => "provider attempt finished",
+        RuntimeEvent::ToolCallRequested { name, .. }
+        | RuntimeEvent::ExternalToolInvoked { name, .. } => {
+            return Some(format!("tool requested {}", safe_tool_name(name)));
+        }
+        RuntimeEvent::ToolCallCompleted { name, .. } => {
+            return Some(format!("tool completed {}", safe_tool_name(name)));
+        }
+        RuntimeEvent::ExternalToolCompleted { .. } => "tool completed",
+        RuntimeEvent::TurnStarted | RuntimeEvent::InternalTurnStarted { .. } => "turn started",
+        RuntimeEvent::TurnCompleted { .. } => "turn completed",
+        RuntimeEvent::Error { .. } => "error reported",
+        RuntimeEvent::SessionShutdown => "session ended",
+        _ => return None,
+    };
+    Some(label.to_owned())
 }
 
 #[cfg(test)]

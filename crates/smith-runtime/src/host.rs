@@ -73,6 +73,7 @@ use crate::resume_capsule::{
 };
 use crate::session::{FileSessionStore, ProjectId, SessionListing, SessionPaths};
 
+mod child_history;
 mod history;
 mod observers;
 mod persistence;
@@ -80,6 +81,8 @@ mod policy;
 mod recovery;
 mod startup;
 mod watchers;
+
+pub use child_history::{ChildTranscriptSnapshot, ChildTranscriptSubscription};
 
 use history::{
     append_shell_shortcut, redacted_result_text, tool_call_display_from_history,

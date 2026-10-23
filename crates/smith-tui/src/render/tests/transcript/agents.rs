@@ -151,7 +151,7 @@ fn live_findings_inspector_reports_no_activity_only_without_activity_or_a_result
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(
-            text.matches("no activity recorded in this session").count(),
+            text.matches("child history has not been loaded").count(),
             usize::from(result.is_none()),
             "{text}"
         );
@@ -169,6 +169,78 @@ fn live_findings_inspector_reports_no_activity_only_without_activity_or_a_result
         .collect::<Vec<_>>()
         .join("\n");
     assert!(!text.contains("no activity"), "{text}");
+}
+
+#[test]
+fn canonical_child_answer_is_read_once_and_unavailable_history_remains_explicit() {
+    use agent_runtime_core::content::{ContentPart, Message};
+
+    let mut app = App::new("model", "project");
+    app.restore_child("child-1", crate::app::ChildState::Idle, None);
+    app.inspect_child("child-1");
+    app.set_inspected_detail(
+        "child-1",
+        Some(live_findings_agent_snapshot(
+            false,
+            Some("Completed answer."),
+        )),
+    );
+    app.restore_child_transcript(
+        "child-1",
+        &[
+            Message::user("The complete delegated task"),
+            Message::assistant(vec![ContentPart::text("Completed answer.")]),
+        ],
+        10,
+        &[],
+    );
+    app.set_child_history_unavailable("child-1", "The latest store read failed");
+    let text = transcript_lines(&app, Theme::new(), 100)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(text.matches("Completed answer.").count(), 1, "{text}");
+    assert!(text.contains("The complete delegated task"), "{text}");
+    assert!(
+        text.contains("history unavailable: The latest store read failed"),
+        "{text}"
+    );
+    assert!(
+        text.contains("last observed progress unavailable"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("thinking") && !text.contains("stuck"),
+        "{text}"
+    );
+}
+
+#[test]
+fn restored_child_failure_is_visible_once_after_repeated_hydration() {
+    use agent_runtime_core::content::Message;
+
+    let mut app = App::new("model", "project");
+    app.restore_child("child-1", crate::app::ChildState::Failed, None);
+    app.inspect_child("child-1");
+    for _ in 0..2 {
+        app.restore_child_transcript("child-1", &[Message::user("Inspect the docs")], 3, &[]);
+        app.restore_child_terminal_detail("child-1", Some("provider request failed"));
+    }
+    let text = transcript_lines(&app, Theme::new(), 100)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("failed"), "{text}");
+    assert_eq!(
+        text.matches("last error: provider request failed").count(),
+        1,
+        "{text}"
+    );
+    assert_eq!(text.matches("Inspect the docs").count(), 1, "{text}");
+    app.restore_child_terminal_detail("child-1", None);
+    assert_eq!(app.child_terminal_detail("child-1"), None);
 }
 
 #[test]

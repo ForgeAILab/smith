@@ -526,6 +526,7 @@ fn project_agent(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
         "list" => Some(display("Agent", "list".to_owned(), Vec::new())),
         "wait" => project_agent_child_action(arguments, "wait"),
         "result" => project_agent_child_action(arguments, "result"),
+        "transcript" => project_agent_child_action(arguments, "transcript"),
         "follow_up" => project_agent_follow_up(arguments),
         "resume" => project_agent_child_action(arguments, "resume"),
         "stop" => project_agent_child_action(arguments, "stop"),
@@ -580,8 +581,8 @@ fn project_agent_follow_up(arguments: &Map<String, Value>) -> Option<ToolCallDis
     ))
 }
 
-/// `wait`, `result`, `resume`, and `stop` each address exactly one child and
-/// carry no other reviewed argument.
+/// Addressed actions show the child's identity; transcript pagination stays
+/// outside the one-line invocation.
 fn project_agent_child_action(
     arguments: &Map<String, Value>,
     action: &'static str,

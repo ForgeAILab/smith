@@ -69,6 +69,17 @@ pub(super) struct Conversation {
     pub(super) transcript: Transcript,
     pub(super) speculative: SpeculativeState,
     pub(super) live: bool,
+    /// Exclusive history/live boundary; also rejects replayed tail events.
+    pub(super) next_sequence: Option<u64>,
+    pub(super) usage_next_sequence: Option<u64>,
+    pub(super) history_unavailable: Option<String>,
+    pub(super) terminal_detail: Option<String>,
+    pub(super) history_loaded: bool,
+    pub(super) history_len: usize,
+    pub(super) hosted: BTreeMap<u64, (usize, smith_runtime::client::SmithEvent)>,
+    pub(super) progress: Option<(String, Option<std::time::Instant>)>,
+    pub(super) progress_sequence: Option<u64>,
+    pub(super) last_activity_was_tool: bool,
 }
 
 impl Conversation {

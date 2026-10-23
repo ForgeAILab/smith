@@ -560,18 +560,14 @@ pub(super) struct PendingSpawn {
     pub(super) profile: Option<String>,
 }
 
-/// Most retained transcript blocks per child.
-///
-/// The child's own journal keeps the whole record; this is the bounded tail
-/// the inspector can show without growing without limit in a long session.
-pub(super) const MAX_CHILD_BLOCKS: usize = 200;
-
-/// Longest child answer the client retains, in characters.
-///
-/// The answer is the one block worth reading in full, so the budget is
-/// generous rather than a one-line summary — but it is still a budget, and
-/// the `…` says so when it bites.
-pub(super) const MAX_CHILD_ANSWER_CHARS: usize = 8_000;
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ConversationViewport {
+    following: bool,
+    scroll_back: usize,
+    scroll_limit: usize,
+    scroll_to_block: Option<usize>,
+    result_scroll_revision: Option<u64>,
+}
 
 /// How long a cleanly finished child keeps its panel row after settling.
 ///
@@ -825,7 +821,7 @@ pub struct App {
     pub children: BTreeMap<String, ChildSummary>,
     /// Live panel clocks for children, keyed by stable child id.
     pub(super) child_clocks: BTreeMap<String, ChildClock>,
-    /// Bounded per-child conversation, keyed by stable child id.
+    /// Retained per-child conversation, keyed by stable child id.
     ///
     /// Deliberately the same [`Conversation`] the root uses, folded by the
     /// same code from the same events — a child is a full runtime session, and
@@ -834,6 +830,8 @@ pub struct App {
     /// agent been doing" lives, in blocks rather than prose, drawn by the one
     /// renderer.
     pub(super) child_conversations: BTreeMap<String, Conversation>,
+    pub(super) root_viewport: Option<ConversationViewport>,
+    pub(super) child_viewports: BTreeMap<String, ConversationViewport>,
     /// When each cleanly finished child's panel row is due to retire.
     ///
     /// Armed when a child completes and nobody is inspecting it, disarmed the

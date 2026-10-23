@@ -45,6 +45,20 @@ shows status. Only persisted root sessions have goals.
 - `/agent` lists child agents, and `/agent <id>` inspects one.
   `/agent resume <id>` continues an interrupted task. For a new follow-up,
   the user types `@<child-id> <message>`.
+- The selected child's view shows its retained conversation: the delegated
+  task, assistant messages, visible reasoning, tool calls and results, and
+  final reply. Older retained work remains available when you scroll back.
+  Opening the view does not start or resume the child. Unavailable historical
+  content is identified explicitly.
+- The main agent can inspect the same committed conversation with
+  `agent` action `transcript`, using the child's ID. Follow its continuation
+  cursor and artifact references to read large conversations and tool results.
+- Completed child results are delivered automatically. The main agent should
+  continue independent work or end its turn and park while the child works,
+  instead of repeatedly checking status. Transcript reads are for inspection
+  and diagnosis; a running child's partial conversation is not its final result.
+- To stop a child, the main agent uses `agent` action `stop` with `child_id`.
+  `task_output` and `task_stop` apply to background shell tasks.
 
 ## Status and history
 

@@ -15,6 +15,8 @@ use crate::tui_driver::{
     prepare_interactive_app, reconfigure_exit,
 };
 
+mod child_transcript;
+
 struct Fixture {
     home: tempfile::TempDir,
     project: tempfile::TempDir,

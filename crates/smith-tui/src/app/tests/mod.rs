@@ -384,6 +384,7 @@ mod tests {
     include!("keymap.rs");
     include!("resources.rs");
     include!("child_lifecycle.rs");
+    include!("child_transcript.rs");
     include!("rotation.rs");
     include!("background_tasks.rs");
 }

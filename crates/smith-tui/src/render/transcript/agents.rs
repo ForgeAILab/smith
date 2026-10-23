@@ -18,13 +18,7 @@ use super::changes::render_report_notice;
 use super::render_prefixed_local_state;
 
 /// The inspected child's read-only view: one identity heading, then the
-/// history the client kept for it.
-///
-/// Nothing here is invented. The child owns its own canonical transcript in
-/// the runtime; what the parent process receives about it is bounded, so
-/// what this draws is bounded too — but it is drawn by the same renderer as
-/// the root timeline, because a delegated child is an agent that reports
-/// back, not a different kind of thing.
+/// retained conversation, drawn with the root transcript's rendering rules.
 pub(super) fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'static>> {
     let summary = app.children.get(child);
     let detail = app.inspected_detail();
@@ -57,18 +51,66 @@ pub(super) fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> V
     );
     lines.push(Line::default());
     if let Some(detail) = detail {
-        lines.extend(render_agent_inspector(detail, width, theme));
+        let mut detail = detail.clone();
+        if app
+            .child_blocks(child)
+            .iter()
+            .any(|block| matches!(block, crate::transcript::Block::Assistant { .. }))
+        {
+            detail.last_result = None;
+        }
+        lines.extend(render_agent_inspector(&detail, width, theme));
+        lines.push(Line::default());
+    }
+
+    if let Some(activity) = app.child_last_activity(child) {
+        let age = app
+            .child_progress_age(child)
+            .map(|age| format!(" · {} ago", render_elapsed(age)))
+            .unwrap_or_else(|| " · time unavailable".to_owned());
+        lines.extend(reports::text(
+            &format!("last observed: {activity}{age}"),
+            width,
+            theme.style(Tone::Dim),
+        ));
+        lines.push(Line::default());
+    } else if app.child_history_loaded(child) {
+        lines.extend(reports::text(
+            "last observed progress unavailable",
+            width,
+            theme.style(Tone::Dim),
+        ));
+        lines.push(Line::default());
+    }
+    if let Some(reason) = app.child_history_unavailable(child) {
+        lines.extend(reports::text(
+            &format!("history unavailable: {reason}"),
+            width,
+            theme.style(Tone::Warning),
+        ));
+        lines.push(Line::default());
+    }
+    if let Some(detail) = app.child_terminal_detail(child) {
+        lines.extend(reports::text(
+            &format!("last error: {detail}"),
+            width,
+            theme.style(Tone::Danger),
+        ));
         lines.push(Line::default());
     }
 
     let blocks = app.child_blocks(child);
     let speculative = app.child_speculative_text(child);
     if blocks.is_empty() && speculative.is_none() {
-        // A child restored from a durable record has a state but no live
-        // history in this process. Saying so beats an empty pane.
-        if detail.is_none_or(|detail| detail.last_result.is_none()) {
+        if app.child_history_unavailable(child).is_none()
+            && detail.is_none_or(|detail| detail.last_result.is_none())
+        {
             lines.extend(reports::text(
-                "no activity recorded in this session",
+                if app.child_history_loaded(child) {
+                    "no conversation messages retained"
+                } else {
+                    "child history has not been loaded"
+                },
                 width,
                 theme.style(Tone::Dim),
             ));

@@ -21,6 +21,8 @@ impl App {
             children: BTreeMap::new(),
             child_clocks: BTreeMap::new(),
             child_conversations: BTreeMap::new(),
+            root_viewport: None,
+            child_viewports: BTreeMap::new(),
             child_dismiss_at: BTreeMap::new(),
             retired_children: BTreeSet::new(),
             inspected_child: None,
@@ -149,6 +151,8 @@ impl App {
         }
         self.child_conversations
             .retain(|child, _| self.children.contains_key(child));
+        self.child_viewports
+            .retain(|child, _| self.children.contains_key(child));
         for conversation in self.child_conversations.values_mut() {
             conversation.speculative.clear();
             conversation.live = false;
@@ -162,7 +166,7 @@ impl App {
             .as_ref()
             .is_some_and(|child| !self.children.contains_key(child))
         {
-            self.inspected_child = None;
+            self.leave_child_inspection();
         }
         self.inspected_detail = None;
     }

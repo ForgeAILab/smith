@@ -31,6 +31,7 @@ pub struct AgentTool {
     slot: Arc<OnceLock<DelegationCoordinator>>,
     profiles: Vec<AgentToolProfile>,
     wait_policy: DelegationWaitPolicy,
+    transcript: ChildTranscriptReader,
 }
 
 impl AgentTool {
@@ -42,6 +43,14 @@ impl AgentTool {
             slot,
             profiles: Vec::new(),
             wait_policy: DelegationWaitPolicy::default(),
+            transcript: ChildTranscriptReader::new(
+                None,
+                crate::journal::DefaultRedactor::new(),
+                crate::tool_output::ToolOutputContextPolicy {
+                    inline_bytes: 8192,
+                    artifact_page_bytes: 2048,
+                },
+            ),
         }
     }
 
@@ -56,6 +65,18 @@ impl AgentTool {
     #[must_use]
     pub fn with_wait_policy(mut self, wait_policy: DelegationWaitPolicy) -> Self {
         self.wait_policy = wait_policy;
+        self
+    }
+
+    /// Applies the root's output budget, artifact store, and shared credential policy.
+    #[must_use]
+    pub fn with_transcript_output(
+        mut self,
+        store: Option<Arc<dyn ArtifactStore>>,
+        redactor: crate::journal::DefaultRedactor,
+        policy: crate::tool_output::ToolOutputContextPolicy,
+    ) -> Self {
+        self.transcript = ChildTranscriptReader::new(store, redactor, policy);
         self
     }
 
@@ -115,6 +136,14 @@ enum AgentAction {
     },
     /// Report a child's latest completed result.
     Result { child_id: String },
+    /// Inspect committed history without acknowledging completion or executing work.
+    Transcript {
+        child_id: String,
+        #[serde(default)]
+        cursor: Option<String>,
+        #[serde(default)]
+        page_size: Option<usize>,
+    },
     /// Send a follow-up task to an idle child.
     FollowUp { child_id: String, task: String },
     /// Resume the exact checkpoint of an interrupted durable child.
@@ -204,7 +233,7 @@ async fn wait_for_child_foreground(
     }
 }
 
-fn status_json(status: &ChildStatus) -> Value {
+pub(super) fn status_json(status: &ChildStatus) -> Value {
     let state = match &status.state {
         ChildState::Running => "running".to_owned(),
         ChildState::Idle => "idle".to_owned(),
@@ -243,7 +272,7 @@ fn wait_status_json(status: &ChildStatus, timed_out: bool) -> Value {
             object.insert(
                 "note".to_owned(),
                 Value::String(
-                    "foreground wait expired; the child continues running in the background and its terminal result will be delivered automatically"
+                    "foreground wait expired; the child continues running in the background. Continue independent work or finish your turn and park; its terminal result will be delivered automatically. No polling is needed."
                         .to_owned(),
                 ),
             );
@@ -298,10 +327,15 @@ impl Tool for AgentTool {
             "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
              read-only tools unless tools=\"all\"), list, wait (foreground for up to five minutes by default; timeout_ms may request a shorter bound; zero \
              is an immediate status check; an expired wait leaves the child running in the background and terminal results are delivered automatically), \
-             result, follow_up (start a new task on an idle child), resume (continue an exact \
+             result, transcript (inspect committed conversation on demand with bounded page_size and cursor; \
+             use artifact.read for complete large entries; diagnostic reads preserve automatic completion), \
+             follow_up (start a new task on an idle child), resume (continue an exact \
              interrupted checkpoint), stop. A completed child's \
              result is delivered to you automatically at the next safe point unless wait or \
-             result already returned it to you. A child's \
+             result already returned it to you. Continue independent work or finish your turn and park; \
+             do not poll list, wait, or transcript for completion. Inspect transcripts only when \
+             understanding or diagnosing the child. Stop children with agent stop and child_id; \
+             task_stop and task_output address background shell tasks. A child's \
              needs_input result is informational and does not open user interface; decide \
              whether to call root ask_user, then send the answer with an explicit follow_up."
                 .to_owned()
@@ -310,7 +344,9 @@ impl Tool for AgentTool {
                 "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
                  read-only tools unless tools=\"all\"), list, wait (foreground for up to five minutes by default; timeout_ms may request a shorter bound; zero \
                  is an immediate status check; an expired wait leaves the child running in the background and terminal results are delivered automatically), \
-                 result, follow_up (start a new task on an idle child), resume \
+                 result, transcript (inspect committed conversation on demand with bounded page_size and cursor; \
+                 use artifact.read for complete large entries; diagnostic reads preserve automatic completion), \
+                 follow_up (start a new task on an idle child), resume \
                  (continue an exact interrupted checkpoint), stop. spawn may name a registered \
                  child-enabled profile ({}) to run the child on that profile's own preflighted \
                  provider, model, and posture instead of inheriting the parent's; omitting it \
@@ -319,7 +355,10 @@ impl Tool for AgentTool {
                  otherwise declared read-only workspace keeps the child read-only no matter what \
                  posture or tool scope it asked for. A completed child's result is delivered to \
                  you automatically at the next safe point unless wait or result already returned \
-                 it to you. A child's needs_input \
+                 it to you. Continue independent work or finish your turn and park; do not poll \
+                 list, wait, or transcript for completion. Inspect transcripts only when understanding \
+                 or diagnosing the child. Stop children with agent stop and child_id; task_stop and \
+                 task_output address background shell tasks. A child's needs_input \
                  result is informational and does not open user interface; decide whether to \
                  call root ask_user, then send the answer with an explicit follow_up.",
                 self.available_profiles_description()
@@ -338,7 +377,7 @@ impl Tool for AgentTool {
                 // authoritative parser, and its preparation error becomes a
                 // canonical tool-error result that the model can correct on
                 // the next loop step.
-                "description": "The delegation operation. Must be one of: spawn, list, wait, result, follow_up, resume, stop."
+                "description": "The delegation operation. Must be one of: spawn, list, wait, result, transcript, follow_up, resume, stop."
             }),
         );
         properties.insert(
@@ -352,7 +391,21 @@ impl Tool for AgentTool {
             "child_id".to_owned(),
             json!({
                 "type": "string",
-                "description": "The child to address (wait, result, follow_up, resume, stop)."
+                "description": "The child to address (wait, result, transcript, follow_up, resume, stop)."
+            }),
+        );
+        properties.insert(
+            "cursor".to_owned(),
+            json!({
+                "type": "string",
+                "description": "Opaque next_cursor from a transcript page. Omit to capture new history; existing cursors retain the same snapshot."
+            }),
+        );
+        properties.insert(
+            "page_size".to_owned(),
+            json!({
+                "type": "integer",
+                "description": "Maximum transcript entries per page, 1..=100 (default 20). The output budget can shorten a page; follow next_cursor."
             }),
         );
         properties.insert(
@@ -459,6 +512,11 @@ impl Tool for AgentTool {
             AgentAction::Result { child_id } => (
                 child_id.clone(),
                 "Read sub-agent result",
+                Some(child_id.clone()),
+            ),
+            AgentAction::Transcript { child_id, .. } => (
+                child_id.clone(),
+                "Read sub-agent transcript",
                 Some(child_id.clone()),
             ),
             AgentAction::FollowUp { child_id, task } => (
@@ -610,6 +668,27 @@ impl Tool for AgentTool {
                         "state": "running",
                     }))),
                     Err(err) => Ok(ToolOutcome::error(err.message)),
+                }
+            }
+            AgentAction::Transcript {
+                child_id,
+                cursor,
+                page_size,
+            } => {
+                let child = agent_runtime_core::ids::ChildId::new(child_id);
+                match self
+                    .transcript
+                    .page(coordinator, &child, cursor.as_deref(), page_size, ctx)
+                    .await
+                {
+                    Ok(page) => Ok(ToolOutcome::json(serde_json::to_value(page).map_err(
+                        |error| {
+                            RuntimeError::tool(format!(
+                                "transcript page could not be serialized: {error}"
+                            ))
+                        },
+                    )?)),
+                    Err(error) => Ok(ToolOutcome::error(error.message)),
                 }
             }
             AgentAction::FollowUp { child_id, task } => {

@@ -725,8 +725,13 @@ pub async fn wire_delegation_with_wait_policy(
 
 mod lifecycle;
 mod tool;
+mod transcript;
 
 pub(crate) use lifecycle::DelegationParkingMonitor;
 use lifecycle::start_delegation_lifecycle_tasks;
 pub use lifecycle::{DelegationLifecycle, next_admission_retry_delay};
 pub use tool::{AgentTool, AgentToolProfile};
+pub use transcript::{
+    ChildTranscriptEntry, ChildTranscriptPage, ChildTranscriptReader,
+    project_child_transcript_history,
+};

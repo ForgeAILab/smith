@@ -715,9 +715,8 @@ impl Transcript {
 
     /// Drops the oldest blocks until at most `max` remain.
     ///
-    /// The root transcript is the session and is never trimmed. A child's is
-    /// a bounded tail the client keeps in memory on the child's behalf, so it
-    /// has a ceiling.
+    /// Full root and child conversations do not use this limit: their retained
+    /// earlier messages must remain scrollable.
     pub fn retain_newest(&mut self, max: usize) {
         if self.blocks.len() > max {
             let removed = self.blocks.len() - max;
