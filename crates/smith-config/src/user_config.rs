@@ -65,6 +65,14 @@ impl fmt::Debug for PreparedConfigEdit {
 }
 
 impl PreparedConfigEdit {
+    /// Parsed candidate for preflight without publishing user configuration.
+    pub fn candidate_config(&self) -> Result<ConfigFile, UserConfigEditError> {
+        ConfigFile::parse(
+            std::str::from_utf8(&self.candidate)
+                .map_err(|_| UserConfigEditError::InvalidCandidate)?,
+        )
+        .map_err(|_| UserConfigEditError::InvalidCandidate)
+    }
     /// Destination user config.
     pub fn target(&self) -> &Path {
         &self.target
@@ -108,10 +116,24 @@ impl PreparedConfigEdit {
                 count: self.collisions.len(),
             });
         }
+        let current = match fs::read(&self.target) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(UserConfigEditError::Io {
+                    path: self.target.clone(),
+                    message: error.to_string(),
+                });
+            }
+        };
+        if current != self.prior {
+            return Err(UserConfigEditError::ConcurrentModification);
+        }
         replace_atomically(&self.target, &self.candidate)?;
         Ok(CommittedConfigEdit {
             target: self.target.clone(),
             prior: self.prior.clone(),
+            published: self.candidate.clone(),
             active: true,
         })
     }
@@ -122,6 +144,7 @@ impl PreparedConfigEdit {
 pub struct CommittedConfigEdit {
     target: PathBuf,
     prior: Option<Vec<u8>>,
+    published: Vec<u8>,
     active: bool,
 }
 
@@ -139,6 +162,13 @@ impl CommittedConfigEdit {
     }
 
     fn restore(&self) -> Result<(), UserConfigEditError> {
+        let current = fs::read(&self.target).map_err(|error| UserConfigEditError::Io {
+            path: self.target.clone(),
+            message: error.to_string(),
+        })?;
+        if current != self.published {
+            return Err(UserConfigEditError::ConcurrentModification);
+        }
         match &self.prior {
             Some(prior) => replace_atomically(&self.target, prior),
             None => {
@@ -162,6 +192,9 @@ impl CommittedConfigEdit {
 /// Why a reviewed user-config edit could not be prepared or published.
 #[derive(Debug, thiserror::Error)]
 pub enum UserConfigEditError {
+    /// Another writer changed the user file after this candidate was prepared.
+    #[error("configuration changed while the edit was being prepared; retry the command")]
+    ConcurrentModification,
     /// Existing configuration cannot be read.
     #[error("`{path}` could not be read: {message}")]
     Unreadable {
@@ -208,6 +241,119 @@ pub enum UserConfigEditError {
         /// Filesystem diagnostic.
         message: String,
     },
+}
+
+/// One explicit persistent compaction setting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompactionSetting {
+    /// Default summary target, or removal of the user-layer value.
+    Model(Option<String>),
+    /// Default summary instructions, or removal of the user-layer value.
+    Instructions(Option<String>),
+    /// Inactivity cutoff for one exact provider/model route.
+    Idle {
+        /// Provider/model key, as declared under `[models]`.
+        model: String,
+        /// Milliseconds, or removal of the user-layer value.
+        milliseconds: Option<u64>,
+    },
+}
+
+/// Prepares a typed, comment-preserving compaction edit or reset.
+pub fn prepare_compaction_edit(
+    user_dir: impl AsRef<Path>,
+    setting: &CompactionSetting,
+) -> Result<PreparedConfigEdit, UserConfigEditError> {
+    use crate::model::{CompactionSection, ContextSection, ModelCacheSection, ModelSection};
+    let mut patch = ConfigFile::default();
+    let (path, remove) = match setting {
+        CompactionSetting::Model(value) => {
+            patch.context = Some(ContextSection {
+                compaction: Some(CompactionSection {
+                    model: value.clone(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            (
+                vec![
+                    "context".to_owned(),
+                    "compaction".to_owned(),
+                    "model".to_owned(),
+                ],
+                value.is_none(),
+            )
+        }
+        CompactionSetting::Instructions(value) => {
+            patch.context = Some(ContextSection {
+                compaction: Some(CompactionSection {
+                    instructions: value.clone(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            (
+                vec![
+                    "context".to_owned(),
+                    "compaction".to_owned(),
+                    "instructions".to_owned(),
+                ],
+                value.is_none(),
+            )
+        }
+        CompactionSetting::Idle {
+            model,
+            milliseconds,
+        } => {
+            if milliseconds.is_some_and(|value| !(1_000..=86_400_000).contains(&value)) {
+                return Err(UserConfigEditError::InvalidCandidate);
+            }
+            patch.models.insert(
+                model.clone(),
+                ModelSection {
+                    cache: Some(ModelCacheSection {
+                        inactivity_limit_ms: *milliseconds,
+                    }),
+                    ..Default::default()
+                },
+            );
+            (
+                vec![
+                    "models".to_owned(),
+                    model.clone(),
+                    "cache".to_owned(),
+                    "inactivity_limit_ms".to_owned(),
+                ],
+                milliseconds.is_none(),
+            )
+        }
+    };
+    let mut edit = prepare_user_config_edit(user_dir, &patch)?;
+    if remove {
+        let mut document = std::str::from_utf8(&edit.candidate)
+            .map_err(|_| UserConfigEditError::InvalidCandidate)?
+            .parse::<DocumentMut>()
+            .map_err(|_| UserConfigEditError::InvalidCandidate)?;
+        let mut table: Option<&mut dyn toml_edit::TableLike> = Some(document.as_table_mut());
+        for key in &path[..path.len() - 1] {
+            table = table
+                .and_then(|table| table.get_mut(key))
+                .and_then(Item::as_table_like_mut);
+        }
+        if let Some(table) = table {
+            let previous = table
+                .remove(path.last().expect("setting has a leaf"))
+                .map(|value| value.to_string());
+            edit.changes.push(ConfigChange {
+                key: path.join("."),
+                previous,
+                proposed: "default (user override removed)".to_owned(),
+            });
+        }
+        edit.candidate = document.to_string().into_bytes();
+        edit.candidate_config()?;
+    }
+    Ok(edit)
 }
 
 /// Prepares a comment-preserving edit to `user_dir/config.toml`.

@@ -334,15 +334,19 @@ pub async fn read_journal(path: impl AsRef<Path>) -> Result<JournalRecovery, Run
                 if line.is_empty() {
                     continue;
                 }
-                let parsed: JournalLine = serde_json::from_slice(line).map_err(|err| {
-                    RuntimeError::new(
-                        ErrorKind::Serialization,
-                        format!(
-                            "journal `{}` line {line_number} is not a readable record: {err}",
-                            path.display()
-                        ),
-                    )
-                })?;
+                // Parse numbers before Serde buffers the flattened record enum;
+                // arbitrary-precision decimal maps cannot deserialize as f64 there.
+                let parsed: JournalLine = serde_json::from_slice::<serde_json::Value>(line)
+                    .and_then(serde_json::from_value)
+                    .map_err(|err| {
+                        RuntimeError::new(
+                            ErrorKind::Serialization,
+                            format!(
+                                "journal `{}` line {line_number} is not a readable record: {err}",
+                                path.display()
+                            ),
+                        )
+                    })?;
                 validate_journal_line(&parsed).map_err(|error| {
                     RuntimeError::new(
                         ErrorKind::Serialization,

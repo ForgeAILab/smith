@@ -32,7 +32,7 @@ async fn protected_checkpoint_availability_is_explicit_and_encrypted() {
 }
 
 #[tokio::test]
-async fn persistence_does_not_switch_on_semantic_summarization() {
+async fn persistence_enables_semantic_summarization() {
     const KEY: &str = "5151515151515151515151515151515151515151515151515151515151515151";
     let home = tempfile::tempdir().expect("a user root");
     let project = tempfile::tempdir().expect("a project root");
@@ -64,13 +64,14 @@ async fn persistence_does_not_switch_on_semantic_summarization() {
     };
     let request = HostSessionRequest::new(runtime, project.path());
 
-    // Persistence says where a session is stored, not that a second model
-    // route should summarize it. A caller that wants summarization still asks
-    // for it explicitly.
+    let host = start(request).await.expect("a persisted host starts");
     assert!(
-        request.runtime.semantic_summary.is_none(),
-        "enabling persistence must not install a semantic-summary coordinator"
+        host.runtime().policy().semantic_summary.is_some(),
+        "persisted sessions enable semantic compaction by default"
     );
+    host.shutdown()
+        .await
+        .expect("the persisted host shuts down");
 }
 
 #[tokio::test]

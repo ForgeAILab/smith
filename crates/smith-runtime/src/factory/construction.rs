@@ -124,6 +124,7 @@ fn prepare_summary_stage(
     model: &ModelId,
     limits: ModelLimits,
     clock: Arc<dyn Clock>,
+    summary_output_limit: u32,
 ) -> Result<SummaryStage, FactoryError> {
     let Some(config) = request.semantic_summary.clone() else {
         return Ok(None);
@@ -132,6 +133,7 @@ fn prepare_summary_stage(
     // discover for itself. Smith already refuses to guess a model's limits, so
     // the resolved input ceiling is the only honest source for it.
     let mut config = config;
+    config.max_output_tokens = config.max_output_tokens.min(summary_output_limit);
     if config.policy.input_budget_tokens == 0 {
         config.policy.input_budget_tokens = u64::from(limits.max_input_tokens);
     }
@@ -152,7 +154,8 @@ fn prepare_summary_stage(
                 config.max_output_tokens,
                 config.timeout_ms,
             )
-            .map_err(FactoryError::Runtime)?,
+            .map_err(FactoryError::Runtime)?
+            .with_instructions(config.instructions.clone()),
         ),
     };
     // The standard adapter is bound to the active run provider. A custom
@@ -270,13 +273,26 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
             model: route.model.clone(),
         })
         .collect();
+    let summary_route = provider::prepare_compaction_route(&request).await?;
+    let provider::CompactionRoute {
+        provider: summary_provider,
+        provider_name: summary_provider_name,
+        model: summary_model,
+        max_output_tokens: summary_output_limit,
+    } = summary_route.unwrap_or_else(|| provider::CompactionRoute {
+        provider: provider.clone(),
+        provider_name: provider_name.clone(),
+        model: model.clone(),
+        max_output_tokens: profile.profile.limits.max_output_tokens,
+    });
     let semantic_summary = prepare_summary_stage(
         &request,
-        provider.clone(),
-        &provider_name,
-        &model,
+        summary_provider,
+        &summary_provider_name,
+        &summary_model,
         profile.profile.limits,
         clock.clone(),
+        summary_output_limit,
     )?;
     let web = web::prepare(
         &request,
@@ -611,7 +627,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     ) {
         builder = builder.tool_view_resolver(filter);
     }
-    let built = compose::runtime(builder)?;
+    let built = compose::runtime(builder).await?;
     let delegation = delegation::assemble(capabilities.delegation_slot.clone().map(|slot| {
         SmithDelegation {
             factory: Arc::new(SmithChildFactory {
@@ -666,6 +682,10 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         }
     }));
     Ok(SmithRuntime {
+        summary_instructions: request
+            .semantic_summary
+            .as_ref()
+            .map(|summary| summary.instructions.clone()),
         runtime: built.runtime,
         policy: Arc::new(policy.policy),
         profile: Arc::new(profile),

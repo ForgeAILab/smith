@@ -30,11 +30,24 @@ pub async fn start_with_modules(
             discover_project_instructions(&request.project_root)?;
     }
     let mut config = request.runtime.config.clone();
+    if config.persistence.enabled.value && request.runtime.semantic_summary.is_none() {
+        let mut summary = crate::summary::SmithSemanticSummaryConfig::standard();
+        summary.instructions = Arc::new(crate::summary::SummaryInstructions::new(
+            config
+                .context
+                .compaction_instructions
+                .as_ref()
+                .map(|value| value.value.as_str()),
+        ));
+        request.runtime.semantic_summary = Some(summary);
+    }
     let summary_provider = request.runtime.semantic_summary.as_ref().map(|summary| {
-        summary
-            .provider
-            .clone()
-            .unwrap_or_else(|| config.provider.name.value.clone())
+        summary.provider.clone().unwrap_or_else(|| {
+            request.runtime.compaction_profile.as_ref().map_or_else(
+                || config.provider.name.value.clone(),
+                |binding| binding.config.provider.name.value.clone(),
+            )
+        })
     });
     let surface = request.runtime.surface;
     reject_project_granted_authority(&config, &request.project_root)?;
@@ -554,7 +567,7 @@ pub async fn start_with_modules(
         })
         .transpose()?;
 
-    let cache_config = CacheControllerConfig::from_resolved(
+    let mut cache_config = CacheControllerConfig::from_resolved(
         &config.context.cache,
         CacheControllerResolvedInputs {
             synthetic_spend: config.synthetic_cache_spend,
@@ -579,6 +592,7 @@ pub async fn start_with_modules(
         },
     )
     .map_err(RuntimeError::config)?;
+    cache_config.summary_instructions = runtime.summary_instructions();
     let parking_monitor = delegation_lifecycle
         .as_ref()
         .map(DelegationLifecycle::monitor);

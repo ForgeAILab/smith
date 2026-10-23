@@ -1,0 +1,199 @@
+{
+  "complete": true,
+  "scope": "14 configured API routes and one CLI-backed route",
+  "requested_intervals_seconds": [
+    0,
+    60,
+    300,
+    900
+  ],
+  "interpretation": "Verified intervals are observed lower bounds for the tested prefix and route, not guaranteed provider TTLs. Missing counters and partial reads do not prove expiry. No timing configuration was changed by these measurements.",
+  "chatgpt_note": "User-prefix and system-prefix controls were tested. Journal event logging was disabled in controls to isolate an existing decimal rate-limit journal recovery error; that error is fixed separately in this change.",
+  "raw_experiments": [
+    "results.json",
+    "chatgpt-results.json",
+    "chatgpt-system-results.json"
+  ],
+  "rows": [
+    {
+      "route": "chatgpt/gpt-5.6-luna",
+      "status": "inconclusive: no reproducible isolated warm prefix, or only partial cache reads",
+      "verified_quiet_seconds": [],
+      "missing_cache_counter_at_seconds": [],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "ok"
+      ]
+    },
+    {
+      "route": "chatgpt/gpt-5.6-terra",
+      "status": "inconclusive: no reproducible isolated warm prefix, or only partial cache reads",
+      "verified_quiet_seconds": [],
+      "missing_cache_counter_at_seconds": [],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "ok"
+      ]
+    },
+    {
+      "route": "chatgpt/gpt-6-astra",
+      "status": "inconclusive: no reproducible isolated warm prefix, or only partial cache reads",
+      "verified_quiet_seconds": [],
+      "missing_cache_counter_at_seconds": [],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "ok"
+      ]
+    },
+    {
+      "route": "chatgpt/gpt-6.1-sol",
+      "status": "inconclusive: no reproducible isolated warm prefix, or only partial cache reads",
+      "verified_quiet_seconds": [],
+      "missing_cache_counter_at_seconds": [],
+      "partial_cache_read_at_seconds": [
+        60,
+        300,
+        900
+      ],
+      "initial_request_statuses": [
+        "ok"
+      ]
+    },
+    {
+      "route": "dddai/claude-fable-5-1",
+      "status": "request failed or timed out; cache retention not measurable",
+      "verified_quiet_seconds": [],
+      "missing_cache_counter_at_seconds": [],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "failed"
+      ]
+    },
+    {
+      "route": "google/cli/claude-code/opus",
+      "status": "CLI backend has no provider cache evidence in Smith",
+      "verified_quiet_seconds": [],
+      "missing_cache_counter_at_seconds": [],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": []
+    },
+    {
+      "route": "google/gemini-4-argon",
+      "status": "cache retention observed at the listed quiet intervals",
+      "verified_quiet_seconds": [
+        60,
+        300
+      ],
+      "missing_cache_counter_at_seconds": [
+        900
+      ],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "ok"
+      ]
+    },
+    {
+      "route": "openrouter/openai/gpt-4o-mini",
+      "status": "cache retention observed at the listed quiet intervals",
+      "verified_quiet_seconds": [
+        60,
+        300
+      ],
+      "missing_cache_counter_at_seconds": [
+        900
+      ],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "ok"
+      ]
+    },
+    {
+      "route": "xai/grok-4.3",
+      "status": "request failed or timed out; cache retention not measurable",
+      "verified_quiet_seconds": [],
+      "missing_cache_counter_at_seconds": [],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "failed"
+      ]
+    },
+    {
+      "route": "xiaoge/claude-premium",
+      "status": "cache retention observed at the listed quiet intervals",
+      "verified_quiet_seconds": [
+        60,
+        300
+      ],
+      "missing_cache_counter_at_seconds": [
+        900
+      ],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "ok"
+      ]
+    },
+    {
+      "route": "xiaoge/glm-5.3-flash-enhanced-security-W4A16",
+      "status": "request failed or timed out; cache retention not measurable",
+      "verified_quiet_seconds": [],
+      "missing_cache_counter_at_seconds": [],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "failed"
+      ]
+    },
+    {
+      "route": "xiaoge/selected-large",
+      "status": "request failed or timed out; cache retention not measurable",
+      "verified_quiet_seconds": [],
+      "missing_cache_counter_at_seconds": [],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "timeout"
+      ]
+    },
+    {
+      "route": "zai/glm-4.5-air",
+      "status": "cache retention observed at the listed quiet intervals",
+      "verified_quiet_seconds": [
+        60,
+        300
+      ],
+      "missing_cache_counter_at_seconds": [
+        900
+      ],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "ok"
+      ]
+    },
+    {
+      "route": "zai/glm-4.7",
+      "status": "cache retention observed at the listed quiet intervals",
+      "verified_quiet_seconds": [
+        60,
+        300,
+        900
+      ],
+      "missing_cache_counter_at_seconds": [],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "ok"
+      ]
+    },
+    {
+      "route": "zai/glm-5.3",
+      "status": "cache retention observed at the listed quiet intervals",
+      "verified_quiet_seconds": [
+        60,
+        300,
+        900
+      ],
+      "missing_cache_counter_at_seconds": [],
+      "partial_cache_read_at_seconds": [],
+      "initial_request_statuses": [
+        "ok"
+      ]
+    }
+  ]
+}

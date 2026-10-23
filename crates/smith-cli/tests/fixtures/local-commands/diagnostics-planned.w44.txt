@@ -76,17 +76,12 @@
     calls             0/1
     scheduled         none
     decision          none
-    narrowing         idle compaction
-                      disabled because no
-                      protected
-                      semantic-summary route
-                      is installed
   idle compaction     attempted no
     decision          none
     outcome           none
     reason            none
     latency           unknown
-    route             unknown
+    route             local/local/example-m…
     usage             input 0 · cached 0 ·
                       writes 0 · output 0 ·
                       reasoning 0

@@ -24,6 +24,11 @@ n interactive terminal.
 ive · Smith configuration reference, section
  "Complete example". Policy tables may be to
 p-level or profile-scoped as shown.
+  smith.configuration.conversation-compactio
+n · active · Smith configuration reference,
+section "Conversation compaction". Persisted
+ sessions enable semantic summarization auto
+matically.
   smith.configuration.discovery-and-preceden
 ce · active · Smith configuration reference,
  section "Discovery and precedence". nearest

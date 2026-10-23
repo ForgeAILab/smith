@@ -166,6 +166,8 @@ pub(in crate::resolve) fn resolve_context(
     provenance: &Provenance,
     model_limits: &ResolvedModelLimits,
     synthetic_cache_spend: SyntheticCacheSpendAuthority,
+    provider: &str,
+    model: &str,
 ) -> Result<ResolvedContext, ConfigError> {
     let high = required_percent(provenance, "context.compaction_high_watermark_percent")?;
     let low = required_percent(provenance, "context.compaction_low_watermark_percent")?;
@@ -178,12 +180,42 @@ pub(in crate::resolve) fn resolve_context(
             ),
         });
     }
-    let cache = resolve_cache_policy(provenance, model_limits, synthetic_cache_spend)?;
+    let mut cache = resolve_cache_policy(provenance, model_limits, synthetic_cache_spend)?;
+    let model_key = format!(
+        "{}.cache.inactivity_limit_ms",
+        join_key(&["models", &format!("{provider}/{model}")])
+    );
+    if provenance.source(&model_key).is_some() {
+        let value = bounded_u64(provenance, &model_key, 1_000, 86_400_000)?;
+        if value.source.layer.precedence() >= cache.inactivity_limit_ms.source.layer.precedence() {
+            cache.inactivity_limit_ms = value;
+            if cache.keepalive_margin_ms.value > cache.inactivity_limit_ms.value {
+                cache.keepalive_margin_ms.value = cache.inactivity_limit_ms.value;
+            }
+        }
+    }
+    let compaction_model = text(provenance, "context.compaction.model")?;
+    let compaction_instructions = text(provenance, "context.compaction.instructions")?;
+    for (value, maximum) in [
+        (compaction_model.as_ref(), 256),
+        (compaction_instructions.as_ref(), 8_000),
+    ] {
+        if let Some(value) = value
+            && (value.value.trim().is_empty() || value.value.chars().count() > maximum)
+        {
+            return Err(ConfigError::InvalidValue {
+                source: value.source.clone(),
+                message: format!("compaction value must contain 1 to {maximum} characters"),
+            });
+        }
+    }
     // Keep the old resolved field as a compatibility projection.  It points
     // at the exact same sourced winner as the replacement field, so no second
     // inactivity timer can be constructed downstream.
     let idle_compaction_ms = cache.inactivity_limit_ms.clone();
     Ok(ResolvedContext {
+        compaction_model,
+        compaction_instructions,
         inline_images: bounded_u32(provenance, "context.inline_images", 1, 100)?,
         tool_output_inline_bytes: bounded_u32(
             provenance,

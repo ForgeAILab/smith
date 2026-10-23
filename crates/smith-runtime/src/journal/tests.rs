@@ -3,6 +3,32 @@ use super::*;
 use agent_runtime_core::event::RuntimeEvent;
 use agent_runtime_core::ids::{AttemptId, RequestId};
 
+#[tokio::test]
+async fn decimal_rate_limit_observations_round_trip_through_journal_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rate-limits.jsonl");
+    let payload = serde_json::from_value(serde_json::json!({
+        "event": "rate_limit_observation", "attempt": "attempt-1",
+        "snapshot": [{"id":"primary", "used_percent":18.125,"resets_in_ms":1000,"window_seconds":300},
+                     {"id":"secondary", "used_percent":0.0,"resets_in_ms":0,"window_seconds":0}]
+    })).unwrap();
+    let event = EventEnvelope::new(
+        1,
+        EventId::new("event-1"),
+        SessionId::new("decimal-rate-limits"),
+        Some(TurnId::new("turn-1")),
+        Timestamp::ZERO,
+        payload,
+    );
+    let line = JournalLine::new(JournalRecord::Event { event });
+    std::fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string(&line).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(read_journal(&path).await.unwrap().records, vec![line]);
+}
+
 #[test]
 fn credential_shaped_keys_are_replaced_by_value() {
     let mut line = serde_json::json!({

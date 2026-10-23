@@ -12,6 +12,8 @@ coped.
 and-line selection". An omitted --resume ID opens a local picker only in an interactive terminal.
   smith.configuration.complete-example · active · Smith configuration reference, section "Complete e
 xample". Policy tables may be top-level or profile-scoped as shown.
+  smith.configuration.conversation-compaction · active · Smith configuration reference, section "Con
+versation compaction". Persisted sessions enable semantic summarization automatically.
   smith.configuration.discovery-and-precedence · active · Smith configuration reference, section "Di
 scovery and precedence". nearest .smith/ directory.
   smith.configuration.image-generation · active · Smith configuration reference, section "Image gene

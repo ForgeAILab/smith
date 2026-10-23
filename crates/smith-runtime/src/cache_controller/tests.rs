@@ -33,6 +33,7 @@ fn test_identity() -> CacheIdentity {
 
 fn test_config(policy: CacheMaintenancePolicy) -> CacheControllerConfig {
     CacheControllerConfig {
+        summary_instructions: None,
         policy,
         synthetic_spend: SyntheticCacheSpendAuthority::Deny,
         contract: ProviderCacheContract::default(),
@@ -172,6 +173,7 @@ async fn shutdown_drains_queued_goal_updates() {
     let capsule = Arc::new(ResumeCapsuleSlot::new(session.id().clone(), clock.now()));
     let state = Arc::new(Mutex::new(ControllerState::default()));
     let cancel = Cancellation::new();
+    let (compaction_requests, receiver) = mpsc::channel(1);
     let mut worker = Box::pin(run_controller(
         session.clone(),
         test_config(CacheMaintenancePolicy::default()),
@@ -182,6 +184,7 @@ async fn shutdown_drains_queued_goal_updates() {
         Arc::new(ChangeRecorder::new(None)),
         state.clone(),
         cancel.clone(),
+        receiver,
     ));
     // Establish the subscription synchronously, then leave the worker parked
     // until shutdown has cancelled it. No scheduler timing is involved.
@@ -189,6 +192,7 @@ async fn shutdown_drains_queued_goal_updates() {
     let controller = CacheLifecycleController {
         state,
         cancel,
+        compaction_requests,
         task: Mutex::new(Some(tokio::spawn(worker))),
     };
     let component = GoalComponent::public();

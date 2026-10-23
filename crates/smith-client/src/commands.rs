@@ -99,6 +99,19 @@ pub enum CapabilitiesAction {
     Allow(String),
 }
 
+/// Compaction attempts and persistent defaults.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompactAction {
+    /// Compact now, optionally with instructions for this attempt only.
+    Run(Option<String>),
+    /// Set or reset the default summary target.
+    Model(Option<String>),
+    /// Set or reset the default summary instructions.
+    Instructions(Option<String>),
+    /// Set or reset the active model's idle cutoff in milliseconds.
+    Idle(Option<u64>),
+}
+
 /// A confirmed edit tied to the exact preview and user-file contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleSwitchRequest {
@@ -451,6 +464,17 @@ command_registry! {
     },
     /// Visualize the latest model-facing context plan.
     Host Context;
+    /// Summarize older conversation history at an idle boundary.
+    Host Compact(CompactAction) => CommandSpec {
+        name: "compact",
+        argument_hint: "[instructions|model …|instructions …|idle …]",
+        description: "Summarize older conversation history",
+        requires_idle: true,
+        advanced: false,
+        grammar: ArgumentGrammar::WholeValue(parse_compact),
+        usage_example: "/compact",
+        complete_without_value: true,
+    },
     /// Toggle bounded live tool detail.
     Ui Details => CommandSpec {
         name: "details",
@@ -927,6 +951,67 @@ fn parse_context(argument: Option<String>) -> Result<Command, String> {
         None => Command::Host(HostCommand::Context),
         Some(value) => Command::Ui(UiCommand::Context(value)),
     })
+}
+
+fn parse_compact(argument: &str) -> Result<Command, String> {
+    if argument.trim().is_empty() {
+        return Ok(Command::Host(HostCommand::Compact(CompactAction::Run(
+            None,
+        ))));
+    }
+    let argument = argument.trim();
+    let (verb, value) = argument
+        .split_once(char::is_whitespace)
+        .map_or((argument, ""), |(verb, value)| (verb, value.trim()));
+    let reset = value == "default";
+    let action = match verb {
+        "model" | "instructions" | "idle" if value.is_empty() => {
+            return Err(format!("/compact {verb} requires a value or default"));
+        }
+        "model" => {
+            if !reset
+                && (value.chars().any(char::is_whitespace)
+                    || smith_config::resolve::AdvisorTarget::parse(value).is_none())
+            {
+                return Err(
+                    "/compact model requires a profile, provider/model, or default".to_owned(),
+                );
+            }
+            CompactAction::Model((!reset).then(|| value.to_owned()))
+        }
+        "instructions" => CompactAction::Instructions((!reset).then(|| value.to_owned())),
+        "idle" => {
+            let duration = if reset {
+                None
+            } else {
+                let (number, multiplier) = if let Some(number) = value.strip_suffix("ms") {
+                    (number, 1u64)
+                } else if let Some(number) = value.strip_suffix('s') {
+                    (number, 1_000)
+                } else if let Some(number) = value.strip_suffix('m') {
+                    (number, 60_000)
+                } else if let Some(number) = value.strip_suffix('h') {
+                    (number, 3_600_000)
+                } else {
+                    return Err("use an idle duration such as 30s, 15m, 1h, or default".to_owned());
+                };
+                let milliseconds = number
+                    .parse::<u64>()
+                    .ok()
+                    .and_then(|value| value.checked_mul(multiplier))
+                    .filter(|value| (1_000..=86_400_000).contains(value))
+                    .ok_or_else(|| "idle duration must be between 1s and 24h".to_owned())?;
+                Some(milliseconds)
+            };
+            CompactAction::Idle(duration)
+        }
+        _ => CompactAction::Run(Some(argument.to_owned())),
+    };
+    if matches!(&action, CompactAction::Run(Some(text)) | CompactAction::Instructions(Some(text)) if text.chars().count() > 8_000)
+    {
+        return Err("compaction instructions must contain at most 8000 characters".to_owned());
+    }
+    Ok(Command::Host(HostCommand::Compact(action)))
 }
 
 fn parse_diff(argument: Option<String>) -> Result<Command, String> {

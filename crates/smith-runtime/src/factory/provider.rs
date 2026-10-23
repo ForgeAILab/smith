@@ -15,6 +15,78 @@ pub(super) use children::{
 pub(super) use credentials::{active_credential_reference, validate_pool_references};
 pub(super) use resolution::prepare;
 
+pub(super) struct CompactionRoute {
+    pub provider: Arc<dyn Provider>,
+    pub provider_name: String,
+    pub model: ModelId,
+    pub max_output_tokens: u32,
+}
+
+pub(super) fn prepare_compaction_route(
+    request: &RuntimeRequest,
+) -> futures_util::future::BoxFuture<'_, Result<Option<CompactionRoute>, FactoryError>> {
+    Box::pin(prepare_compaction_route_inner(request))
+}
+
+async fn prepare_compaction_route_inner(
+    request: &RuntimeRequest,
+) -> Result<Option<CompactionRoute>, FactoryError> {
+    if request.semantic_summary.is_none() {
+        return Ok(None);
+    }
+    let Some(selected) = request.config.context.compaction_model.as_ref() else {
+        return Ok(None);
+    };
+    let binding = request.compaction_profile.as_ref().ok_or_else(|| {
+        FactoryError::Runtime(RuntimeError::config(
+            "resolve the configured compaction model before composition",
+        ))
+    })?;
+    let matches = match smith_config::resolve::AdvisorTarget::parse(&selected.value) {
+        Some(smith_config::resolve::AdvisorTarget::Profile(name)) => {
+            binding.config.agent.profile.name == name
+        }
+        Some(smith_config::resolve::AdvisorTarget::Model { provider, model }) => {
+            binding.config.provider.name.value == provider && binding.config.model.value == model
+        }
+        _ => false,
+    };
+    if !matches || binding.config.harness.is_some() {
+        return Err(FactoryError::Runtime(RuntimeError::config(
+            "compaction requires a matching API model route",
+        )));
+    }
+    let mut route = RuntimeRequest::new(binding.config.clone(), HostSurface::Child);
+    route.workspace = request.workspace.clone();
+    route.approval = request.approval.clone();
+    route.credentials = request.credentials.clone();
+    route.transport = request.transport.clone();
+    route.credential_timeout_ms = request.credential_timeout_ms;
+    route.catalog_sources = binding.catalog_sources.clone();
+    route.model_catalog = request.model_catalog.clone();
+    route.persistence_redactor = request.persistence_redactor.clone();
+    route.provider = binding.provider.clone();
+    route.built_in_tools = false;
+    validate_pool_references(&route)?;
+    let prepared = prepare(&route).await?;
+    let provider = construct_runtime(
+        &route,
+        prepared.adapter,
+        prepared.endpoint,
+        prepared.secret,
+        &prepared.profile.profile,
+        &prepared.reasoning,
+        prepared.command.map(|command| command.provider),
+    )?
+    .provider;
+    Ok(Some(CompactionRoute {
+        provider,
+        provider_name: prepared.provider_name,
+        model: prepared.model,
+        max_output_tokens: prepared.profile.profile.limits.max_output_tokens,
+    }))
+}
+
 struct ImageBackendBinding {
     endpoint: String,
     target: ProviderCredentialTarget,

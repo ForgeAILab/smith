@@ -882,7 +882,13 @@ pub(super) fn extract(
         effort: text(provenance, "reasoning.effort")?,
     };
     let model_reasoning = resolve_model_reasoning(provenance, &provider.name.value, &model.value)?;
-    let context = resolve_context(provenance, &model_limits, synthetic_cache_spend)?;
+    let context = resolve_context(
+        provenance,
+        &model_limits,
+        synthetic_cache_spend,
+        &provider.name.value,
+        &model.value,
+    )?;
     let child_agents = resolve_child_agents(provenance)?;
     let limits = resolve_limits(provenance)?;
     let persistence = resolve_persistence(provenance)?;

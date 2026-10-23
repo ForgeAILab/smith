@@ -156,7 +156,11 @@ impl TuiLoop<'_> {
             // applied here rather than by tearing the session
             // down and rebuilding it around a new selection.
             Action::Reconfigure(command) => return self.on_reconfigure(command).await,
-            Action::Command(command) => self.on_command(command).await,
+            Action::Command(command) => {
+                if let Some(exit) = self.on_command(command).await {
+                    return Some(exit);
+                }
+            }
             Action::SwitchModule(request) => {
                 if self.pending_module_switch.is_some() || self.pending_plugin_switch.is_some() {
                     self.app.push_notice(NoticeKind::CommandRefused,
@@ -324,7 +328,36 @@ impl TuiLoop<'_> {
         None
     }
 
-    async fn on_command(&mut self, command: smith_client::commands::HostCommand) {
+    async fn on_command(
+        &mut self,
+        command: smith_client::commands::HostCommand,
+    ) -> Option<InteractiveExit> {
+        if let smith_client::commands::HostCommand::Compact(action) = command {
+            let smith_client::commands::CompactAction::Run(instructions) = action else {
+                if self.pending_compaction.is_some() {
+                    self.app.push_notice(
+                        NoticeKind::Local,
+                        "Wait for compaction to finish before changing its defaults.",
+                    );
+                    return None;
+                }
+                return Some(InteractiveExit::CompactionSetting(action));
+            };
+            if self.pending_compaction.is_some() {
+                self.app
+                    .push_notice(NoticeKind::Local, "Compaction is already in progress.");
+            } else {
+                self.host.set_goal_continuation_enabled(false);
+                self.pending_compaction = Some(Box::pin(local_command::compact::report(
+                    self.host,
+                    instructions,
+                )));
+                self.app
+                    .push_notice(NoticeKind::Local, "Compacting context…");
+            }
+            self.dirty = true;
+            return None;
+        }
         handle_local_command(
             &mut self.app,
             self.host,
@@ -335,6 +368,7 @@ impl TuiLoop<'_> {
             command,
         )
         .await;
+        None
     }
 
     fn on_trust_mcp_server(&mut self, server: String) {

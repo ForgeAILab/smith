@@ -42,7 +42,19 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     built_in.extend(super::plugins::defaults(&request.known_plugins));
     file_layers.push(built_in);
     for file in &layout.files {
-        let mut loaded = load(&file.path, file.layer)?;
+        let mut loaded = if file.layer == Layer::UserFile {
+            if let Some(candidate) = &request.user_config_override {
+                validate_inline_secret_file(&file.path, file.layer, candidate)?;
+                Loaded {
+                    file: candidate.as_ref().clone(),
+                    contributions: contributions_of(candidate, file.layer, Some(&file.path))?,
+                }
+            } else {
+                load(&file.path, file.layer)?
+            }
+        } else {
+            load(&file.path, file.layer)?
+        };
         super::plugins::report_file_plugins(
             &loaded.file,
             file.layer,
@@ -377,7 +389,7 @@ pub(super) fn discover(request: &ResolveRequest) -> Result<Layout, ConfigError> 
 
     let mut files = Vec::new();
     let user_config = user_dir.join(CONFIG_FILE);
-    if user_config.is_file() {
+    if user_config.is_file() || request.user_config_override.is_some() {
         files.push(LoadedFile {
             layer: Layer::UserFile,
             path: user_config,

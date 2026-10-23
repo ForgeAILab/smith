@@ -5,6 +5,66 @@ use super::synthetic_projection::{
 };
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_manual_compaction(
+    session: &SessionHandle,
+    config: &CacheControllerConfig,
+    clock: &Arc<dyn Clock>,
+    parking: Option<&ParkingSnapshot>,
+    capsule: Option<&ResumeCapsuleSlot>,
+    artifacts: Option<&dyn ArtifactStore>,
+    state: &Arc<Mutex<ControllerState>>,
+    cancel: &Cancellation,
+) -> IdleCompactionOutcome {
+    if cancel.is_cancelled() {
+        return IdleCompactionOutcome::Shutdown;
+    }
+    if config.semantic_summary_model.is_none() || capsule.is_none() || artifacts.is_none() {
+        return IdleCompactionOutcome::Failed;
+    }
+    {
+        let state = state.lock().expect("cache controller state poisoned");
+        if state.snapshot.idle_compaction.attempted {
+            return IdleCompactionOutcome::Busy;
+        }
+        if state.snapshot.idle_compaction.interval_id.is_none() {
+            return IdleCompactionOutcome::NoSummary;
+        }
+    }
+    // An explicit request bypasses the inactivity timer and automatic opt-out,
+    // while retaining safe-boundary, persistence, and once-only gates.
+    let mut manual_config = config.clone();
+    manual_config.policy.idle_compaction = true;
+    manual_config.policy.inactivity_limit_ms = 0;
+    run_idle_compaction(
+        session,
+        &manual_config,
+        clock,
+        parking,
+        capsule,
+        artifacts,
+        state,
+        cancel,
+    )
+    .await;
+    let state = state.lock().expect("cache controller state poisoned");
+    if state.snapshot.idle_compaction.attempted {
+        let outcome = state
+            .snapshot
+            .idle_compaction_outcome
+            .unwrap_or(IdleCompactionOutcome::Failed);
+        if outcome == IdleCompactionOutcome::NoSummary
+            && state.snapshot.idle_compaction_reason.as_deref() != Some("not_eligible")
+        {
+            IdleCompactionOutcome::Failed
+        } else {
+            outcome
+        }
+    } else {
+        IdleCompactionOutcome::Busy
+    }
+}
+
 /// Returns the independent root-idle deadline. Parking, goal state, and child
 /// activity are intentionally absent: they belong to the separate
 /// cache-maintenance scheduler, not ordinary semantic compaction.

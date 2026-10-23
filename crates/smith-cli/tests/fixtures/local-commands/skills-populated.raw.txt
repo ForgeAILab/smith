@@ -6,6 +6,7 @@ built-in
   smith.configuration.adaptive-cache-lifecycle-and-idle-compaction · active · Smith configuration reference, section "Adaptive cache lifecycle and idle compaction". Cache mechanism policy is profile-scoped.
   smith.configuration.command-line-selection · active · Smith configuration reference, section "Command-line selection". An omitted `--resume` ID opens a local picker only in an interactive terminal.
   smith.configuration.complete-example · active · Smith configuration reference, section "Complete example". Policy tables may be top-level or profile-scoped as shown.
+  smith.configuration.conversation-compaction · active · Smith configuration reference, section "Conversation compaction". Persisted sessions enable semantic summarization automatically.
   smith.configuration.discovery-and-precedence · active · Smith configuration reference, section "Discovery and precedence". nearest `.smith/` directory.
   smith.configuration.image-generation · active · Smith configuration reference, section "Image generation". `https://api.openai.com/v1`.
   smith.configuration.model-discovery-and-daily-synchronization · active · Smith configuration reference, section "Model discovery and daily synchronization". authenticated `/models` listing.

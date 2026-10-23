@@ -273,6 +273,74 @@ fn parse(input: &str) -> Result<Command, String> {
 }
 
 #[test]
+fn compact_has_idle_only_parsing_and_discovery() {
+    let name = "compact";
+    let input = format!("/{name}");
+    let parsed = super::parse(&input).expect("registered compaction command");
+    assert_eq!(
+        parsed.command,
+        Command::Host(HostCommand::Compact(CompactAction::Run(None)))
+    );
+    assert!(parsed.spec.requires_idle);
+    assert_eq!(completion(parsed.spec), input);
+    assert!(matches(&input).iter().any(|spec| spec.name == name));
+    assert!(crate::help_report::render_plain(&help()).contains(&input));
+    assert_eq!(
+        parse(&format!("{input} preserve tests")).unwrap(),
+        Command::Host(HostCommand::Compact(CompactAction::Run(Some(
+            "preserve tests".to_owned()
+        ))))
+    );
+    assert!(crate::file_commands::is_reserved_name(name));
+    assert!(parse("/compress").is_err());
+    assert!(!COMMANDS.iter().any(|command| command.name == "compress"));
+}
+
+#[test]
+fn compact_controls_parse_persistent_defaults_and_validate_durations() {
+    for (input, action) in [
+        (
+            "/compact model summary",
+            CompactAction::Model(Some("summary".into())),
+        ),
+        (
+            "/compact model local/small",
+            CompactAction::Model(Some("local/small".into())),
+        ),
+        ("/compact model default", CompactAction::Model(None)),
+        (
+            "/compact instructions Keep test failures\nand next steps",
+            CompactAction::Instructions(Some("Keep test failures\nand next steps".into())),
+        ),
+        (
+            "/compact instructions default",
+            CompactAction::Instructions(None),
+        ),
+        ("/compact idle 15m", CompactAction::Idle(Some(900000))),
+        ("/compact idle 1h", CompactAction::Idle(Some(3600000))),
+        ("/compact idle 1000ms", CompactAction::Idle(Some(1000))),
+        ("/compact idle default", CompactAction::Idle(None)),
+    ] {
+        assert_eq!(
+            parse(input).unwrap(),
+            Command::Host(HostCommand::Compact(action))
+        );
+    }
+    for input in [
+        "/compact model",
+        "/compact instructions",
+        "/compact idle",
+        "/compact idle 0s",
+        "/compact idle 25h",
+        "/compact idle 15",
+        "/compact idle 18446744073709551615h",
+        "/compact model two values",
+    ] {
+        assert!(parse(input).is_err(), "{input}");
+    }
+}
+
+#[test]
 fn status_completion_remains_a_complete_bare_command() {
     let status = COMMANDS
         .iter()

@@ -1,0 +1,203 @@
+{
+  "started_at_epoch": 1792749981.316981,
+  "updated_at_epoch": 1792750008.67614,
+  "complete": true,
+  "binary_sha256": "dd2fdf04d5e2bb3132b8e6227a1a2e7e2a1470da791affc6a370467bcd32fa77",
+  "config_sha256": "c734171c5276b28d06a2b8d8d65a124672f8fae97c9ef0a62a277b5efc464c65",
+  "quiet_delays_seconds": [
+    60,
+    300,
+    900
+  ],
+  "method": "Independent prefixes per delay; no keepalive or idle compaction. A warm baseline requires >=70% provider-reported cached input. Missing counters are unknown; a miss does not by itself prove expiry.",
+  "observations": [
+    {
+      "route": "chatgpt/gpt-5.6-luna",
+      "lane_delay_seconds": 60,
+      "phase": "seed",
+      "cached_tokens": 6272,
+      "uncached_tokens": 10871,
+      "input_tokens": 17143,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-1753f0ef-4f37-4ffa-9a5e-b0cdb44f4463",
+      "duration_seconds": 5.16,
+      "began_monotonic": 48553.636154291
+    },
+    {
+      "route": "chatgpt/gpt-5.6-terra",
+      "lane_delay_seconds": 60,
+      "phase": "seed",
+      "cached_tokens": 5376,
+      "uncached_tokens": 11774,
+      "input_tokens": 17150,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-4715d6a2-7cf9-4ba4-b3e3-0011b1b18f30",
+      "duration_seconds": 6.01,
+      "began_monotonic": 48553.643695125
+    },
+    {
+      "route": "chatgpt/gpt-6-astra",
+      "lane_delay_seconds": 60,
+      "phase": "seed",
+      "cached_tokens": 6272,
+      "uncached_tokens": 10903,
+      "input_tokens": 17175,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-4ba93988-678b-40b8-9924-742047279ce2",
+      "duration_seconds": 4.31,
+      "began_monotonic": 48558.799520416
+    },
+    {
+      "route": "chatgpt/gpt-6.1-sol",
+      "lane_delay_seconds": 60,
+      "phase": "seed",
+      "cached_tokens": 6272,
+      "uncached_tokens": 10853,
+      "input_tokens": 17125,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-56996dc0-211e-42fa-81f8-b3fcc28566e4",
+      "duration_seconds": 4.66,
+      "began_monotonic": 48559.658070458
+    },
+    {
+      "route": "chatgpt/gpt-5.6-luna",
+      "lane_delay_seconds": 60,
+      "phase": "warm",
+      "attempt": 1,
+      "cached_tokens": 3712,
+      "uncached_tokens": 13451,
+      "input_tokens": 17163,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-1753f0ef-4f37-4ffa-9a5e-b0cdb44f4463",
+      "duration_seconds": 3.3,
+      "began_monotonic": 48563.113794333
+    },
+    {
+      "route": "chatgpt/gpt-5.6-terra",
+      "lane_delay_seconds": 60,
+      "phase": "warm",
+      "attempt": 1,
+      "cached_tokens": 3328,
+      "uncached_tokens": 13842,
+      "input_tokens": 17170,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-4715d6a2-7cf9-4ba4-b3e3-0011b1b18f30",
+      "duration_seconds": 4.07,
+      "began_monotonic": 48564.31414775
+    },
+    {
+      "route": "chatgpt/gpt-6-astra",
+      "lane_delay_seconds": 60,
+      "phase": "warm",
+      "attempt": 1,
+      "cached_tokens": 3712,
+      "uncached_tokens": 13483,
+      "input_tokens": 17195,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-4ba93988-678b-40b8-9924-742047279ce2",
+      "duration_seconds": 4.35,
+      "began_monotonic": 48566.419400166
+    },
+    {
+      "route": "chatgpt/gpt-6.1-sol",
+      "lane_delay_seconds": 60,
+      "phase": "warm",
+      "attempt": 1,
+      "cached_tokens": 3712,
+      "uncached_tokens": 13433,
+      "input_tokens": 17145,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-56996dc0-211e-42fa-81f8-b3fcc28566e4",
+      "duration_seconds": 3.95,
+      "began_monotonic": 48568.389332958
+    },
+    {
+      "route": "chatgpt/gpt-5.6-luna",
+      "lane_delay_seconds": 60,
+      "phase": "warm",
+      "attempt": 2,
+      "cached_tokens": 3712,
+      "uncached_tokens": 13471,
+      "input_tokens": 17183,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-1753f0ef-4f37-4ffa-9a5e-b0cdb44f4463",
+      "duration_seconds": 5.07,
+      "began_monotonic": 48570.774753291
+    },
+    {
+      "route": "chatgpt/gpt-5.6-luna",
+      "lane_delay_seconds": 60,
+      "phase": "result",
+      "status": "no_validated_warm_baseline"
+    },
+    {
+      "route": "chatgpt/gpt-5.6-terra",
+      "lane_delay_seconds": 60,
+      "phase": "warm",
+      "attempt": 2,
+      "cached_tokens": 3328,
+      "uncached_tokens": 13862,
+      "input_tokens": 17190,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-4715d6a2-7cf9-4ba4-b3e3-0011b1b18f30",
+      "duration_seconds": 3.88,
+      "began_monotonic": 48572.335777791
+    },
+    {
+      "route": "chatgpt/gpt-5.6-terra",
+      "lane_delay_seconds": 60,
+      "phase": "result",
+      "status": "no_validated_warm_baseline"
+    },
+    {
+      "route": "chatgpt/gpt-6-astra",
+      "lane_delay_seconds": 60,
+      "phase": "warm",
+      "attempt": 2,
+      "cached_tokens": 3968,
+      "uncached_tokens": 13247,
+      "input_tokens": 17215,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-4ba93988-678b-40b8-9924-742047279ce2",
+      "duration_seconds": 4.64,
+      "began_monotonic": 48575.84936675
+    },
+    {
+      "route": "chatgpt/gpt-6-astra",
+      "lane_delay_seconds": 60,
+      "phase": "result",
+      "status": "no_validated_warm_baseline"
+    },
+    {
+      "route": "chatgpt/gpt-6.1-sol",
+      "lane_delay_seconds": 60,
+      "phase": "warm",
+      "attempt": 2,
+      "cached_tokens": 3968,
+      "uncached_tokens": 13197,
+      "input_tokens": 17165,
+      "cache_state": "unsupported",
+      "status": "ok",
+      "session": "session-56996dc0-211e-42fa-81f8-b3fcc28566e4",
+      "duration_seconds": 4.77,
+      "began_monotonic": 48576.220253125
+    },
+    {
+      "route": "chatgpt/gpt-6.1-sol",
+      "lane_delay_seconds": 60,
+      "phase": "result",
+      "status": "no_validated_warm_baseline"
+    }
+  ]
+}

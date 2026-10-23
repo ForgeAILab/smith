@@ -398,6 +398,8 @@ pub struct RuntimeRequest {
     /// Optional semantic-summary policy. Standard persistent hosts install
     /// Smith's default; direct embedders opt in explicitly.
     pub semantic_summary: Option<SmithSemanticSummaryConfig>,
+    /// Independently resolved profile/provider binding for compaction.
+    pub compaction_profile: Option<Box<VisionProfileRequest>>,
     /// Whether [`smith_tools::all`] is registered. A read-only child view sets
     /// this to `false` and supplies its own narrower set.
     pub built_in_tools: bool,
@@ -480,6 +482,7 @@ impl RuntimeRequest {
             plugin_profiles: BTreeMap::new(),
             memory: None,
             semantic_summary: None,
+            compaction_profile: None,
             built_in_tools: true,
             session_store: None,
             checkpoint_store: None,
@@ -721,6 +724,7 @@ impl fmt::Debug for RuntimePolicy {
 /// A built runtime, the policy it was built from, and the surface that asked.
 #[derive(Debug, Clone)]
 pub struct SmithRuntime {
+    summary_instructions: Option<Arc<crate::summary::SummaryInstructions>>,
     runtime: Runtime,
     policy: Arc<RuntimePolicy>,
     profile: Arc<ProfileResolution>,
@@ -815,6 +819,10 @@ impl SmithRuntime {
     /// Protected artifact storage installed for this composition.
     pub fn artifact_store(&self) -> Option<&Arc<dyn ArtifactStore>> {
         self.artifact_store.as_ref()
+    }
+
+    pub(crate) fn summary_instructions(&self) -> Option<Arc<crate::summary::SummaryInstructions>> {
+        self.summary_instructions.clone()
     }
 
     /// Which presentation composed this runtime.

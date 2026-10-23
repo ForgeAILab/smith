@@ -515,8 +515,9 @@ impl TuiLoop<'_> {
 
     pub(super) fn after_event(&mut self) -> Option<InteractiveExit> {
         self.interactions.drain_answers(&mut self.app);
-        self.host
-            .set_goal_continuation_enabled(!self.app.should_defer_goal_continuation());
+        self.host.set_goal_continuation_enabled(
+            self.pending_compaction.is_none() && !self.app.should_defer_goal_continuation(),
+        );
         if self.app.should_quit {
             return Some(self.on_quit());
         }

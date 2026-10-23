@@ -13,6 +13,7 @@ Primary
 /context [NAME|default] — Show context usage or choose a window
 /status [--verbose] — Show session, usage, and workspace status
 /model [PROVIDER/MODEL] — Switch model
+/compact [instructions|model …|instructions …|idle …] — Summarize older conversation history
 /details — Toggle bounded live tool detail
 /timeline — Show local turn, child, and recovery history
 /new — Start a fresh session

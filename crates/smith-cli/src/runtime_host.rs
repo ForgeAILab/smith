@@ -39,6 +39,11 @@ use crate::tui_driver::{
 };
 use crate::{MAX_STDIN_PROMPT_BYTES, connection, terminal};
 
+mod compaction;
+
+pub(super) use compaction::prepare_compaction_change;
+use compaction::resolve_compaction_profile;
+
 /// How long an interactive start waits for declared servers before opening the
 /// prompt without them.
 ///
@@ -127,6 +132,10 @@ fn preflight_with_modules(
     if let Some(catalog) = catalog.clone() {
         vision_request = vision_request.with_catalog(catalog);
     }
+    request.compaction_profile = resolve_compaction_profile(
+        &request.config,
+        crate::plugins::with_known_plugins(vision_request.clone())?,
+    )?;
     request.vision_profile = resolve_vision_profile(
         &request.config,
         crate::plugins::with_known_plugins(vision_request)?,
@@ -767,6 +776,8 @@ async fn run_interactive_hosts(
     let mut advisor_change: Option<Option<AdvisorOverride>> = None;
     // Likewise the session's denials before a pending `/capabilities` change.
     let mut capability_change: Option<Vec<String>> = None;
+    let mut compaction_change: Option<(smith_config::user_config::CommittedConfigEdit, String)> =
+        None;
     let mut skill_change: Option<crate::skills::PendingSkillActivation> = None;
     let mut module_change: Option<(
         smith_config::user_config::CommittedConfigEdit,
@@ -810,6 +821,14 @@ async fn run_interactive_hosts(
                     "model metadata adoption deferred · keeping the current runtime snapshot"
                         .to_owned(),
                 );
+                continue;
+            }
+            Err(error) if compaction_change.is_some() => {
+                let (committed, _) = compaction_change.take().expect("pending compaction edit");
+                committed
+                    .rollback()
+                    .context("rolling back compaction defaults")?;
+                host_notice = Some(format!("compaction defaults unchanged · {error:#}"));
                 continue;
             }
             Err(error) if plugin_change.is_some() => {
@@ -871,6 +890,10 @@ async fn run_interactive_hosts(
             }
             Err(error) => return Err(error),
         };
+        if let Some((committed, notice)) = compaction_change.take() {
+            committed.accept();
+            host_notice = Some(notice);
+        }
         if let Some((committed, request)) = module_change.take() {
             host_notice = started
                 .host
@@ -999,6 +1022,18 @@ async fn run_interactive_hosts(
         .await?;
         app = Some(retained);
         match exit {
+            InteractiveExit::CompactionSetting(action) => {
+                resume = Some(current_session);
+                frozen_catalog = Some(catalog.clone());
+                match prepare_compaction_change(&host, &project, &args.selection, catalog, action)
+                    .await
+                {
+                    Ok(change) => compaction_change = Some(change),
+                    Err(error) => {
+                        host_notice = Some(format!("compaction defaults unchanged · {error:#}"))
+                    }
+                }
+            }
             InteractiveExit::ActivateSkill {
                 selected,
                 submission,

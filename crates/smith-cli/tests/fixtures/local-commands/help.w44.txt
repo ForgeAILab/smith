@@ -20,6 +20,10 @@
                  [--verbose]
   /model         Switch model
                  [PROVIDER/MODEL]
+  /compact       Summarize older
+                 conversation history
+                 [instructions|model
+                 …|instructions …|idle …]
   /details       Toggle bounded live tool
                  detail
   /timeline      Show local turn, child, and

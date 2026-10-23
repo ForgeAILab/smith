@@ -41,6 +41,8 @@ use crate::submission::{
 use crate::{FRAME, SPINNER_TICK, interaction, local_command, terminal};
 
 pub(super) enum InteractiveExit {
+    /// Persist a validated compaction setting and rebuild the idle session.
+    CompactionSetting(smith_client::commands::CompactAction),
     /// Admit a requested skill, then optionally dispatch its prepared task.
     ActivateSkill {
         selected: smith_runtime::skills::RequestedSkill,
@@ -444,6 +446,7 @@ struct TuiLoop<'a> {
     frame: tokio::time::Interval,
     local_tx: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
     local_rx: tokio::sync::mpsc::UnboundedReceiver<LocalOutcome>,
+    pending_compaction: Option<futures_util::future::BoxFuture<'a, LocalResult>>,
     local_shell_approvals: LocalShellApprovals,
     shell_shortcuts: ShellShortcuts,
     child_tx: tokio::sync::mpsc::UnboundedSender<(ChildId, EventEnvelope)>,
@@ -543,6 +546,17 @@ where
 
             outcome = tui.local_rx.recv() => {
                 tui.on_local_result(outcome);
+            }
+
+            report = async {
+                match tui.pending_compaction.as_mut() {
+                    Some(compaction) => compaction.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                tui.pending_compaction = None;
+                tui.app.transcript.push_local(report);
+                tui.dirty = true;
             }
 
             () = async {
@@ -676,6 +690,7 @@ impl<'a> TuiLoop<'a> {
             frame,
             local_tx,
             local_rx,
+            pending_compaction: None,
             local_shell_approvals,
             shell_shortcuts,
             child_tx,

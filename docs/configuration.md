@@ -83,6 +83,59 @@ claim that a cache entry expired or became unavailable. In particular,
 pre-request cache-alive probe: it classifies cache state only after the
 provider returns usage/cache evidence for an attempt.
 
+## Conversation compaction
+
+Persisted sessions enable semantic summarization automatically. The standard
+policy starts considering summaries after four completed turns and triggers
+at 85% of the available budget after the stable prefix, preserving the two
+most recent turns. Structural compaction also remains active before
+over-budget requests. Idle compaction defaults to enabled after one hour
+without meaningful activity; `context.cache.idle_compaction = false` disables
+that idle timer.
+
+Use `/compact` during an idle turn to request compaction
+immediately. The command uses the same protected summary operation and
+`cache_idle_compaction` usage attribution, even when the automatic idle timer
+is disabled. It does not add a conversation turn. The existing minimum
+history and recent-turn retention still apply, and the current idle interval
+allows one attempt. A new completed turn opens another interval. Failed
+summary work preserves original history and the previous committed summary.
+
+`/compact Preserve test failures and next steps` supplies instructions for one
+attempt. Set defaults in configuration or save them from an idle session:
+
+| Command | Effect |
+| --- | --- |
+| `/compact model summary` | Use the configured `summary` profile |
+| `/compact model zai/glm-4.5-air` | Use an independent provider/model |
+| `/compact instructions Preserve decisions and test results` | Save default summary instructions |
+| `/compact idle 15m` | Save the current model's inactivity cutoff |
+| `/compact model default` | Remove the user-layer model override |
+| `/compact instructions default` | Remove the user-layer instruction override |
+| `/compact idle default` | Remove this model's user-layer cutoff |
+
+```toml
+[context.compaction]
+model = "zai/glm-4.5-air"
+instructions = "Preserve decisions, constraints, test results, and next steps."
+
+[models."zai/glm-5.3".cache]
+inactivity_limit_ms = 900000
+```
+
+Omitting `model` uses the conversation model. Omitting `instructions` uses
+Smith's built-in prompt. Setting commands validate and preflight a candidate,
+then save it atomically while preserving other settings and comments. The
+active session adopts the change at the idle boundary. Higher config layers
+can still override a saved user default. Invalid candidates leave the config
+unchanged; startup failure rolls the edit back.
+
+Model-specific inactivity follows normal layer precedence and wins over the
+shared cutoff within its layer. Durations accept `ms`, `s`, `m`, and `h`, from
+1 second through 24 hours. This is Smith's idle cutoff, not a promise or
+request for the provider's cache TTL. Live cache measurements describe only
+the tested route, prefix, and observed quiet intervals.
+
 ## Adaptive cache lifecycle and idle compaction
 
 Cache mechanism policy is profile-scoped. The built-in mode is `off`; Smith

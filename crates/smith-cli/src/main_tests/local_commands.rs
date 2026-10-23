@@ -17,6 +17,101 @@ fn diagnostics_section_plain(section: DiagnosticsSection) -> String {
     })
 }
 
+#[tokio::test]
+async fn compact_settings_preflight_before_publication_and_rebind_the_same_session() {
+    use smith_client::commands::CompactAction;
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let user = home.path().join(".smith");
+    std::fs::create_dir(&user).unwrap();
+    let config_path = user.join("config.toml");
+    let original = format!(
+        "# Keep my settings\n{LOCAL_COMMAND_CONFIG}\n[models.\"local/small\"]\ncontext_tokens = 128000\nmax_input_tokens = 124000\nmax_output_tokens = 2048\n"
+    );
+    std::fs::write(&config_path, &original).unwrap();
+    let request = ResolveRequest::new(project.path()).with_home_dir(home.path());
+    let resolution = resolve(&request).unwrap();
+    let runtime = RuntimeRequest {
+        workspace: Some(Arc::new(ProjectWorkspace::new(project.path()).unwrap())),
+        approval: Some(Arc::new(agent_runtime_core::approval::DenyAll)),
+        ..RuntimeRequest::new(resolution.config, HostSurface::Terminal)
+    };
+    let host = smith_runtime::host::start(
+        HostSessionRequest::new(runtime, project.path())
+            .checkpoint_keys(Arc::new(TestCheckpointKeys)),
+    )
+    .await
+    .unwrap();
+    let catalog = Arc::new(
+        serde_json::from_str::<smith_config::catalog::CatalogSnapshot>(
+            smith_runtime::model_catalog::EMBEDDED_MODELS_DEV_SEED,
+        )
+        .unwrap(),
+    );
+    let selection = Selection::default();
+    let invalid = prepare_compaction_change(
+        &host,
+        project.path(),
+        &selection,
+        catalog.clone(),
+        CompactAction::Model(Some("missing-profile".into())),
+    )
+    .await;
+    assert!(invalid.is_err());
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), original);
+    let (committed, notice) = prepare_compaction_change(
+        &host,
+        project.path(),
+        &selection,
+        catalog.clone(),
+        CompactAction::Model(Some("local/small".into())),
+    )
+    .await
+    .unwrap();
+    assert!(notice.contains("local/small"));
+    assert!(
+        std::fs::read_to_string(&config_path)
+            .unwrap()
+            .starts_with("# Keep my settings")
+    );
+    assert!(
+        host.session().history().is_empty(),
+        "settings do not submit a turn"
+    );
+    committed.accept();
+    let id = host.session().id().clone();
+    host.shutdown().await.unwrap();
+    let resolution = resolve(&request).unwrap();
+    let mut runtime = preflight_request(
+        &resolution,
+        project.path(),
+        HostSurface::Terminal,
+        Some(catalog),
+    )
+    .unwrap();
+    runtime.approval = Some(Arc::new(agent_runtime_core::approval::DenyAll));
+    let resumed = smith_runtime::host::start(
+        HostSessionRequest::new(runtime, project.path())
+            .resume(id.clone())
+            .checkpoint_keys(Arc::new(TestCheckpointKeys)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resumed.session().id(), &id);
+    assert_eq!(resumed.runtime().policy().model.as_str(), "example-model");
+    assert!(
+        resumed
+            .runtime()
+            .policy()
+            .semantic_summary
+            .as_ref()
+            .unwrap()
+            .model
+            .contains("small")
+    );
+    resumed.shutdown().await.unwrap();
+}
+
 #[test]
 fn status_cost_reports_unknown_without_assuming_a_price() {
     // usage-accounting: "Price is unavailable" — `/status` must show the
@@ -412,7 +507,10 @@ async fn informational_commands_append_inline_without_provider_history() {
         1
     );
     assert!(plain.contains("idle compaction: attempted no"), "{plain}");
-    assert!(plain.contains("  route: unknown"), "{plain}");
+    assert!(
+        plain.contains("  route: local/local/example-model:semantic-summary/unknown"),
+        "{plain}"
+    );
     assert!(plain.contains("session read: unknown"), "{plain}");
     assert!(plain.contains("cache hit: unknown"), "{plain}");
     assert!(!plain.contains('?'), "{plain}");
@@ -427,6 +525,7 @@ async fn informational_commands_append_inline_without_provider_history() {
         HostCommand::Status,
         HostCommand::Diagnostics,
         HostCommand::Context,
+        HostCommand::Compact(smith_client::commands::CompactAction::Run(None)),
         HostCommand::Agent(AgentAction::List),
         HostCommand::Diff(DiffScope::Git(None)),
         HostCommand::Skills(smith_client::commands::SkillsAction::List),
@@ -491,6 +590,7 @@ async fn informational_commands_append_inline_without_provider_history() {
             ("status", LocalResultState::Info),
             ("diagnostics", LocalResultState::Info),
             ("context", LocalResultState::Info),
+            ("compact", LocalResultState::Empty),
             ("agent", LocalResultState::Empty),
             ("diff", LocalResultState::Error),
             ("skills", LocalResultState::Info),

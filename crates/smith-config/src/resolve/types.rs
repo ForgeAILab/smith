@@ -75,6 +75,8 @@ pub struct KnownPlugin {
 /// Everything resolution needs that comes from outside this crate.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolveRequest {
+    /// Host-owned candidate user configuration for read-only edit preflight.
+    pub user_config_override: Option<Box<crate::model::ConfigFile>>,
     /// Frozen endpoint-bound catalog metadata, supplied before credential lookup.
     pub catalog: Option<std::sync::Arc<crate::catalog::CatalogSnapshot>>,
     /// Catalog of module ids accepted by this binary, including modules not built.
@@ -688,6 +690,10 @@ pub struct ResolvedModelReasoning {
 /// Resolved context policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedContext {
+    /// Optional profile or provider/model used for summaries.
+    pub compaction_model: Option<Sourced<String>>,
+    /// Optional default summary instructions.
+    pub compaction_instructions: Option<Sourced<String>>,
     /// Number of recent images retained by the request image window.
     pub inline_images: Sourced<u32>,
     /// Serialized tool-outcome offload threshold, independent of capture limits.

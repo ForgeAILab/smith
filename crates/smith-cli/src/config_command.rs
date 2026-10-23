@@ -144,6 +144,26 @@ pub(super) fn explain_config(key: &str, selection: &Selection) -> Result<()> {
     };
     let diagnostic = prepared.resolution.config.web.search.diagnostic();
     for key in keys {
+        if matches!(
+            key,
+            "context.compaction.model" | "context.compaction.instructions"
+        ) && provenance.source(key).is_none()
+        {
+            let fallback = if key.ends_with(".model") {
+                "conversation model"
+            } else {
+                "Smith built-in summary instructions"
+            };
+            println!("{key} = {fallback}");
+            println!("source: built-in default");
+            continue;
+        }
+        if key == "context.cache.inactivity_limit_ms" || key == "context.idle_compaction_ms" {
+            let effective = &prepared.resolution.config.context.cache.inactivity_limit_ms;
+            println!("{key} = {}", effective.value);
+            println!("source: {}", effective.source);
+            continue;
+        }
         if key == "vision" && provenance.source(key).is_none() {
             println!("vision = unset");
             continue;

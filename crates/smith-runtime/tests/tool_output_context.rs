@@ -317,6 +317,7 @@ async fn no_artifact_store_does_not_claim_recoverable_offloading() {
     let mut request = fixture.request(provider, None);
     request.runtime.config.persistence.enabled.value = false;
     let host = start(request).await.unwrap();
+    assert!(host.runtime().policy().semantic_summary.is_none());
     assert!(!host.runtime().policy().artifact_offloading);
     assert!(
         !host

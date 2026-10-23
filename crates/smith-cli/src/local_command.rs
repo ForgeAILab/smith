@@ -14,6 +14,7 @@ use smith_tui::app::App;
 
 pub(crate) mod agent;
 mod capabilities;
+pub(super) mod compact;
 pub(super) mod context;
 pub(super) mod diagnostics;
 mod diff;
@@ -62,6 +63,16 @@ pub(super) async fn handle_local_command(
         }
         HostCommand::Context => CommandReport::Show(LocalResult::Context(Box::new(
             context::report(&app.status, host.runtime().policy()),
+        ))),
+        HostCommand::Compact(smith_client::commands::CompactAction::Run(instructions)) => {
+            CommandReport::Append(compact::report(host, instructions).await)
+        }
+        HostCommand::Compact(_) => CommandReport::Show(LocalResult::Message(Box::new(
+            smith_client::message_report::MessageReport::Error {
+                title: "compact".to_owned(),
+                message: "Compaction settings must be applied at the interactive session boundary."
+                    .to_owned(),
+            },
         ))),
         HostCommand::Timeline => CommandReport::Show(LocalResult::Timeline(Box::new(
             timeline::report(host).await,

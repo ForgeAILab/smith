@@ -6,7 +6,7 @@
 //! `context.semantic_summary` purpose.
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use agent_runtime::agent::one_shot::{
     OneShotError, OneShotExecutor, OneShotFinish, OneShotRequest, run_one_shot,
@@ -40,9 +40,70 @@ Preserve decisions, constraints, file/symbol names, tool evidence, unresolved wo
 and user preferences. Do not invent results, permissions, or facts. Do not issue \
 tool calls. Return only the concise semantic summary.";
 
+/// Default summary instructions and the worker's temporary manual override.
+pub struct SummaryInstructions {
+    default: String,
+    manual: Mutex<Option<String>>,
+}
+
+impl fmt::Debug for SummaryInstructions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SummaryInstructions")
+            .field("revision", &RegistryRevision::from_content(&self.default))
+            .field(
+                "manual_override",
+                &self
+                    .manual
+                    .lock()
+                    .expect("summary instructions poisoned")
+                    .is_some(),
+            )
+            .finish()
+    }
+}
+
+impl SummaryInstructions {
+    /// Creates instructions, preserving Smith's factuality constraints.
+    pub fn new(instructions: Option<&str>) -> Self {
+        Self {
+            default: instructions.map_or_else(
+                || SUMMARY_INSTRUCTION.to_owned(),
+                |text| format!("{SUMMARY_INSTRUCTION}\n\nUser summary instructions:\n{text}"),
+            ),
+            manual: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn manual(&self, instructions: Option<String>) {
+        *self.manual.lock().expect("summary instructions poisoned") = instructions;
+    }
+
+    fn render(&self, idle: bool) -> String {
+        if idle
+            && let Some(text) = self
+                .manual
+                .lock()
+                .expect("summary instructions poisoned")
+                .as_ref()
+        {
+            return format!("{SUMMARY_INSTRUCTION}\n\nInstructions for this attempt:\n{text}");
+        }
+        self.default.clone()
+    }
+}
+
+impl Default for SummaryInstructions {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
+
 /// Smith-selected semantic summary composition.
 #[derive(Clone)]
 pub struct SmithSemanticSummaryConfig {
+    /// Shared defaults and a bounded manual-only instruction override.
+    pub instructions: Arc<SummaryInstructions>,
     /// Generic coordinator policy, including spend/sensitivity/retention.
     pub policy: SemanticSummaryPolicy,
     /// Provider identity for a custom summary model. The standard adapter
@@ -82,6 +143,7 @@ impl SmithSemanticSummaryConfig {
     /// Smith's standard persisted-session policy.
     pub fn standard() -> Self {
         Self {
+            instructions: Arc::new(SummaryInstructions::default()),
             policy: SemanticSummaryPolicy {
                 // A floor, not a trigger: pressure decides when, this only
                 // prevents summarizing a session too young to be worth it.
@@ -165,6 +227,7 @@ pub struct SemanticSummaryRuntimePolicy {
 
 /// Provider/model adapter used only by the semantic-summary hook.
 pub struct SmithProviderSummaryModel {
+    instructions: Arc<SummaryInstructions>,
     provider: Arc<dyn Provider>,
     provider_name: String,
     model: ModelId,
@@ -202,6 +265,7 @@ impl SmithProviderSummaryModel {
              {max_output_tokens}\n{timeout_ms}\n{SUMMARY_INSTRUCTION}"
         ));
         Ok(Self {
+            instructions: Arc::new(SummaryInstructions::default()),
             provider,
             provider_name,
             model,
@@ -211,6 +275,16 @@ impl SmithProviderSummaryModel {
             revision,
             id,
         })
+    }
+}
+
+impl SmithProviderSummaryModel {
+    /// Selects instructions and includes their defaults in adapter identity.
+    pub fn with_instructions(mut self, instructions: Arc<SummaryInstructions>) -> Self {
+        self.revision =
+            RegistryRevision::from_content(format!("{}\n{}", self.revision, instructions.default));
+        self.instructions = instructions;
+        self
     }
 }
 
@@ -252,7 +326,10 @@ impl SummaryModel for SmithProviderSummaryModel {
         };
         let instructions = format!(
             "<summary-purpose id=\"{}\" max_chars=\"{}\">\n{}\n</summary-purpose>",
-            request.purpose, request.max_output_chars, SUMMARY_INSTRUCTION
+            request.purpose,
+            request.max_output_chars,
+            self.instructions
+                .render(request.purpose == SEMANTIC_SUMMARY_IDLE_COMPACTION_PURPOSE)
         );
         // Summary work has its own identities and no main-conversation cache partition.
         let mut call = OneShotRequest::new(

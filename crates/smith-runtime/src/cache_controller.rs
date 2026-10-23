@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use smith_config::model::CacheMaintenanceMode as ConfigMaintenanceMode;
 use smith_config::resolve::{ResolvedCachePolicy, SyntheticCacheSpendAuthority};
 use smith_tools::{ChangeRecorder, ToolMutation};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::cache_lifecycle::{
     CacheLifecycleReducer, CacheMaintenanceAction, CacheMaintenanceMode, CacheMaintenancePolicy,
@@ -266,6 +267,7 @@ impl Drop for OptionalProjectionAdmission {
 /// Immutable controller inputs resolved before the session starts.
 #[derive(Clone)]
 pub(crate) struct CacheControllerConfig {
+    pub summary_instructions: Option<Arc<crate::summary::SummaryInstructions>>,
     /// Bounded Smith scheduler policy.
     pub policy: CacheMaintenancePolicy,
     /// Host-only synthetic-spend authority.
@@ -429,6 +431,7 @@ impl CacheControllerConfig {
             });
         }
         Ok(Self {
+            summary_instructions: None,
             policy,
             synthetic_spend,
             contract,
@@ -451,7 +454,13 @@ impl CacheControllerConfig {
 pub(crate) struct CacheLifecycleController {
     state: Arc<Mutex<ControllerState>>,
     cancel: Cancellation,
+    compaction_requests: mpsc::Sender<ManualCompactionRequest>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+pub(crate) struct ManualCompactionRequest {
+    instructions: Option<String>,
+    reply: oneshot::Sender<IdleCompactionOutcome>,
 }
 
 impl CacheLifecycleController {
@@ -494,6 +503,7 @@ impl CacheLifecycleController {
         }
         let state = Arc::new(Mutex::new(initial));
         let cancel = Cancellation::new();
+        let (compaction_requests, receiver) = mpsc::channel(1);
         let task = tokio::spawn(run_controller(
             session,
             config,
@@ -504,12 +514,34 @@ impl CacheLifecycleController {
             changes,
             state.clone(),
             cancel.clone(),
+            receiver,
         ));
         Self {
             state,
             cancel,
+            compaction_requests,
             task: Mutex::new(Some(task)),
         }
+    }
+
+    pub(crate) fn request_compaction(
+        &self,
+        instructions: Option<String>,
+    ) -> Result<oneshot::Receiver<IdleCompactionOutcome>, IdleCompactionOutcome> {
+        if self.cancel.is_cancelled() {
+            return Err(IdleCompactionOutcome::Shutdown);
+        }
+        let (reply, receiver) = oneshot::channel();
+        self.compaction_requests
+            .try_send(ManualCompactionRequest {
+                instructions,
+                reply,
+            })
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => IdleCompactionOutcome::Busy,
+                mpsc::error::TrySendError::Closed(_) => IdleCompactionOutcome::Shutdown,
+            })?;
+        Ok(receiver)
     }
 
     /// Returns an inspectable, redaction-safe snapshot.
@@ -578,6 +610,7 @@ async fn run_controller(
     changes: Arc<ChangeRecorder>,
     state: Arc<Mutex<ControllerState>>,
     cancel: Cancellation,
+    mut compaction_requests: mpsc::Receiver<ManualCompactionRequest>,
 ) {
     let scheduler = match CacheScheduler::new(config.policy) {
         Ok(scheduler) => scheduler,
@@ -627,7 +660,10 @@ async fn run_controller(
         };
         let mut persist_boundary = false;
         let mut idle_due = false;
+        let mut manual_request = None;
         tokio::select! {
+            // Reduce queued turn events before serving a manual boundary request.
+            biased;
             _ = cancel.cancelled() => break,
             envelope = events.next() => match envelope {
                 Some(envelope) => {
@@ -635,6 +671,9 @@ async fn run_controller(
                         reduce_event(&state, capsule.as_deref(), &changes, &envelope);
                 }
                 None => break,
+            },
+            Some(reply) = compaction_requests.recv() => {
+                manual_request = Some(reply);
             },
             _ = parking_change => {
                 persist_boundary = true;
@@ -659,7 +698,26 @@ async fn run_controller(
         if cancel.is_cancelled() {
             break;
         }
-        if idle_due {
+        if let Some(request) = manual_request {
+            if let Some(instructions) = &config.summary_instructions {
+                instructions.manual(request.instructions);
+            }
+            let outcome = run_manual_compaction(
+                &session,
+                &config,
+                &clock,
+                parking_snapshot.as_ref(),
+                capsule.as_deref(),
+                artifacts.as_deref(),
+                &state,
+                &cancel,
+            )
+            .await;
+            if let Some(instructions) = &config.summary_instructions {
+                instructions.manual(None);
+            }
+            let _ = request.reply.send(outcome);
+        } else if idle_due {
             run_idle_compaction(
                 &session,
                 &config,

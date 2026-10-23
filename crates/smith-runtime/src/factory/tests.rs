@@ -205,6 +205,8 @@ exit 2
 
 fn context(output_reserve: Option<u32>, reasoning_reserve: u32) -> ResolvedContext {
     ResolvedContext {
+        compaction_model: None,
+        compaction_instructions: None,
         inline_images: sourced(10),
         tool_output_inline_bytes: sourced(8 * 1024),
         output_reserve: output_reserve.map(sourced),

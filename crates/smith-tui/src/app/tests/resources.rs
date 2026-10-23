@@ -1020,3 +1020,17 @@ fn plugins_dispatch_locally_and_confirmation_has_no_default_action() {
     }
     assert!(!app.transcript.blocks().iter().any(|block| matches!(block, Block::User { .. })));
 }
+
+#[test]
+fn compaction_commands_require_an_idle_turn_and_preserve_the_draft() {
+    let command = "/compact";
+    let mut app = app();
+    app.apply(&event(RuntimeEvent::TurnStarted));
+    type_text(&mut app, command);
+    assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+    assert_eq!(app.composer.text(), command);
+    assert_feedback_hint(
+        &app,
+        &format!("{command} requires an idle turn; draft preserved"),
+    );
+}

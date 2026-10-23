@@ -1,5 +1,417 @@
 use super::*;
 
+fn compaction_reply(text: &str, input: u64) -> ScriptedStream {
+    ScriptedStream::new(vec![
+        ProviderStreamEvent::TextDelta { text: text.into() },
+        usage_event(input, 5),
+        ProviderStreamEvent::Finish {
+            reason: FinishReason::Stop,
+        },
+    ])
+}
+
+#[tokio::test]
+async fn manual_instructions_apply_once_and_defaults_survive_cold_resume_changes() {
+    use smith_runtime::cache_controller::IdleCompactionOutcome;
+
+    let fixture = Fixture::with_config(&format!(
+        "{CONFIG}\n[context.compaction]\ninstructions = \"DEFAULT SUMMARY NOTES\"\n"
+    ));
+    let mut scripts = (0..4)
+        .map(|index| compaction_reply(&format!("answer {index}"), 100))
+        .collect::<Vec<_>>();
+    scripts.extend([
+        compaction_reply("FIRST SUMMARY", 100),
+        compaction_reply("answer 4", 100),
+        compaction_reply("SECOND SUMMARY", 100),
+    ]);
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        scripts,
+    ));
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.provider = Some(provider.clone());
+    let host = start(request).await.expect("host");
+    for index in 0..4 {
+        host.session()
+            .run(UserInput::text(format!("request {index}")))
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        host.compact_with_instructions(Some("ONLY RELEASE DECISIONS".into()))
+            .await
+            .unwrap(),
+        IdleCompactionOutcome::Completed
+    );
+    let first = serde_json::to_string(&provider.requests()[4].messages).unwrap();
+    assert!(first.contains("ONLY RELEASE DECISIONS"));
+    assert!(!first.contains("DEFAULT SUMMARY NOTES"));
+    host.session()
+        .run(UserInput::text("request 4"))
+        .await
+        .unwrap();
+    assert_eq!(
+        host.compact().await.unwrap(),
+        IdleCompactionOutcome::Completed
+    );
+    let second = serde_json::to_string(&provider.requests()[6].messages).unwrap();
+    assert!(second.contains("DEFAULT SUMMARY NOTES"));
+    assert!(!second.contains("ONLY RELEASE DECISIONS"));
+    let session = host.session().id().clone();
+    let original = host.session().history();
+    host.shutdown().await.unwrap();
+    std::fs::write(
+        fixture.project.path().join(".smith/config.toml"),
+        format!("{CONFIG}\n[context.compaction]\ninstructions = \"NEW SUMMARY DEFAULT\"\n"),
+    )
+    .unwrap();
+    let mut request = fixture.request(HostSurface::Headless).resume(session);
+    request.runtime.provider = Some(Arc::new(FakeProvider::text_reply("continued")));
+    let resumed = start(request)
+        .await
+        .expect("changed optional summary instructions cannot block resume");
+    assert_eq!(resumed.session().history(), original);
+    resumed
+        .session()
+        .run(UserInput::text("continue"))
+        .await
+        .unwrap();
+    resumed.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_compaction_model_has_its_own_route_and_usage() {
+    use smith_config::resolve::{AdvisorTarget, Source, Sourced};
+    use smith_runtime::cache_controller::IdleCompactionOutcome;
+    use smith_runtime::factory::VisionProfileRequest;
+
+    let fixture = Fixture::with_config(&format!(
+        r#"{CONFIG}
+[context.compaction]
+model = "summaries/small"
+instructions = "Keep exact test evidence"
+[providers.summaries]
+kind = "fake"
+[models."summaries/small"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 1024
+"#
+    ));
+    let main_provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        (0..4)
+            .map(|index| compaction_reply(&format!("answer {index}"), 100))
+            .collect(),
+    ));
+    let summary_provider = Arc::new(FakeProvider::new(
+        "small",
+        Capabilities::basic_streaming(),
+        vec![compaction_reply("DEDICATED SUMMARY", 200)],
+    ));
+    let secondary = resolve(
+        &ResolveRequest::new(fixture.project.path())
+            .with_home_dir(fixture.home.path())
+            .with_advisor_route(Sourced::new(
+                AdvisorTarget::Model {
+                    provider: "summaries".into(),
+                    model: "small".into(),
+                },
+                Source::built_in("test compaction target"),
+            )),
+    )
+    .unwrap();
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.provider = Some(main_provider.clone());
+    request.runtime.compaction_profile = Some(Box::new(VisionProfileRequest {
+        config: secondary.config,
+        catalog_sources: Vec::new(),
+        provider: Some(summary_provider.clone()),
+    }));
+    let host = start(request).await.unwrap();
+    for index in 0..4 {
+        host.session()
+            .run(UserInput::text(format!("request {index}")))
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        host.compact().await.unwrap(),
+        IdleCompactionOutcome::Completed
+    );
+    assert_eq!(main_provider.requests().len(), 4);
+    assert_eq!(summary_provider.requests().len(), 1);
+    assert_eq!(summary_provider.requests()[0].max_output_tokens, Some(1024));
+    let summary = host.resume_capsule().unwrap().semantic_summary.unwrap();
+    assert_eq!(summary.provenance.provider, "summaries");
+    assert!(summary.provenance.model.contains("small"));
+    assert_eq!(summary.provenance.usage.input_uncached, 200);
+    assert!(
+        serde_json::to_string(&summary_provider.requests()[0].messages)
+            .unwrap()
+            .contains("Keep exact test evidence")
+    );
+    let session = host.session().id().clone();
+    let original = host.session().history();
+    host.shutdown().await.unwrap();
+    let config_path = fixture.project.path().join(".smith/config.toml");
+    let config = std::fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("model = \"summaries/small\"", "");
+    std::fs::write(&config_path, config).unwrap();
+    let mut request = fixture.request(HostSurface::Headless).resume(session);
+    request.runtime.provider = Some(Arc::new(FakeProvider::text_reply("continued")));
+    let resumed = start(request)
+        .await
+        .expect("changing the summary model preserves canonical resume");
+    assert_eq!(resumed.session().history(), original);
+    resumed
+        .session()
+        .run(UserInput::text("continue"))
+        .await
+        .unwrap();
+    resumed.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn default_persisted_sessions_summarize_automatically_under_pressure() {
+    let fixture = Fixture::new();
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            compaction_reply("answer 0", 100),
+            compaction_reply("answer 1", 100),
+            compaction_reply("answer 2", 110_000),
+            compaction_reply("answer 3", 110_000),
+            compaction_reply("AUTOMATIC_SUMMARY", 100),
+            compaction_reply("answer 4", 100),
+        ],
+    ));
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.provider = Some(provider.clone());
+    let host = start(request).await.expect("default summary host");
+    assert!(host.cache_lifecycle().unwrap().policy.idle_compaction);
+    for index in 0..3 {
+        host.session()
+            .run(UserInput::text(format!("request {index}")))
+            .await
+            .expect("ordinary turn");
+    }
+    assert_eq!(provider.requests().len(), 3, "minimum turn floor holds");
+    host.session()
+        .run(UserInput::text("request 3"))
+        .await
+        .expect("pressure turn");
+    let snapshot = host.session().snapshot();
+    assert_eq!(
+        snapshot.extension_state["harness.semantic_summary"].value["summary"],
+        "AUTOMATIC_SUMMARY"
+    );
+    host.session()
+        .run(UserInput::text("request 4"))
+        .await
+        .expect("follow-up turn");
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 6);
+    let wire = serde_json::to_string(&requests[5].messages).unwrap();
+    assert!(wire.contains("AUTOMATIC_SUMMARY"));
+    assert!(!wire.contains("request 0"));
+    assert!(wire.contains("request 2"));
+    host.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn default_persisted_sessions_compact_once_after_inactivity() {
+    use smith_runtime::cache_controller::IdleCompactionOutcome;
+
+    let fixture = Fixture::with_config(&format!(
+        "{CONFIG}\n[context.cache]\ninactivity_limit_ms = 1000\nkeepalive_margin_ms = 0\n"
+    ));
+    let clock = agent_runtime_testkit::ManualClock::shared(0);
+    let mut scripts = (0..4)
+        .map(|index| compaction_reply(&format!("answer {index}"), 100))
+        .collect::<Vec<_>>();
+    scripts.push(compaction_reply("IDLE_SUMMARY", 100));
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        scripts,
+    ));
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.clock = Some(clock.clone());
+    request.runtime.provider = Some(provider.clone());
+    let host = start(request).await.expect("default idle host");
+    for index in 0..4 {
+        host.session()
+            .run(UserInput::text(format!("request {index}")))
+            .await
+            .expect("ordinary turn");
+    }
+    assert_eq!(provider.requests().len(), 4);
+    clock.advance(1000);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if host.cache_lifecycle().unwrap().idle_compaction_outcome
+                == Some(IdleCompactionOutcome::Completed)
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the automatic idle timer commits a summary");
+    assert_eq!(provider.requests().len(), 5);
+    assert_eq!(
+        host.session().snapshot().extension_state["harness.semantic_summary"].value["summary"],
+        "IDLE_SUMMARY"
+    );
+    assert_eq!(host.compact().await.unwrap(), IdleCompactionOutcome::Busy);
+    assert_eq!(provider.requests().len(), 5);
+    host.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn ephemeral_sessions_do_not_install_a_summary_route_or_allow_manual_compaction() {
+    let fixture = Fixture::new();
+    let mut config = fixture.config();
+    config.persistence.enabled.value = false;
+    let request = fixture.request_with_config(config, HostSurface::Headless);
+    assert!(request.runtime.semantic_summary.is_none());
+    let host = start(request).await.expect("ephemeral host");
+    assert!(host.compact().await.is_err());
+    host.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn manual_compaction_bypasses_the_automatic_timer_and_persists_for_resume() {
+    use smith_runtime::cache_controller::IdleCompactionOutcome;
+
+    let fixture = Fixture::with_config(&format!(
+        "{CONFIG}\n[context.cache]\nidle_compaction = false\n"
+    ));
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            compaction_reply("answer 0", 100),
+            compaction_reply("answer 1", 100),
+            compaction_reply("answer 2", 100),
+            compaction_reply("answer 3", 100),
+            compaction_reply("MANUAL_SUMMARY", 100),
+        ],
+    ));
+    let mut request = fixture.request(HostSurface::Terminal);
+    request.runtime.provider = Some(provider.clone());
+    let host = start(request).await.expect("manual summary host");
+    assert_eq!(
+        host.compact().await.unwrap(),
+        IdleCompactionOutcome::NoSummary
+    );
+    assert!(provider.requests().is_empty());
+    for index in 0..4 {
+        host.session()
+            .run(UserInput::text(format!("request {index}")))
+            .await
+            .expect("ordinary turn");
+    }
+    assert_eq!(
+        provider.requests().len(),
+        4,
+        "low pressure makes no automatic call"
+    );
+    let original = host.session().history();
+    assert_eq!(
+        host.compact().await.unwrap(),
+        IdleCompactionOutcome::Completed
+    );
+    assert_eq!(provider.requests().len(), 5);
+    assert_eq!(host.session().history(), original);
+    assert_eq!(host.compact().await.unwrap(), IdleCompactionOutcome::Busy);
+    assert_eq!(
+        provider.requests().len(),
+        5,
+        "same interval cannot spend twice"
+    );
+    let capsule = host.resume_capsule().expect("capsule");
+    assert!(
+        capsule
+            .semantic_summary
+            .unwrap()
+            .provenance
+            .summary_artifact
+            .is_some()
+    );
+    assert!(capsule.cache.idle_compaction_attempted);
+    assert_eq!(
+        provider.calls()[4].purpose,
+        agent_runtime_core::provider::ProviderAttemptPurpose::IdleCompaction
+    );
+    let session = host.session().id().clone();
+    host.shutdown().await.expect("shutdown");
+    assert_eq!(
+        host.compact().await.unwrap(),
+        IdleCompactionOutcome::Shutdown
+    );
+    let mut resume = fixture.request(HostSurface::Headless).resume(session);
+    let resumed_provider = Arc::new(FakeProvider::text_reply("continued"));
+    resume.runtime.provider = Some(resumed_provider);
+    let resumed = start(resume).await.expect("resume compacted session");
+    assert_eq!(
+        resumed.session().snapshot().extension_state["harness.semantic_summary"].value["summary"],
+        "MANUAL_SUMMARY"
+    );
+    assert_eq!(
+        resumed.compact().await.unwrap(),
+        IdleCompactionOutcome::Busy
+    );
+    resumed.shutdown().await.expect("resumed shutdown");
+}
+
+#[tokio::test]
+async fn failed_manual_compaction_preserves_history_and_does_not_retry() {
+    use smith_runtime::cache_controller::IdleCompactionOutcome;
+
+    let fixture = Fixture::new();
+    let mut scripts = (0..4)
+        .map(|index| compaction_reply(&format!("answer {index}"), 100))
+        .collect::<Vec<_>>();
+    scripts.push(ScriptedStream::new(vec![ProviderStreamEvent::Error {
+        error: ProviderError::new(ProviderErrorKind::Server, "summary unavailable"),
+    }]));
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        scripts,
+    ));
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.provider = Some(provider.clone());
+    let host = start(request).await.expect("host");
+    for index in 0..4 {
+        host.session()
+            .run(UserInput::text(format!("request {index}")))
+            .await
+            .expect("turn");
+    }
+    let original = host.session().history();
+    assert_eq!(host.compact().await.unwrap(), IdleCompactionOutcome::Failed);
+    assert_eq!(host.session().history(), original);
+    assert!(
+        !host
+            .session()
+            .snapshot()
+            .extension_state
+            .contains_key("harness.semantic_summary")
+    );
+    assert_eq!(host.compact().await.unwrap(), IdleCompactionOutcome::Busy);
+    assert_eq!(provider.requests().len(), 5);
+    host.shutdown().await.expect("shutdown");
+}
+
 #[tokio::test]
 async fn persistent_sessions_use_incremental_recoverable_semantic_summaries_with_disjoint_usage() {
     let fixture = Fixture::new();

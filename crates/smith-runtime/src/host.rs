@@ -128,12 +128,6 @@ impl HostSessionRequest {
         if runtime.background_services.is_none() {
             runtime.background_services = Some(crate::background_tasks::BackgroundServices::new());
         }
-        // Semantic summarization is off unless a caller asks for it. Turning it
-        // on with persistence meant every ordinary session carried a second
-        // model route and an idle summarization budget for a projection almost
-        // nothing read; structural compaction, which is what actually keeps a
-        // long session inside its budget, is installed separately and is
-        // unaffected.
         Self {
             runtime,
             project_root: project_root.into(),
@@ -441,6 +435,48 @@ impl HostSession {
                 .expect("final cache lifecycle lock poisoned")
                 .clone()
         })
+    }
+
+    /// Requests protected semantic compaction at the current idle boundary.
+    /// Uses the same worker and once-per-interval admission as idle compaction.
+    pub async fn compact(
+        &self,
+    ) -> Result<crate::cache_controller::IdleCompactionOutcome, RuntimeError> {
+        self.compact_with_instructions(None).await
+    }
+
+    /// Requests compaction with instructions used only for this attempt.
+    pub async fn compact_with_instructions(
+        &self,
+        instructions: Option<String>,
+    ) -> Result<crate::cache_controller::IdleCompactionOutcome, RuntimeError> {
+        use crate::cache_controller::IdleCompactionOutcome;
+
+        if instructions
+            .as_ref()
+            .is_some_and(|text| text.trim().is_empty() || text.chars().count() > 8_000)
+        {
+            return Err(RuntimeError::config(
+                "compaction instructions must contain 1 to 8000 characters",
+            ));
+        }
+
+        if self.runtime.policy().semantic_summary.is_none() || self.resume_capsule.is_none() {
+            return Err(RuntimeError::config(
+                "compaction requires a persisted session with semantic summaries and a resume capsule",
+            ));
+        }
+        let request = self
+            .cache_controller
+            .lock()
+            .expect("cache controller lock poisoned")
+            .as_ref()
+            .map(|controller| controller.request_compaction(instructions));
+        match request {
+            Some(Ok(result)) => Ok(result.await.unwrap_or(IdleCompactionOutcome::Shutdown)),
+            Some(Err(outcome)) => Ok(outcome),
+            None => Ok(IdleCompactionOutcome::Shutdown),
+        }
     }
 
     /// Current bounded persistent-goal projection for this eligible root

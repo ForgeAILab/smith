@@ -85,6 +85,8 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("model_sync.enabled", ValueKind::Flag),
     ("model_sync.interval_hours", ValueKind::Integer),
     ("context.cache.maintenance", ValueKind::Text),
+    ("context.compaction.model", ValueKind::Text),
+    ("context.compaction.instructions", ValueKind::Text),
     ("context.cache.inactivity_limit_ms", ValueKind::Integer),
     ("context.cache.max_hold_while_child_ms", ValueKind::Integer),
     ("context.cache.max_maintenance_calls", ValueKind::Integer),
