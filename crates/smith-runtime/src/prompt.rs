@@ -139,25 +139,37 @@ A child needs-input result is informational and does not itself open a user prom
 parent decides whether to invoke its root ask_user capability.";
 
 const DELEGATION: &str = "\
-Delegate only a bounded, concrete subtask when the active profile permits it. Child work \
-inherits narrowed authority and returns through the parent safe boundary. A child that \
-needs user input must return an attributed needs-input result rather than opening a \
-competing prompt. If the parent chooses to ask the user, invoke root ask_user and then send \
-the answer back to that child with an explicit agent follow_up. Reuse a relevant idle child \
-with follow_up so its prior conversation remains available. Use resume only for an interrupted \
-child with an exact compatible checkpoint: resume continues that unfinished turn, while \
-follow_up starts a new turn. Never replace a missing, incompatible, or non-resumable child by \
-silently spawning another one. After spawning, continue independent work or finish your \
-turn and let the session park: completed child outcomes wake you automatically, with \
-readable artifact references for large replies. If you need a deadline, agent wait sets a \
-single-use timer and returns immediately. End your turn; you wake automatically on child \
-completion or the deadline. Timers never repeat on their own. Do not repeatedly poll wait, result, list, \
-or transcript to obtain completion. Use agent action transcript on demand to understand \
-or diagnose a child's committed conversation, following its pages and artifact references \
-when needed. A transcript page is an observation, not a completed task result. Use agent \
-action stop with child_id to stop a child; task_output and task_stop control background \
-shell tasks, not child agents. Describe observed activity and uncertainty accurately; a \
-running status or silence does not establish that a child is thinking or fetching.";
+Delegate only a bounded, concrete subtask, and only when the active profile permits it. A \
+child works with narrower authority than yours and reports to you, not to the user.\n\
+\n\
+While a child runs, do any independent work, then end your response with no further tool \
+calls. Once you say you are waiting, write nothing more in that response. A child's outcome \
+reaches you only as a host message that starts a later turn: a child-completion delivery, \
+or a notice that a wait deadline expired. No delivery follows when agent wait or result \
+already returned the outcome. Never write such a message yourself, never announce a \
+completion you have not received, and never guess what a child found. To be woken at a \
+deadline while a child is still running, call agent wait with timeout_ms: it returns at \
+once and arms one wake-up that never repeats, and then you end your response. Do not call \
+wait, result, list, or transcript again and again to detect completion.\n\
+\n\
+Use an artifact id only by copying it exactly from a tool result or host message in this \
+conversation. Never construct, complete, or predict one. If artifact.read reports that an \
+artifact was not found, the id is wrong; do not retry with another guess. If you lost a \
+child's ids, agent result returns its latest outcome with them.\n\
+\n\
+A running child has no result yet; its status reports progress only. Use agent transcript \
+to diagnose a child, following its pages and artifact references when needed. A transcript \
+page is an observation, not a completed result. Describe what a running child is doing \
+only as far as a tool result shows it.\n\
+\n\
+Reuse an idle child with follow_up so it keeps its conversation. Use resume only for an \
+interrupted child that reports resumable: resume continues its unfinished turn, while \
+follow_up starts a new one. Never silently replace a missing, incompatible, or \
+non-resumable child with a new spawn. A child that needs user input returns a needs_input \
+result instead of asking the user; decide whether to invoke root ask_user, then send the \
+answer to that child with an explicit agent follow_up. Stop a child with agent action stop \
+and its child_id; task_output and task_stop control background shell tasks, not child \
+agents.";
 
 const ADVISOR: &str = "\
 Consult advisor before substantive work, when stuck or when results do not fit, and before \
@@ -472,7 +484,7 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
         (
             "delegation",
             DELEGATION,
-            "smith-prompt-delegation-4",
+            "smith-prompt-delegation-5",
             context.delegation,
         ),
         (
@@ -996,6 +1008,19 @@ mod tests {
         assert_eq!(build.len(), STABLE_SECTION_COUNT);
         assert_eq!(build, head(AgentPosture::Plan, false));
         assert_eq!(build, head(AgentPosture::Review, false));
+    }
+
+    /// Tests and the model both recognize a genuine host delivery by these
+    /// strings, so guidance that quoted one would read as a delivery itself.
+    #[test]
+    fn delegation_guidance_does_not_quote_delivery_sentinels() {
+        for sentinel in [
+            "Protected delegated child outcomes",
+            agent_runtime_core::content::CHILD_COMPLETION_SOURCE_KIND,
+            "delegation.wait-timeout",
+        ] {
+            assert!(!DELEGATION.contains(sentinel), "{sentinel}");
+        }
     }
 
     #[test]

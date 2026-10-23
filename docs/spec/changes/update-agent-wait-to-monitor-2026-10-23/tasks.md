@@ -59,3 +59,21 @@ completed_at:
 
 Full-gate evidence is recorded in [verification.md](verification.md). Task 3.1
 remains open for the catalog-adoption fixture failure in the isolated tree.
+
+## 4. Guidance follow-up (`session-1878584b`)
+
+A gemini-4-argon root wrote "Parking…", then in the same response announced
+child completions it had not received and read about sixty invented artifact
+IDs, all `artifact not found`. Every real ID came from a genuine
+child-completion turn.
+
+- [x] 4.1 Rewrite root delegation guidance: ending a turn means no further tool
+  calls, outcomes arrive only as later host messages, never author or predict
+  them, copy artifact IDs exactly.
+- [x] 4.2 Rewrite the `agent` description around the same rules; `spawn`,
+  queued spawn, and `follow_up` results carry a note saying not to predict
+  the outcome.
+- [x] 4.3 Report a child's `result` only while it is idle, so `list` and
+  `stop` never pair an earlier task's answer with a later state.
+- [x] 4.4 Tests: guidance quotes no delivery sentinel; a running follow-up
+  reports no earlier result.

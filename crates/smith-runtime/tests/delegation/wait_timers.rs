@@ -259,6 +259,31 @@ async fn completion_cancels_the_timer() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_running_follow_up_reports_no_earlier_result() {
+    let f = WaitFixture::new().await;
+    let child = f.spawn().await;
+    f.provider.child_release.add_permits(1);
+    f.settle().await;
+    f.advance(1).await;
+    let finished = f.wait(&child, 0).await;
+    assert_eq!(finished["state"], "idle", "{finished}");
+    assert_eq!(finished["result"], "private child result", "{finished}");
+
+    let sent = f
+        .call(serde_json::json!({"action":"follow_up", "child_id":child, "task":"second task"}))
+        .await;
+    assert_eq!(sent["follow_up_sent"], child.as_str(), "{sent}");
+    assert!(sent["note"].as_str().is_some(), "{sent}");
+    let listed = f.call(serde_json::json!({"action":"list"})).await;
+    assert_eq!(listed["children"][0]["state"], "running", "{listed}");
+    assert!(listed["children"][0]["result"].is_null(), "{listed}");
+    let waited = f.wait(&child, 0).await;
+    assert_eq!(waited["state"], "running", "{waited}");
+    assert!(waited.get("result").is_none(), "{waited}");
+    f.close().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn expiry_during_a_user_turn_waits_for_its_boundary() {
     let f = WaitFixture::new().await;
     let child = f.spawn().await;

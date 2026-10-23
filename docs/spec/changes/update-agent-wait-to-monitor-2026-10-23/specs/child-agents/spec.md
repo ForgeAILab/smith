@@ -182,6 +182,17 @@ diagnosis. It SHALL discourage repeated status/transcript polling and
 repeated re-arming as a way to obtain completion and SHALL distinguish child
 control from shell-task control.
 
+The guidance and the `agent` results that start or re-arm child work SHALL
+tell the model that ending its turn means ending the response with no further
+tool calls, that a child's outcome reaches it only as a host message starting a
+later turn, and that it must never write that message, announce an unreceived
+completion, or guess a child's findings. The guidance SHALL require artifact
+IDs to be copied exactly from a tool result or host message and SHALL say that
+an `artifact not found` error means the ID is wrong, not that another guess
+should be tried. The guidance SHALL NOT quote the host's delivery sentinels
+(the child-completion prefix or internal-turn source kinds), so that those
+strings keep identifying genuine host messages.
+
 #### Scenario: The parent has no independent work remaining
 
 - **GIVEN** a child is still running and no independent parent work remains
@@ -203,6 +214,32 @@ control from shell-task control.
 - **WHEN** Smith describes the available controls
 - **THEN** it names `agent` action `stop` with the child ID
 - **AND** it identifies `task_stop` as a shell-task operation
+
+#### Scenario: The parent announces that it is waiting
+
+- **GIVEN** the parent has spawned or followed up a child and has no
+  independent work
+- **WHEN** Smith presents delegation guidance and the `agent` result
+- **THEN** both direct the parent to end its response with no further tool
+  calls
+- **AND** both forbid writing, predicting, or announcing the child's outcome
+  before a host message delivers it
+
+#### Scenario: The parent reads a child's artifact
+
+- **GIVEN** a child-completion delivery named an artifact ID
+- **WHEN** Smith presents delegation guidance
+- **THEN** the guidance requires that ID to be copied exactly
+- **AND** treats `artifact not found` as a wrong ID rather than a cue to retry
+  with a constructed one
+
+#### Scenario: Delivery sentinels stay unique
+
+- **GIVEN** the root delegation guidance is in the parent's context
+- **WHEN** a provider request is inspected for a child-completion or
+  wait-timeout delivery
+- **THEN** neither the child-completion prefix nor either internal-turn source
+  kind appears in the guidance text
 
 ## ADDED Requirements
 

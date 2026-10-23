@@ -206,9 +206,22 @@ pub(super) fn status_json(status: &ChildStatus) -> Value {
         // state with no reason has to guess, and the guess is usually that it
         // should try the same thing again.
         "error": status.last_error.as_ref().map(|error| error.message.clone()),
-        "result": status.last_result,
+        // Only an idle child's last result answers its latest task. Any other
+        // state keeps an earlier task's answer, which beside `running` reads
+        // as the current task's result.
+        "result": if status.state == ChildState::Idle {
+            status.last_result.as_deref()
+        } else {
+            None
+        },
     })
 }
+
+/// What a started task's result tells the model to do next. A model that is
+/// told only "the result will be delivered" may write the delivery itself.
+const OUTCOME_PENDING_NOTE: &str = "The child's outcome will arrive as a host message in a \
+    later turn. Do any independent work, then end your response. Do not predict, announce, or \
+    write the outcome yourself.";
 
 fn wait_status_json(
     status: &ChildStatus,
@@ -263,6 +276,9 @@ fn task_outcome_json(outcome: &ChildTaskOutcome) -> Value {
             "result": {
                 "text": result.text,
                 "artifacts": result.artifacts,
+                // The stored copy a completion delivery names for a long
+                // reply, so this result and that delivery cite one id.
+                "reply_artifact": result.reply.as_ref().map(|reply| reply.id.as_str()),
             },
         }),
         ChildTaskOutcome::NeedsInput { child, .. } => json!({
@@ -283,44 +299,36 @@ fn task_outcome_json(outcome: &ChildTaskOutcome) -> Value {
 #[async_trait]
 impl Tool for AgentTool {
     fn spec(&self) -> ToolSpec {
+        const ACTIONS: &str = "Delegate a task to a sub-agent (child). Actions: spawn (start a \
+            child with a task; read-only tools unless tools=\"all\"); list (every child's \
+            status); wait (returns immediately; a positive timeout_ms arms one wake-up, five \
+            minutes by default and at most; 0 only reports status); result (the child's latest \
+            completed result); transcript (pages of the child's committed conversation, by \
+            page_size and cursor, for diagnosis; read large entries with artifact.read; reading \
+            does not consume the outcome delivery); follow_up (a new task for an idle child); \
+            resume (continue an interrupted child from its exact checkpoint); stop.";
+        const DELIVERY: &str = "After spawn, follow_up, or wait, do any independent work, then \
+            end your response with no further tool calls. The child's outcome, or an expired \
+            wait deadline, arrives as a host message that starts a later turn; none follows \
+            when wait or result already returned the outcome. Never write that message \
+            yourself or announce a completion you have not received. Copy artifact ids exactly \
+            from tool results or host messages; never invent one. A running child's status \
+            carries no result. Do not call list, wait, result, or transcript repeatedly to \
+            detect completion. A child's needs_input result is informational and does not \
+            open user interface; decide whether to call root ask_user, then send the answer \
+            with an explicit follow_up. Stop a child with agent stop and its child_id; \
+            task_stop and task_output control background shell tasks.";
         let description = if self.profiles.is_empty() {
-            "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
-             read-only tools unless tools=\"all\"), list, wait (returns immediately; sets a single-use wake deadline, five minutes by default and at most; zero \
-             checks status without setting a timer; end your turn to park and you will wake automatically on completion or the deadline), \
-             result, transcript (inspect committed conversation on demand with bounded page_size and cursor; \
-             use artifact.read for complete large entries; diagnostic reads preserve automatic completion), \
-             follow_up (start a new task on an idle child), resume (continue an exact \
-             interrupted checkpoint), stop. A completed child's \
-             result is delivered to you automatically at the next safe point unless wait or \
-             result already returned it to you. Continue independent work or finish your turn and park; \
-             do not poll list, wait, or transcript for completion. Inspect transcripts only when \
-             understanding or diagnosing the child. Stop children with agent stop and child_id; \
-             task_stop and task_output address background shell tasks. A child's \
-             needs_input result is informational and does not open user interface; decide \
-             whether to call root ask_user, then send the answer with an explicit follow_up."
-                .to_owned()
+            format!("{ACTIONS} {DELIVERY}")
         } else {
             format!(
-                "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
-                 read-only tools unless tools=\"all\"), list, wait (returns immediately; sets a single-use wake deadline, five minutes by default and at most; zero \
-                 checks status without setting a timer; end your turn to park and you will wake automatically on completion or the deadline), \
-                 result, transcript (inspect committed conversation on demand with bounded page_size and cursor; \
-                 use artifact.read for complete large entries; diagnostic reads preserve automatic completion), \
-                 follow_up (start a new task on an idle child), resume \
-                 (continue an exact interrupted checkpoint), stop. spawn may name a registered \
-                 child-enabled profile ({}) to run the child on that profile's own preflighted \
-                 provider, model, and posture instead of inheriting the parent's; omitting it \
-                 inherits the parent's profile. A profile whose posture can write still needs \
-                 tools=\"all\" to receive write-capable tools, and a read-only (the default) or \
-                 otherwise declared read-only workspace keeps the child read-only no matter what \
-                 posture or tool scope it asked for. A completed child's result is delivered to \
-                 you automatically at the next safe point unless wait or result already returned \
-                 it to you. Continue independent work or finish your turn and park; do not poll \
-                 list, wait, or transcript for completion. Inspect transcripts only when understanding \
-                 or diagnosing the child. Stop children with agent stop and child_id; task_stop and \
-                 task_output address background shell tasks. A child's needs_input \
-                 result is informational and does not open user interface; decide whether to \
-                 call root ask_user, then send the answer with an explicit follow_up.",
+                "{ACTIONS} spawn may name a registered child-enabled profile ({}) to run the \
+                 child on that profile's own preflighted provider, model, and posture instead of \
+                 inheriting the parent's; omitting it inherits the parent's profile. A profile \
+                 whose posture can write still needs tools=\"all\" to receive write-capable \
+                 tools, and a read-only (the default) or otherwise declared read-only workspace \
+                 keeps the child read-only no matter what posture or tool scope it asked for. \
+                 {DELIVERY}",
                 self.available_profiles_description()
             )
         };
@@ -569,7 +577,7 @@ impl Tool for AgentTool {
                             .task_started(child.as_str(), profile.as_deref());
                         Ok(ToolOutcome::json(json!({
                             "spawned": child.as_str(),
-                            "note": "the result will be delivered when the child completes",
+                            "note": OUTCOME_PENDING_NOTE,
                         })))
                     }
                     Ok(SpawnOutcome::Queued { child }) => {
@@ -577,6 +585,7 @@ impl Tool for AgentTool {
                             .task_started(child.as_str(), profile.as_deref());
                         Ok(ToolOutcome::json(json!({
                             "queued": child.as_str(),
+                            "note": OUTCOME_PENDING_NOTE,
                         })))
                     }
                     Ok(SpawnOutcome::AtCapacity { running, limit }) => {
@@ -680,6 +689,7 @@ impl Tool for AgentTool {
                         self.wait_timers.task_restarted(child.as_str());
                         Ok(ToolOutcome::json(json!({
                             "follow_up_sent": child.as_str(),
+                            "note": OUTCOME_PENDING_NOTE,
                         })))
                     }
                     Err(err) => Ok(ToolOutcome::error(err.message)),
