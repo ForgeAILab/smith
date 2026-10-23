@@ -31,17 +31,12 @@ use zeroize::Zeroizing;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::private_storage::acquire_private_lock_blocking;
-use crate::private_storage::{
-    acquire_private_lock, read_private_bounded, write_private_atomically,
-};
+use crate::private_storage::{acquire_private_lock, read_private, write_private_atomically};
 use crate::resume_capsule::{RESUME_CAPSULE_STATE_NAMESPACE, ResumeCapsuleSlot};
 use crate::session::SessionPaths;
 
 /// Version of Smith's encrypted outer envelope.
 pub const PROTECTED_CHECKPOINT_SCHEMA_VERSION: u32 = 1;
-
-/// Largest exact checkpoint Smith accepts before authenticated encryption.
-pub const MAX_CHECKPOINT_PLAINTEXT_BYTES: usize = 32 * 1024 * 1024;
 
 /// Fixed operating-system credential-service address for the per-user key.
 pub const CHECKPOINT_KEY_SERVICE: &str = "dev.smith-agent.checkpoints";
@@ -56,8 +51,6 @@ const TAG_BYTES: usize = 16;
 const LENGTH_BYTES: usize = 2;
 const FIXED_HEADER_BYTES: usize = MAGIC.len() + 4 + 1 + LENGTH_BYTES + LENGTH_BYTES + NONCE_BYTES;
 const MAX_ID_BYTES: usize = 4 * 1024;
-const MAX_ENVELOPE_BYTES: usize =
-    MAX_CHECKPOINT_PLAINTEXT_BYTES + FIXED_HEADER_BYTES + (MAX_ID_BYTES * 2) + TAG_BYTES;
 const PROTECTED_STATE_DIAGNOSTIC: &str = "protected checkpoint state is unavailable or invalid";
 
 /// A 256-bit checkpoint key retained in zeroizing memory.
@@ -469,7 +462,7 @@ impl SmithCheckpointStore {
         session: &SessionId,
     ) -> Result<Option<TurnCheckpoint>, RuntimeError> {
         let path = self.paths.checkpoint(session)?;
-        let Some(envelope) = read_private_bounded(&path, MAX_ENVELOPE_BYTES).await? else {
+        let Some(envelope) = read_private(&path).await? else {
             return Ok(None);
         };
         let parsed = parse_envelope(&envelope)?;
@@ -489,9 +482,6 @@ impl SmithCheckpointStore {
                 )
                 .map_err(|_| protected_state_error())?,
         );
-        if plaintext.len() > MAX_CHECKPOINT_PLAINTEXT_BYTES {
-            return Err(protected_state_error());
-        }
         let checkpoint: TurnCheckpoint =
             serde_json::from_slice(&plaintext).map_err(|_| protected_state_error())?;
         checkpoint.validate()?;
@@ -507,12 +497,6 @@ impl SmithCheckpointStore {
     fn seal(&self, checkpoint: &TurnCheckpoint) -> Result<Vec<u8>, RuntimeError> {
         let plaintext =
             Zeroizing::new(serde_json::to_vec(checkpoint).map_err(|_| protected_state_error())?);
-        if plaintext.len() > MAX_CHECKPOINT_PLAINTEXT_BYTES {
-            return Err(RuntimeError::new(
-                ErrorKind::Limit,
-                "protected checkpoint exceeds Smith's size limit",
-            ));
-        }
         let nonce = XNonce::try_generate().map_err(|_| CheckpointProtectionError::unavailable())?;
         let header = encode_header(&checkpoint.session, checkpoint.turn.as_str(), &nonce)?;
         let aad = authenticated_data(self.paths.project().as_str(), &header);
@@ -806,7 +790,7 @@ mod tests {
     use agent_runtime::registry::{Fingerprint, RegistryRevision};
     use agent_runtime_core::checkpoint::CheckpointWatermark;
     use agent_runtime_core::clock::{Deadline, Timestamp};
-    use agent_runtime_core::content::UserInput;
+    use agent_runtime_core::content::{ContentPart, Message, UserInput};
     use agent_runtime_core::event::TurnFinish;
     use agent_runtime_core::ids::TurnId;
     use agent_runtime_core::store::{SessionIdentityState, SessionSnapshot};
@@ -1043,6 +1027,43 @@ mod tests {
         let debug = format!("{store:?}");
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("070707"));
+    }
+
+    #[tokio::test]
+    async fn checkpoint_larger_than_32_mib_round_trips_after_reopening() {
+        let root = tempfile::tempdir().unwrap();
+        let writer = store(root.path(), "project-a", [7; KEY_BYTES]).await;
+        let session = SessionId::new("session-a");
+        let input = UserInput::text("continue");
+        let mut snapshot = snapshot(&session);
+        snapshot
+            .history
+            .push(Message::assistant(vec![ContentPart::Image {
+                url: format!("data:image/png;base64,{}", "A".repeat(33 * 1024 * 1024)),
+                detail: Some("high".into()),
+            }]));
+        snapshot.history.push(input.clone().into_message());
+        let checkpoint = TurnCheckpoint::accepted(
+            TurnId::new("turn-a"),
+            input,
+            snapshot,
+            1,
+            Deadline::never(),
+            1,
+            7,
+            Timestamp::ZERO,
+        )
+        .unwrap();
+
+        writer.save(&checkpoint).await.unwrap();
+        let path = writer.paths().checkpoint(&checkpoint.session).unwrap();
+        assert!(tokio::fs::metadata(path).await.unwrap().len() > 32 * 1024 * 1024);
+        drop(writer);
+
+        let reopened = store(root.path(), "project-a", [7; KEY_BYTES]).await;
+        let restored = reopened.load_latest(&checkpoint.session).await.unwrap();
+        assert!(restored.as_ref() == Some(&checkpoint));
+        reopened.save(&checkpoint).await.unwrap();
     }
 
     #[tokio::test]

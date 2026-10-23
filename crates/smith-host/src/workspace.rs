@@ -2,7 +2,8 @@
 //!
 //! The runtime's default is [`DenyAllWorkspace`](agent_runtime_core::workspace::DenyAllWorkspace),
 //! which contains nothing. Smith replaces it with the project root the user
-//! opened — and nothing above it.
+//! opened. Runtime composition can additionally enable host paths, whose
+//! resources must pass the configured approval policy before invocation.
 //!
 //! Canonical strings are retained for authorization displays, but actual I/O
 //! is performed relative to an already-open [`cap_std::fs::Dir`]. The
@@ -29,7 +30,7 @@ const MAX_CAPABILITY_ENTRIES: usize = 100_000;
 /// Stable identity and contents of one completed file read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileVersion {
-    /// Canonical project path used only for diagnostics and attribution.
+    /// Canonical file path used only for diagnostics and attribution.
     pub canonical_path: String,
     /// Device identifier captured from the opened file.
     pub device: u64,
@@ -90,7 +91,7 @@ pub struct CapabilityRead {
 /// One safely enumerated entry below the workspace capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceEntry {
-    /// Project-relative path, using platform path separators.
+    /// Project-relative path, or an absolute path for external entries.
     pub relative_path: PathBuf,
     /// Whether the entry is a directory.
     pub is_dir: bool,
@@ -120,7 +121,9 @@ struct PreservedMetadata {
 pub struct ProjectWorkspace {
     root: PathBuf,
     display: String,
+    capability_root: PathBuf,
     directory: Arc<Dir>,
+    project_directory: Arc<Dir>,
     #[cfg(test)]
     commit_trace: Arc<std::sync::Mutex<Vec<&'static str>>>,
 }
@@ -154,13 +157,36 @@ impl ProjectWorkspace {
             )
         })?;
         let display = canonical.to_string_lossy().into_owned();
+        let directory = Arc::new(directory);
         Ok(Self {
+            capability_root: canonical.clone(),
             root: canonical,
             display,
-            directory: Arc::new(directory),
+            project_directory: directory.clone(),
+            directory,
             #[cfg(test)]
             commit_trace: Arc::new(std::sync::Mutex::new(Vec::new())),
         })
+    }
+
+    /// Enables host paths while keeping relative paths based at the project.
+    /// The caller must authorize external resources before invoking operations.
+    pub fn with_host_access(mut self) -> Result<Self, RuntimeError> {
+        let root = self
+            .root
+            .ancestors()
+            .last()
+            .expect("an absolute project root");
+        let directory = Dir::open_ambient_dir(root, ambient_authority())
+            .map_err(|err| workspace_io("open host filesystem", root, err))?;
+        self.capability_root = root.to_path_buf();
+        self.directory = Arc::new(directory);
+        Ok(self)
+    }
+
+    /// Host capability root when enabled, otherwise the project root.
+    pub fn capability_root(&self) -> &Path {
+        &self.capability_root
     }
 
     /// Recovers Smith's concrete filesystem capability from a runtime
@@ -173,17 +199,16 @@ impl ProjectWorkspace {
     /// path accepted by the open directory capability.
     pub fn relative_path(&self, path: impl AsRef<Path>) -> Result<PathBuf, RuntimeError> {
         let path = path.as_ref();
-        let resolved_absolute;
-        let candidate = if path.is_absolute() {
-            resolved_absolute =
-                self.resolve_lexically(&path.to_string_lossy())
-                    .ok_or_else(|| {
-                        RuntimeError::new(
-                            ErrorKind::Workspace,
-                            format!("path `{}` could not be resolved", path.display()),
-                        )
-                    })?;
-            resolved_absolute.strip_prefix(&self.root).map_err(|_| {
+        // Prepared absolute paths must keep their chosen capability even if
+        // an ancestor is replaced by a symlink before I/O.
+        let resolved_absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        };
+        let candidate = resolved_absolute
+            .strip_prefix(&self.capability_root)
+            .map_err(|_| {
                 RuntimeError::new(
                     ErrorKind::Workspace,
                     format!(
@@ -192,10 +217,7 @@ impl ProjectWorkspace {
                         self.display
                     ),
                 )
-            })?
-        } else {
-            path
-        };
+            })?;
         let mut relative = PathBuf::new();
         for component in candidate.components() {
             match component {
@@ -220,9 +242,17 @@ impl ProjectWorkspace {
         Ok(relative)
     }
 
-    /// Canonical display path for a project-relative capability path.
+    /// Absolute display path for a path relative to the directory capability.
     pub fn display_path(&self, relative: impl AsRef<Path>) -> PathBuf {
-        self.root.join(relative)
+        self.capability_root.join(relative)
+    }
+
+    fn entry_path(&self, relative: &Path) -> PathBuf {
+        let absolute = self.display_path(relative);
+        absolute
+            .strip_prefix(&self.root)
+            .map(Path::to_path_buf)
+            .unwrap_or(absolute)
     }
 
     /// Opens once, checks metadata on that handle, and reads through a strict
@@ -244,8 +274,7 @@ impl ProjectWorkspace {
     ) -> Result<Vec<u8>, RuntimeError> {
         let relative = self.relative_path(path)?;
         let file = self
-            .directory
-            .open(&relative)
+            .open_file(&relative)
             .map_err(|err| workspace_io("open", &self.display_path(&relative), err))?;
         let metadata = file
             .metadata()
@@ -277,7 +306,7 @@ impl ProjectWorkspace {
                 "the project root is a directory, not a regular file",
             ));
         }
-        let file = match self.directory.open(&relative) {
+        let file = match self.open_file(&relative) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
@@ -302,8 +331,7 @@ impl ProjectWorkspace {
             ));
         }
         let file = self
-            .directory
-            .open(relative)
+            .open_file(relative)
             .map_err(|err| workspace_io("open", &self.display_path(relative), err))?;
         self.read_opened(relative, file, max_bytes)
     }
@@ -373,6 +401,9 @@ impl ProjectWorkspace {
             limit.min(MAX_CAPABILITY_ENTRIES),
             &mut entries,
         )?;
+        for entry in &mut entries {
+            entry.relative_path = self.entry_path(&entry.relative_path);
+        }
         Ok(entries)
     }
 
@@ -386,21 +417,20 @@ impl ProjectWorkspace {
                 .dir_metadata()
                 .map_err(|err| workspace_io("inspect", &self.display_path(&relative), err))?;
             return Ok(WorkspaceEntry {
-                relative_path: relative,
+                relative_path: self.entry_path(&relative),
                 is_dir: metadata.is_dir(),
                 is_file: metadata.is_file(),
                 size: Some(metadata.len()),
             });
         }
         let file = self
-            .directory
-            .open(&relative)
+            .open_file(&relative)
             .map_err(|err| workspace_io("open", &self.display_path(&relative), err))?;
         let metadata = file
             .metadata()
             .map_err(|err| workspace_io("inspect", &self.display_path(&relative), err))?;
         Ok(WorkspaceEntry {
-            relative_path: relative,
+            relative_path: self.entry_path(&relative),
             is_dir: metadata.is_dir(),
             is_file: metadata.is_file(),
             size: Some(metadata.len()),
@@ -562,10 +592,29 @@ impl ProjectWorkspace {
     }
 
     fn open_directory(&self, relative: &Path) -> std::io::Result<Dir> {
+        let absolute = self.display_path(relative);
+        let (directory, relative) = self.directory_for(&absolute, relative);
         if relative.as_os_str().is_empty() {
-            self.directory.try_clone()
+            directory.try_clone()
         } else {
-            self.directory.open_dir(relative)
+            directory.open_dir(relative)
+        }
+    }
+
+    fn open_file(&self, relative: &Path) -> std::io::Result<cap_std::fs::File> {
+        let absolute = self.display_path(relative);
+        let (directory, relative) = self.directory_for(&absolute, relative);
+        directory.open(if relative.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            relative
+        })
+    }
+
+    fn directory_for<'a>(&'a self, absolute: &'a Path, relative: &'a Path) -> (&'a Dir, &'a Path) {
+        match absolute.strip_prefix(&self.root) {
+            Ok(project_relative) => (&self.project_directory, project_relative),
+            Err(_) => (&self.directory, relative),
         }
     }
 
@@ -955,7 +1004,7 @@ impl Workspace for ProjectWorkspace {
 
     fn contains(&self, path: &str) -> bool {
         self.resolve_lexically(path)
-            .is_some_and(|resolved| resolved.starts_with(&self.root))
+            .is_some_and(|resolved| resolved.starts_with(&self.capability_root))
     }
 
     fn resolve(&self, path: &str) -> Result<String, RuntimeError> {
@@ -965,7 +1014,7 @@ impl Workspace for ProjectWorkspace {
                 format!("path `{path}` could not be resolved"),
             )
         })?;
-        if resolved.starts_with(&self.root) {
+        if resolved.starts_with(&self.capability_root) {
             Ok(resolved.to_string_lossy().into_owned())
         } else {
             Err(RuntimeError::new(
@@ -1047,14 +1096,17 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let (dir, workspace) = project();
+        let host_workspace = workspace.clone().with_host_access().unwrap();
         let outside = tempfile::tempdir().expect("outside");
         std::fs::write(outside.path().join("secret.txt"), "outside").expect("secret");
         std::fs::rename(dir.path().join("src"), dir.path().join("src-old")).expect("swap old");
         symlink(outside.path(), dir.path().join("src")).expect("swap symlink");
 
-        assert!(workspace.read_bounded("src/secret.txt", 1024).is_err());
-        assert!(workspace.entries("src", true, true, 100).is_err());
-        assert!(workspace.create_new("src/created.txt", b"no").is_err());
+        for workspace in [workspace, host_workspace] {
+            assert!(workspace.read_bounded("src/secret.txt", 1024).is_err());
+            assert!(workspace.entries("src", true, true, 100).is_err());
+            assert!(workspace.create_new("src/created.txt", b"no").is_err());
+        }
         assert!(!outside.path().join("created.txt").exists());
     }
 

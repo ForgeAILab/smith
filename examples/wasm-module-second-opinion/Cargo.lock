@@ -167,14 +167,14 @@ dependencies = [
 
 [[package]]
 name = "smith-module-sdk"
-version = "0.7.9"
+version = "0.7.10"
 dependencies = [
  "wit-bindgen",
 ]
 
 [[package]]
 name = "smith-wasm-module-second-opinion"
-version = "0.7.9"
+version = "0.7.10"
 dependencies = [
  "serde_json",
  "smith-module-sdk",

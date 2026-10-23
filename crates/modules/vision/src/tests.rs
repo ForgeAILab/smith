@@ -20,6 +20,73 @@ use smith_module::{ModulePosture, SessionHistory, VisionBinding, VisionUsageReco
 
 use super::*;
 
+#[tokio::test]
+async fn external_image_path_reaches_the_vision_provider_after_preparation() {
+    use agent_runtime_core::tool::InvocationContext;
+    use base64::Engine as _;
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let path = outside.path().join("reference.png");
+    image::RgbImage::new(7, 5).save(&path).unwrap();
+    let expected = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(std::fs::read(&path).unwrap())
+    );
+    let workspace = Arc::new(
+        smith_host::ProjectWorkspace::new(root.path())
+            .unwrap()
+            .with_host_access()
+            .unwrap(),
+    );
+    let preparation = PreparationContext {
+        session: SessionId::new("s"),
+        turn: None,
+        call_id: ToolCallId::new("c"),
+        request: RequestId::new("r"),
+        workspace: workspace.clone(),
+        clock: Arc::new(SystemClock),
+        cancel: Cancellation::new(),
+        deadline: Deadline::never(),
+    };
+    let fake = Arc::new(agent_runtime::provider::fake::FakeProvider::text_reply(
+        "a reference image",
+    ));
+    let mut binding = context().vision.unwrap();
+    binding.provider = fake.clone();
+    let tool = tool::ViewImageTool {
+        binding,
+        history: Arc::new(History),
+        generated_dir: root.path().join("generated"),
+    };
+    let prepared = tool
+        .prepare(
+            json!({"path":path,"question":"What is visible?"}),
+            &preparation,
+        )
+        .await
+        .unwrap();
+    let ctx = InvocationContext {
+        session: preparation.session,
+        turn: preparation.turn,
+        call_id: preparation.call_id,
+        request: preparation.request,
+        workspace,
+        clock: preparation.clock,
+        cancel: preparation.cancel,
+        deadline: preparation.deadline,
+        output_limit: 32_000,
+    };
+    let result = tool.invoke(prepared, &ctx).await.unwrap();
+    assert!(!result.is_error, "{result:?}");
+    assert!(
+        fake.requests()[0]
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|part| matches!(part, ContentPart::Image { url, .. } if url == &expected))
+    );
+}
+
 #[derive(Debug, Default)]
 struct Usage(Mutex<Vec<UsageRecord>>);
 impl VisionUsageRecorder for Usage {

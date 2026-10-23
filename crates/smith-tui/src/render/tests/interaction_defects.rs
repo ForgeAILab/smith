@@ -1,6 +1,27 @@
 // Action-specific confirmation copy and prepared-action rendering.
 
 #[test]
+fn questions_show_other_and_discussion_actions_and_keep_discussion_usable_when_narrow() {
+    let mut app = App::new("fake", "~/project");
+    app.present_questionnaire(QuestionnaireForm::new("q", vec![
+        QuestionnaireQuestion::new("choice", "Direction", "Which direction?", vec![QuestionnaireChoice::new("a", "Option A")]).with_free_form(false)
+    ], Deadline::never()).unwrap());
+    app.settle_prompt_input();
+    let screen = render(&app, 74, 24, Theme::new().without_color());
+    assert!(screen.contains("Other · Type an answer"), "{screen}");
+    assert!(screen.contains("Chat about this question"), "{screen}");
+    app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    app.on_paste("Can you explain the tradeoffs?");
+    for (width, height) in [(74, 24), (MIN_WIDTH, MIN_HEIGHT)] {
+        let screen = render(&app, width, height, Theme::new().without_color());
+        assert!(screen.contains("enter send message"), "{screen}");
+        assert!(screen.contains("esc back"), "{screen}");
+        assert!(screen.lines().all(|line| line.width() <= usize::from(width)), "{screen}");
+    }
+}
+
+#[test]
 fn redo_confirmation_body_and_hint_offer_applying_the_redo() {
     let mut app = App::new("gpt-5.3", "~/work/api");
     app.confirm_redo(recovery_preview("--- before\n+++ after\n-old\n+new"));

@@ -188,12 +188,13 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     let mut harness_identity = resolved.identity;
     let mut harness_modules = resolved.modules;
     let mut harness_report = resolved.report;
-    let request = resolved.request;
+    let mut request = resolved.request;
     // Host policy first. It costs nothing to check and everything to get wrong,
     // and failing here means a misconfigured run never reaches a keychain.
     let authority = authority::prepare(&request)?;
     let workspace = authority.workspace;
     let approval = authority.approval;
+    request.workspace = Some(workspace.clone());
     let PreparedFactoryInputs {
         provider_name,
         provider_kind,

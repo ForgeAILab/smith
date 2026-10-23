@@ -25,5 +25,6 @@ sha2 = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+image = { workspace = true }
 agent-runtime-testkit = { workspace = true }
 tempfile = { workspace = true }

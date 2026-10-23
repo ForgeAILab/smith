@@ -316,15 +316,16 @@ async fn workspace_image_is_read_and_sent_after_approval() {
 }
 
 #[tokio::test]
-async fn compacted_id_and_outside_path_make_no_vision_request() {
+async fn compacted_id_and_missing_external_path_make_no_vision_request() {
+    let external = tempfile::tempdir().unwrap();
     for (args, expected) in [
         (
             json!({"image":image_id(),"question":"Where is Save?"}),
             "is no longer in session history",
         ),
         (
-            json!({"path":"/etc/hosts.png","question":"Where is Save?"}),
-            "image reference",
+            json!({"path":external.path().join("missing.png"),"question":"Where is Save?"}),
+            "cannot open",
         ),
     ] {
         let fixture = Fixture::new(CONFIG);

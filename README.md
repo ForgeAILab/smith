@@ -617,6 +617,9 @@ for the complete stdout, schema, redaction, and exit contract.
 `--yolo` is the explicit shorthand for `--approval allow-all`; it never adds
 tools removed by a read-only profile, so `smith --profile plan --yolo` remains
 read-only.
+Filesystem tools can also access paths outside the project after permission.
+`--yolo` grants that permission automatically. Relative paths still start at
+the project, and reading an image returns image content to a model that accepts it.
 Repository-controlled config cannot set `allow-all` or add `[[approval.auto]]`
 grants merely by being opened; those authority-bearing choices must come from
 user config or an explicit command-line policy. Legacy non-empty

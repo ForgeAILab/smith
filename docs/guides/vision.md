@@ -51,6 +51,8 @@ vision = false
 
 - A main model that accepts images does not need this; `vision` is then
   inactive and images are sent directly.
+- Image paths outside the project request permission. `--yolo` grants it
+  automatically, so reference images can be read without copying them into the project.
 - `view_image` calls go through approval, because image bytes leave the
   machine.
 - Read-only postures keep `view_image` while `vision` is listed in

@@ -27,11 +27,9 @@ const INSTRUCTION_CEILING: u32 = 700;
 /// The default coding tool schemas, in tokens.
 ///
 /// Names, descriptions, and complete input schemas for `read`, `list`,
-/// `search`, `edit`, `shell`, `task_output`, and `task_stop`. Raised from 950
-/// when background shell tasks added the latter two tools and `shell` grew
-/// its `run_in_background` option — a deliberate, reviewed increase, not
-/// drift.
-const TOOL_CEILING: u32 = 1_350;
+/// `search`, `edit`, `shell`, `task_output`, and `task_stop`. Includes the
+/// external-path and YOLO permission guidance added in 0.7.10.
+const TOOL_CEILING: u32 = 1_400;
 
 /// Instructions plus tools: the floor of any Smith request.
 const BASE_CEILING: u32 = 1_950;

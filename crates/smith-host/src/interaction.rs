@@ -123,6 +123,16 @@ impl InteractionPrompt {
         self.respond(InteractionResponse::declined(request_id))
     }
 
+    /// Declines a choice so the user's discussion can continue as ordinary input.
+    pub fn discuss(self, text: &str) -> Result<(), RuntimeError> {
+        if self.request.sensitivity() == InteractionSensitivity::Sensitive
+            && let Some(sink) = &self.shared.sensitive_values
+        {
+            sink.register_sensitive_value(text);
+        }
+        self.decline()
+    }
+
     /// Cancels the request from the presentation surface.
     pub fn cancel(self) -> Result<(), RuntimeError> {
         let request_id = self.request.id().clone();

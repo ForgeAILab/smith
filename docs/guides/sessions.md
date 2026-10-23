@@ -16,6 +16,11 @@ Smith saves each session per project under `~/.smith/sessions`, unless
 When a session has a pending approval or question, resume it interactively
 so the user can answer.
 
+For an agent question, choose an option or use **Other · Type an answer**.
+Choose **Chat about this question** to ask for an explanation before deciding.
+Type a message and press Enter to send it; Escape returns to the question and
+keeps staged answers. Discussion does not select an answer or approve tools.
+
 ## Undo changes
 
 The user types these:

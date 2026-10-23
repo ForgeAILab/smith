@@ -435,9 +435,11 @@ fn bridge_questions_answer_round_trip_and_cancellation_in_both_dialects() {
             let (mut process, recorded, mut groups) = host(&fixture, &script);
             let prompt = next_type(&mut process, "question");
             groups.capture(&fixture.cleanup);
+            let mut expected_questions = arguments["questions"].clone();
+            expected_questions[0]["allow_free_form"] = json!(true);
             assert_eq!(
-                prompt["questions"], arguments["questions"],
-                "broker must receive the exact text and options"
+                prompt["questions"], expected_questions,
+                "broker must preserve question text and options while enabling custom answers"
             );
             let waiting = record(&recorded);
             assert_eq!(

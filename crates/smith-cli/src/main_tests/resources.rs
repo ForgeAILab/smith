@@ -1178,6 +1178,31 @@ fn installed_agent_models_render_once_and_their_profiles_stay_selectable() {
         .find(|entry| entry.id == "cc")
         .expect("the cc profile row");
     assert!(cc.disabled_reason.is_none(), "{:?}", cc.disabled_reason);
+    assert!(
+        cc.detail
+            .contains("use main+child · cli/claude-code/sonnet ·"),
+        "{}",
+        cc.detail
+    );
+    assert!(!cc.detail.contains("local/cli/"), "{}", cc.detail);
+    let child = resources
+        .child_agents
+        .iter()
+        .find(|entry| entry.id == "agent:cc")
+        .unwrap();
+    assert!(
+        child.detail.contains("cli/claude-code/sonnet"),
+        "{}",
+        child.detail
+    );
+    assert!(!child.detail.contains("local/cli/"), "{}", child.detail);
+    assert!(child.detail.contains("ctx 200k"), "{}", child.detail);
+    let advisor = resources
+        .advisors
+        .iter()
+        .find(|entry| entry.id == "cc")
+        .unwrap();
+    assert_eq!(advisor.detail, "cli/claude-code/sonnet");
     let sonnet = resources
         .models
         .iter()

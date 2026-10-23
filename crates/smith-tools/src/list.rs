@@ -42,7 +42,7 @@ impl Tool for ListTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Directory to list inside the project root. Defaults to the root. Outside paths are refused."
+                        "description": "Directory to list, relative to the project or absolute. Defaults to the project root. External paths require permission, granted automatically in allow-all/YOLO runs."
                     },
                     "recursive": {
                         "type": "boolean",

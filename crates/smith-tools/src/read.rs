@@ -49,14 +49,14 @@ impl Tool for ReadTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "read",
-            "Read a project file: line-numbered text or the image itself. \
+            "Read a file: line-numbered text or the image itself. \
              Use `offset`/`limit` for part of a large text file.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the file inside the project root. Outside paths are refused; use the explicitly approved host shell for host access."
+                        "description": "File path, relative to the project or absolute. External paths require permission, granted automatically in allow-all/YOLO runs."
                     },
                     "offset": {
                         "type": "integer",

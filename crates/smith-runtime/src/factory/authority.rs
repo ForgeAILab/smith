@@ -18,7 +18,7 @@ pub(super) fn prepare(request: &RuntimeRequest) -> Result<Stage, FactoryError> {
 pub(super) fn require_workspace(
     request: &RuntimeRequest,
 ) -> Result<Arc<dyn Workspace>, FactoryError> {
-    request
+    let workspace = request
         .workspace
         .clone()
         .ok_or_else(|| FactoryError::MissingHostPolicy {
@@ -26,7 +26,16 @@ pub(super) fn require_workspace(
             message: "tools resolve every path through it, so a run without one could only \
                       deny each call with no explanation"
                 .to_owned(),
-        })
+        })?;
+    if let Some(project) = smith_host::ProjectWorkspace::from_workspace(workspace.as_ref()) {
+        return Ok(Arc::new(
+            project
+                .clone()
+                .with_host_access()
+                .map_err(FactoryError::Runtime)?,
+        ));
+    }
+    Ok(workspace)
 }
 
 /// Chooses the approval policy.

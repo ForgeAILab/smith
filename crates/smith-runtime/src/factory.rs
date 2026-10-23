@@ -63,7 +63,7 @@ use agent_runtime::context::{
     CompactionPolicy, ContextBudget, ContextPolicy, ProviderCacheCapability, StructuralCompactor,
 };
 use agent_runtime::harness::{
-    CreateGoalTool, GetGoalTool, GoalComponent, MemoryContributor, MemorySource, QuestionnaireTool,
+    CreateGoalTool, GetGoalTool, GoalComponent, MemoryContributor, MemorySource,
     SemanticSummaryCoordinator, SummaryModel, TodoComponent, UpdateGoalTool, WriteTodosTool,
 };
 use agent_runtime::hub::{ScopeIdentity, ScopeInputs};

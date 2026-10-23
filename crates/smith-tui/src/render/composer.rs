@@ -470,6 +470,9 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
             })
         }
         Some(Overlay::Questionnaire { state }) => {
+            if state.is_discussing() {
+                return Some("enter send message · esc back to question".to_owned());
+            }
             let enter = if state.is_review() {
                 "enter confirm"
             } else if state.has_review() {

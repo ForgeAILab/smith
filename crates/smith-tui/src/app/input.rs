@@ -576,8 +576,27 @@ impl App {
         if let Some(resolution) = resolution
             && let Some(Overlay::Questionnaire { state }) = self.overlay.take()
         {
+            let discussion = match &resolution {
+                QuestionnaireResolution::Discuss(text) => Some(text.clone()),
+                _ => None,
+            };
             self.resolve_questionnaire(state, resolution);
             self.present_next_prompt();
+            if let Some(text) = discussion {
+                let prompt =
+                    format!("Before choosing an answer, I want to discuss your question: {text}");
+                let target = if self.is_busy() {
+                    SubmissionTarget::Steer {
+                        expected_turn: self.live_turn.active_turn.clone(),
+                    }
+                } else {
+                    SubmissionTarget::WholeTurn
+                };
+                return Some(Action::Submit {
+                    submission: PreparedSubmission::from_file_command(text, prompt),
+                    target,
+                });
+            }
         }
         None
     }

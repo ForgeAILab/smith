@@ -107,7 +107,7 @@ impl Tool for EditTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to a file inside the project root. Outside paths are refused; use the explicitly approved host shell for host access."
+                        "description": "File path, relative to the project or absolute. External paths require permission, granted automatically in allow-all/YOLO runs."
                     },
                     "operation": {
                         "type": "string",
@@ -187,9 +187,13 @@ impl Tool for EditTool {
             EditOperation::Create => [Permission::FsCreate, Permission::FsWrite]
                 .into_iter()
                 .collect(),
-            EditOperation::Delete => [Permission::FsRead, Permission::FsDelete]
-                .into_iter()
-                .collect(),
+            EditOperation::Delete => [
+                Permission::FsRead,
+                Permission::FsWrite,
+                Permission::FsDelete,
+            ]
+            .into_iter()
+            .collect(),
             EditOperation::Replace | EditOperation::Overwrite => {
                 [Permission::FsRead, Permission::FsWrite]
                     .into_iter()
@@ -464,7 +468,11 @@ mod tests {
             ),
             (
                 json!({"path": "a.rs", "operation": "delete"}),
-                vec![Permission::FsRead, Permission::FsDelete],
+                vec![
+                    Permission::FsRead,
+                    Permission::FsWrite,
+                    Permission::FsDelete,
+                ],
             ),
         ] {
             let call = prepared(arguments.clone(), &ctx)

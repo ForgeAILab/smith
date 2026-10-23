@@ -48,7 +48,7 @@ impl Tool for ViewImageTool {
         // oneOf/allOf/anyOf in tool input schemas.
         ToolSpec::new(
             "view_image",
-            "Ask the vision model one question about one image. Inspect an [image <id>: ...] placeholder in the conversation by passing <id> as `image`, or pass a workspace or generated-image `path`. Supply exactly one of `image` or `path`.",
+            "Ask the vision model one question about one image. Inspect an [image <id>: ...] placeholder in the conversation by passing <id> as `image`, or pass a file `path` (external paths require permission). Supply exactly one of `image` or `path`.",
             json!({
                 "type": "object",
                 "properties": {

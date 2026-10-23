@@ -131,57 +131,89 @@ fn questionnaire_lines(
             ]));
         }
         lines.extend(prompt.map(|text| heading(&text, theme)));
-        for (index, choice) in question.choices.iter().enumerate() {
-            let selected = state.cursor() == index;
-            if selected {
-                focus = lines.len();
-            }
-            let staged = state.staged_choice() == Some(choice.id.as_str());
-            lines.push(choice_row(index, &choice.label, selected, staged, theme));
-            if let Some(description) = &choice.description {
-                lines.extend(
-                    wrap_text(description, text_width.saturating_sub(5))
-                        .into_iter()
-                        .map(|text| {
-                            Line::from(Span::styled(
-                                format!("{INDENT}     {text}"),
-                                theme.style(Tone::Dim),
-                            ))
-                        }),
-                );
-            }
-        }
-        if question.allows_free_form {
-            let selected = state.on_free_form_row();
-            if selected {
-                focus = lines.len();
-            }
+        if state.is_discussing() {
+            lines.push(heading("Chat about this question", theme));
             let draft = state.displayed_draft();
-            let mut row = choice_row(question.choices.len(), "", selected, false, theme);
-            row.spans.pop();
-            if draft.is_empty() {
-                row.spans.push(Span::styled(
-                    "Type something.",
-                    theme.style(if selected { Tone::Accent } else { Tone::Dim }),
-                ));
+            let text = if draft.is_empty() {
+                "Type your message…"
             } else {
-                row.spans.push(Span::styled(
-                    draft,
-                    theme.style(if selected {
-                        Tone::Accent
-                    } else {
-                        Tone::Default
-                    }),
-                ));
-                if question.sensitive {
-                    row.spans
-                        .push(Span::styled(" (masked)", theme.style(Tone::Dim)));
+                &draft
+            };
+            for text in wrap_text(text, text_width) {
+                lines.push(Line::from(Span::styled(
+                    format!("{INDENT}{text}"),
+                    theme.style(Tone::Accent),
+                )));
+            }
+            focus = lines.len();
+            lines.push(Line::from(Span::styled(
+                format!("{INDENT}enter send message · esc back"),
+                theme.style(Tone::Dim),
+            )));
+        } else {
+            for (index, choice) in question.choices.iter().enumerate() {
+                let selected = state.cursor() == index;
+                if selected {
+                    focus = lines.len();
+                }
+                let staged = state.staged_choice() == Some(choice.id.as_str());
+                lines.push(choice_row(index, &choice.label, selected, staged, theme));
+                if let Some(description) = &choice.description {
+                    lines.extend(
+                        wrap_text(description, text_width.saturating_sub(5))
+                            .into_iter()
+                            .map(|text| {
+                                Line::from(Span::styled(
+                                    format!("{INDENT}     {text}"),
+                                    theme.style(Tone::Dim),
+                                ))
+                            }),
+                    );
                 }
             }
-            if selected {
-                row.spans.push(Span::styled("▏", theme.style(Tone::Accent)));
+            if question.allows_free_form {
+                let selected = state.on_free_form_row();
+                if selected {
+                    focus = lines.len();
+                }
+                let draft = state.displayed_draft();
+                let mut row = choice_row(question.choices.len(), "", selected, false, theme);
+                row.spans.pop();
+                if draft.is_empty() {
+                    row.spans.push(Span::styled(
+                        "Other · Type an answer",
+                        theme.style(if selected { Tone::Accent } else { Tone::Dim }),
+                    ));
+                } else {
+                    row.spans.push(Span::styled(
+                        draft,
+                        theme.style(if selected {
+                            Tone::Accent
+                        } else {
+                            Tone::Default
+                        }),
+                    ));
+                    if question.sensitive {
+                        row.spans
+                            .push(Span::styled(" (masked)", theme.style(Tone::Dim)));
+                    }
+                }
+                if selected {
+                    row.spans.push(Span::styled("▏", theme.style(Tone::Accent)));
+                }
+                lines.push(row);
             }
-            lines.push(row);
+            let index = question.choices.len() + usize::from(question.allows_free_form);
+            if state.on_discussion_row() {
+                focus = lines.len();
+            }
+            lines.push(choice_row(
+                index,
+                "Chat about this question",
+                state.on_discussion_row(),
+                false,
+                theme,
+            ));
         }
     }
 

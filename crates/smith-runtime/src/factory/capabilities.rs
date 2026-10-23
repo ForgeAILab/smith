@@ -144,7 +144,7 @@ pub(super) fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
         tools.retain(|tool| tool.spec().effects.is_read_only());
     }
     if questionnaire_eligible(request) {
-        tools.push(Arc::new(QuestionnaireTool::new()));
+        tools.push(Arc::new(crate::questionnaire::SmithQuestionnaireTool));
     }
     if let Some(store) = request.artifact_store.clone() {
         tools.push(Arc::new(

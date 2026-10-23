@@ -376,9 +376,11 @@ pub fn resolve_reference_path(
     let raw_path = expand_generated_tilde(raw, generated_root);
     if raw_path.is_absolute() {
         let workspace_root = Path::new(ctx.workspace.root());
-        if raw_path.starts_with(workspace_root) {
-            let relative = workspace.relative_path(&raw_path)?;
-            return Ok(workspace.display_path(relative));
+        if raw_path.starts_with(workspace_root) || workspace.capability_root() != workspace_root {
+            return ctx
+                .workspace
+                .resolve(&raw_path.to_string_lossy())
+                .map(PathBuf::from);
         }
         let canonical = raw_path.canonicalize().map_err(|_| {
             RuntimeError::new(ErrorKind::Workspace, "image reference path does not exist")
@@ -437,7 +439,9 @@ pub fn read_reference(
     generated_root: &Path,
 ) -> Result<Vec<u8>, RuntimeError> {
     let path = Path::new(path);
-    if path.starts_with(workspace.root()) {
+    if path.starts_with(workspace.root())
+        || workspace.capability_root() != Path::new(workspace.root())
+    {
         let read = workspace.read_bounded(path, MAX_REFERENCE_BYTES)?;
         return Ok(read.bytes);
     }

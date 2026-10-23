@@ -1485,4 +1485,5 @@ fn web() -> smith_config::resolve::ResolvedWeb {
 
 mod web_policy;
 
+mod host_filesystem;
 mod image_input;

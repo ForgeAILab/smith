@@ -61,10 +61,10 @@ shutdown.
 Headless `ask` cannot wait for a user and exits 4 with redaction-safe prepared
 metadata. `allow-all` is appropriate only inside an already isolated and
 trusted automation boundary. The explicit `--yolo` alias selects that same
-approval mode; it bypasses approval prompts — including the prompts that gate
-host-shell execution — but does not bypass authorization, ordinary-tool
-workspace containment, or profile capability narrowing. In particular, a
-`plan` profile remains read-only under `--yolo`.
+approval mode; it bypasses approval prompts for host-shell execution and
+external filesystem resources. Tool authorization and profile capability
+restrictions remain enforced. Relative filesystem paths still resolve from
+the project, and a `plan` profile remains read-only under `--yolo`.
 
 ## Repository and configuration attacks
 

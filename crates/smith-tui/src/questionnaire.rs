@@ -302,6 +302,8 @@ impl fmt::Debug for QuestionnaireAnswerValue {
 pub enum QuestionnaireResolution {
     /// Every staged answer, in question order.
     Submitted(Vec<QuestionnaireAnswer>),
+    /// Return to the agent with a user-authored discussion message, without choosing an answer.
+    Discuss(String),
     /// The user explicitly declined to answer.
     Declined,
     /// The active turn or user cancelled the interaction.
@@ -318,6 +320,9 @@ impl fmt::Debug for QuestionnaireResolution {
                 .field("answer_count", &answers.len())
                 .finish(),
             Self::Declined => formatter.write_str("QuestionnaireResolution::Declined"),
+            Self::Discuss(_) => {
+                formatter.write_str("QuestionnaireResolution::Discuss([protected])")
+            }
             Self::Cancelled => formatter.write_str("QuestionnaireResolution::Cancelled"),
             Self::TimedOut => formatter.write_str("QuestionnaireResolution::TimedOut"),
         }
@@ -326,11 +331,9 @@ impl fmt::Debug for QuestionnaireResolution {
 
 /// Pure reducer state for one questionnaire.
 ///
-/// Mirrors Claude Code's question picker: one question per tab, a list whose
-/// last row (when allowed) is a free-form "Type something" field, Enter or a
-/// number picks the highlighted row and moves on, and a multi-question form
-/// ends on a review tab that submits or declines. A single question submits
-/// as soon as it is answered.
+/// One question per tab, with numbered choices, custom input, and a discussion
+/// action. Multi-question forms end on a review tab that submits or declines;
+/// a single question submits as soon as it is answered.
 pub struct QuestionnaireState {
     form: QuestionnaireForm,
     /// Visible tab; `questions.len()` is the review tab.
@@ -340,6 +343,8 @@ pub struct QuestionnaireState {
     staged: BTreeMap<String, QuestionnaireAnswerValue>,
     drafts: BTreeMap<String, Composer>,
     error: Option<String>,
+    discussing: bool,
+    discussions: BTreeMap<String, Composer>,
 }
 
 impl fmt::Debug for QuestionnaireState {
@@ -368,6 +373,8 @@ impl QuestionnaireState {
             staged: BTreeMap::new(),
             drafts: BTreeMap::new(),
             error: None,
+            discussing: false,
+            discussions: BTreeMap::new(),
         }
     }
 
@@ -408,6 +415,18 @@ impl QuestionnaireState {
             && self.cursor() == self.question().choices.len()
     }
 
+    /// Whether the user is composing a discussion message instead of an answer.
+    pub fn is_discussing(&self) -> bool {
+        self.discussing
+    }
+
+    /// Whether the highlighted action opens discussion of the current question.
+    pub fn on_discussion_row(&self) -> bool {
+        !self.is_review()
+            && self.cursor()
+                == self.question().choices.len() + usize::from(self.question().allows_free_form)
+    }
+
     /// Local validation error shown inside the overlay.
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
@@ -423,7 +442,12 @@ impl QuestionnaireState {
 
     /// The current free-form draft, masked when sensitive.
     pub fn displayed_draft(&self) -> String {
-        let Some(draft) = self.drafts.get(&self.question().id) else {
+        let draft = if self.discussing {
+            self.discussions.get(&self.question().id)
+        } else {
+            self.drafts.get(&self.question().id)
+        };
+        let Some(draft) = draft else {
             return String::new();
         };
         if self.question().sensitive {
@@ -462,7 +486,7 @@ impl QuestionnaireState {
         if self.is_review() {
             REVIEW_ROWS.len()
         } else {
-            self.question().choices.len() + usize::from(self.question().allows_free_form)
+            self.question().choices.len() + usize::from(self.question().allows_free_form) + 1
         }
     }
 
@@ -474,7 +498,31 @@ impl QuestionnaireState {
         let plain = !key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
-        let editing = self.on_free_form_row();
+        let editing = self.on_free_form_row() || self.discussing;
+        if self.discussing {
+            match key.code {
+                KeyCode::Esc => {
+                    self.discussing = false;
+                    self.error = None;
+                }
+                KeyCode::Enter => {
+                    let text = self
+                        .discussions
+                        .get(&self.question().id)
+                        .map(Composer::text)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_owned();
+                    if text.trim().is_empty() {
+                        self.error = Some("type a message first".into());
+                    } else {
+                        return Some(QuestionnaireResolution::Discuss(text));
+                    }
+                }
+                _ => self.edit_draft(key, plain),
+            }
+            return None;
+        }
         match key.code {
             KeyCode::Esc => return Some(QuestionnaireResolution::Cancelled),
             KeyCode::Up => self.move_cursor(false),
@@ -568,6 +616,11 @@ impl QuestionnaireState {
                 Some(QuestionnaireResolution::Declined)
             };
         }
+        if self.on_discussion_row() {
+            self.discussing = true;
+            self.error = None;
+            return None;
+        }
         if self.on_free_form_row() {
             self.stage_draft();
             if !self.is_answered(self.current) {
@@ -611,10 +664,12 @@ impl QuestionnaireState {
     /// Digits and spaces in a paste are draft characters, never choice
     /// shortcuts — only deliberate key presses select answers.
     pub fn paste(&mut self, text: &str) {
-        if !self.question_allows_typing() {
+        if !self.discussing && !self.question_allows_typing() {
             return;
         }
-        self.cursors[self.current] = self.question().choices.len();
+        if !self.discussing {
+            self.cursors[self.current] = self.question().choices.len();
+        }
         let mut pending_space = false;
         for character in text.chars() {
             if character.is_whitespace() {
@@ -633,12 +688,19 @@ impl QuestionnaireState {
 
     fn draft_mut(&mut self) -> &mut Composer {
         let question = self.question().id.clone();
+        if self.discussing {
+            return self.discussions.entry(question).or_default();
+        }
         self.drafts.entry(question).or_default()
     }
 
     /// Mirrors the draft into the staged answer. Clearing the draft only
     /// withdraws a free-form answer; a picked choice survives it.
     fn stage_draft(&mut self) {
+        if self.discussing {
+            self.error = None;
+            return;
+        }
         let question_id = self.question().id.clone();
         let value = self
             .drafts
@@ -687,6 +749,29 @@ impl QuestionnaireState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discussion_preserves_answers_and_can_return_to_the_question() {
+        let mut state = QuestionnaireState::new(single(true));
+        state.paste("a custom answer");
+        state.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(state.is_discussing());
+        assert!(
+            state
+                .on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_none()
+        );
+        assert!(state.error().is_some());
+        state.paste("What are the tradeoffs?");
+        state.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!state.is_discussing());
+        assert_eq!(state.answer_text(0).as_deref(), Some("a custom answer"));
+        state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Some(QuestionnaireResolution::Discuss(text)) if text == "What are the tradeoffs?")
+        );
+    }
 
     fn choice(id: &str, label: &str) -> QuestionnaireChoice {
         QuestionnaireChoice::new(id, label)

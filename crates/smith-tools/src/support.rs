@@ -5,8 +5,8 @@
 //!
 //! - **Every path goes through the workspace.** [`resolve`] is the only way a
 //!   tool turns an argument into a display path, while actual filesystem I/O
-//!   goes through Smith's open project-directory capability. Ordinary tools
-//!   never accept an out-of-project path, even after approval.
+//!   goes through Smith's open directory capabilities. External paths require
+//!   approval while relative paths retain the project as their base.
 //! - **Reads are handle-bound and bounded.** [`read_bounded`] opens once,
 //!   inspects that handle, reads at most `max_bytes + 1`, and returns a version
 //!   token for exactly those bytes.
@@ -35,7 +35,14 @@ const SNIFF_BYTES: usize = 8192;
 /// string is not an I/O capability; callers must use [`project_workspace`] for
 /// the actual operation.
 pub fn resolve(ctx: &InvocationContext, path: &str) -> Result<PathBuf, RuntimeError> {
-    ctx.workspace.resolve(path).map(PathBuf::from)
+    let resolved = PathBuf::from(ctx.workspace.resolve(path)?);
+    if Path::new(path).is_absolute() && resolved != Path::new(path) {
+        return Err(RuntimeError::new(
+            ErrorKind::Workspace,
+            "prepared path changed before invocation; retry the tool call",
+        ));
+    }
+    Ok(resolved)
 }
 
 /// Returns the concrete Smith capability behind a runtime context.
@@ -53,9 +60,9 @@ pub fn project_workspace(ctx: &InvocationContext) -> Result<&ProjectWorkspace, R
 pub struct PreparedPath {
     /// Canonical host path used as the immutable tool argument.
     pub canonical: String,
-    /// Structural filesystem resource relative to the workspace mount.
+    /// Structural filesystem resource relative to its project or host mount.
     pub resource: SecurityResource,
-    /// Project-relative path suitable for bounded human-facing metadata.
+    /// Project-relative or absolute external path for human-facing metadata.
     pub display: String,
 }
 
@@ -94,8 +101,15 @@ fn prepare_workspace_path(
     raw: &str,
 ) -> Result<PreparedPath, RuntimeError> {
     let canonical = workspace.resolve(raw)?;
-    let root = std::path::Path::new(workspace.root());
+    let project = std::path::Path::new(workspace.root());
     let path = std::path::Path::new(&canonical);
+    let root = if path.starts_with(project) {
+        project
+    } else {
+        ProjectWorkspace::from_workspace(workspace)
+            .map(ProjectWorkspace::capability_root)
+            .unwrap_or(project)
+    };
     let relative = path.strip_prefix(root).map_err(|_| {
         RuntimeError::new(
             ErrorKind::Workspace,
@@ -120,14 +134,16 @@ fn prepare_workspace_path(
             }
         }
     }
-    let display = if segments.is_empty() {
+    let display = if root != project {
+        canonical.clone()
+    } else if segments.is_empty() {
         ".".to_owned()
     } else {
         segments.join("/")
     };
     Ok(PreparedPath {
         canonical,
-        resource: SecurityResource::filesystem(workspace.root(), segments),
+        resource: SecurityResource::filesystem(root.to_string_lossy(), segments),
         display,
     })
 }

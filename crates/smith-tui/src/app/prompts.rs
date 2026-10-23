@@ -350,6 +350,7 @@ impl App {
         let request_id = state.form().request_id.clone();
         let notice = match &resolution {
             QuestionnaireResolution::Submitted(_) => "submitted",
+            QuestionnaireResolution::Discuss(_) => "discussing question",
             QuestionnaireResolution::Declined => "declined",
             QuestionnaireResolution::Cancelled => "cancelled",
             QuestionnaireResolution::TimedOut => "timed out",

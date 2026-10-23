@@ -35,7 +35,7 @@ use agent_runtime::delegation::{
     DelegationConfig, DelegationCoordinator, DelegationLimits, DurableChildSpec, SpawnOutcome,
 };
 use agent_runtime::harness::{
-    MemoryContributor, QuestionnaireTool, SemanticSummaryCoordinator, TodoComponent, WriteTodosTool,
+    MemoryContributor, SemanticSummaryCoordinator, TodoComponent, WriteTodosTool,
 };
 use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
 use agent_runtime::registry::{Fingerprint, Permission, RegistryRevision, RegistrySource};
@@ -375,7 +375,9 @@ impl ChildRuntimeFactory for SmithChildFactory {
             WorkspacePolicy::SharedProject | WorkspacePolicy::ReadOnlyView => {
                 self.workspace.clone()
             }
-            WorkspacePolicy::ExplicitDirectory { path } => Arc::new(ProjectWorkspace::new(path)?),
+            WorkspacePolicy::ExplicitDirectory { path } => {
+                Arc::new(ProjectWorkspace::new(path)?.with_host_access()?)
+            }
             WorkspacePolicy::IsolatedWorktree => {
                 return Err(RuntimeError::new(
                     ErrorKind::Config,
@@ -481,7 +483,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 .into_iter()
                 .filter(|tool| write_capable || tool.spec().effects.is_read_only()),
         );
-        tools.push(Arc::new(QuestionnaireTool::new()));
+        tools.push(Arc::new(crate::questionnaire::SmithQuestionnaireTool));
         tools.push(Arc::new(WriteTodosTool::new()));
         if let Some(store) = self.artifact_store.clone() {
             tools.push(Arc::new(route.tool_output_context.reader(store)));

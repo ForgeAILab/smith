@@ -96,6 +96,13 @@ fn model_limit_details(
         .collect::<std::collections::BTreeMap<_, _>>()
 }
 
+fn display_model_pair(pair: &str) -> &str {
+    pair.split_once('/')
+        .map(|(_, model)| model)
+        .filter(|model| smith_config::cli_agents::parse_cli_model_id(model).is_some())
+        .unwrap_or(pair)
+}
+
 fn profile_entries(profile_inventory: &[ProfileInventoryEntry]) -> Vec<ResourceEntry> {
     profile_inventory
         .iter()
@@ -125,7 +132,8 @@ fn profile_entries(profile_inventory: &[ProfileInventoryEntry]) -> Vec<ResourceE
             } else {
                 format!(" · source {}", bounded_text(&source, 48))
             };
-            let detail = format!("use {placements} · {pair} · rev {revision}{legacy}");
+            let model_label = display_model_pair(&pair);
+            let detail = format!("use {placements} · {model_label} · rev {revision}{legacy}");
             let id = if profile.legacy {
                 format!("{LEGACY_AGENT_PROFILE_PREFIX}{}", profile.name)
             } else {
@@ -506,6 +514,7 @@ fn child_agent_entries(
             let limits = model_limits
                 .get(&pair)
                 .map_or("limits inherited from active runtime", String::as_str);
+            let model_label = display_model_pair(&pair);
             let instructions = agents
                 .profiles
                 .get(&profile.name)
@@ -529,7 +538,7 @@ fn child_agent_entries(
                 format!("agent:{}", profile.name),
                 profile.name.clone(),
                 format!(
-                    "child profile · {} · {pair} · {limits} · {instructions} · {description} · rev {revision}{legacy}",
+                    "child profile · {} · {model_label} · {limits} · {instructions} · {description} · rev {revision}{legacy}",
                     profile.posture.as_str(),
                 ),
             );
@@ -658,8 +667,12 @@ fn advisor_entries(
                     }
                     _ => "inherits the default provider and model".to_owned(),
                 };
-                ResourceEntry::new(profile.name.clone(), profile.name.clone(), pair)
-                    .active(active(&profile.name))
+                ResourceEntry::new(
+                    profile.name.clone(),
+                    profile.name.clone(),
+                    display_model_pair(&pair),
+                )
+                .active(active(&profile.name))
             }),
     );
     // Reuse model labels and availability, then apply reviewer-specific limits

@@ -48,6 +48,7 @@ pub mod project_instructions;
 pub mod prompt;
 mod provider_backoff;
 pub mod provider_models;
+mod questionnaire;
 pub mod reasoning;
 pub(crate) mod renewable;
 pub(crate) mod response;

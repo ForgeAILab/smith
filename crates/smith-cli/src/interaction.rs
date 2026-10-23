@@ -99,6 +99,7 @@ impl InteractionSurface {
                         .collect(),
                 ),
                 QuestionnaireResolution::Declined => prompt.decline(),
+                QuestionnaireResolution::Discuss(text) => prompt.discuss(&text),
                 QuestionnaireResolution::Cancelled => prompt.cancel(),
                 QuestionnaireResolution::TimedOut => prompt.time_out(),
             };
@@ -344,5 +345,39 @@ mod tests {
         let answers = response.answers().expect("typed answers");
         assert_eq!(answers[0].question_id().as_str(), "direction");
         assert_eq!(answers[0].choice_id().map(|id| id.as_str()), Some("small"));
+    }
+
+    #[tokio::test]
+    async fn discussion_declines_the_form_and_returns_an_ordinary_chat_submission() {
+        let (broker, requests) = InteractiveInteraction::new();
+        let broker = Arc::new(broker);
+        let mut surface = InteractionSurface::new(Some(requests), None);
+        let mut app = App::new("model", "project");
+        let request = request("discussion", InteractionSensitivity::Public);
+        let task = {
+            let broker = broker.clone();
+            tokio::spawn(async move { broker.interact(&request).await })
+        };
+        let notice = surface.next_notice().await.unwrap();
+        surface.apply_notice(&mut app, notice);
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.on_paste("Explain the tradeoffs first");
+        let Some(smith_tui::app::Action::Submit { submission, .. }) =
+            app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        else {
+            panic!("discussion produces chat input");
+        };
+        assert!(
+            submission
+                .committed_text()
+                .contains("Explain the tradeoffs first")
+        );
+        surface.drain_answers(&mut app);
+        let response = task.await.unwrap();
+        assert_eq!(response.outcome_kind(), InteractionOutcomeKind::Declined);
+        assert!(response.answers().is_none());
+        assert!(app.overlay.is_none());
     }
 }

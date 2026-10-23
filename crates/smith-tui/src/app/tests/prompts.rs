@@ -1,6 +1,26 @@
 // prompts behavior tests.
 
     #[test]
+    fn discussing_a_question_sends_a_followup_without_selecting_an_answer_or_clearing_the_composer() {
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.composer.replace("keep this draft");
+        app.present_questionnaire(questionnaire_form("discussion", Deadline::never()));
+        elapse_prompt_guard(&mut app);
+        // The last row opens discussion even for a choice-only request.
+        app.on_key(key(KeyCode::Up));
+        app.on_key(key(KeyCode::Enter));
+        app.on_paste("What does the second option mean?");
+        let Some(Action::Submit { submission, target: SubmissionTarget::Steer { .. } }) = app.on_key(key(KeyCode::Enter)) else { panic!("discussion should steer the active turn"); };
+        assert!(submission.committed_text().contains("What does the second option mean?"));
+        assert!(submission.committed_text().contains("Before choosing an answer"));
+        assert_eq!(app.composer.text(), "keep this draft");
+        assert!(matches!(app.take_questionnaire_resolution(), Some((id, QuestionnaireResolution::Discuss(_))) if id == "discussion"));
+        assert!(app.take_questionnaire_resolution().is_none());
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
     fn a_double_slash_escapes_to_a_literal_prompt() {
         let mut app = app();
         type_text(&mut app, "//help me understand slashes");
