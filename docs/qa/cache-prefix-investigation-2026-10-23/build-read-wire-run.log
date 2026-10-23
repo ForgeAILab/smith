@@ -1,0 +1,1 @@
+{"label": "build-read-wire", "binary_sha256": "d83bd05188b6e458bd634768e834d475b90e43d853896f832190e1dc056ab748", "exit_code": 0, "elapsed_seconds": 24.15, "status": "ok", "output": "DONE", "prompt_sha256": "659f7106de6f4faae59c1d79bfb17e91c237907ff8bf2a49672ef80fc00a08c0", "cached_input": 26240, "uncached_input": 113842, "cached_input_percent": 18.73}

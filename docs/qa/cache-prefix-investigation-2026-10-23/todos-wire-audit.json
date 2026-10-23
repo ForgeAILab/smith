@@ -1,0 +1,969 @@
+{
+  "source": "Temporary diagnostic binary, production source unchanged; logs store hashes, roles and lengths only.",
+  "requests": [
+    {
+      "instructions": "a1286d5283a19d4e",
+      "items": [
+        {
+          "bytes": 641,
+          "hash": "de202dcde975a2bc",
+          "role": "user",
+          "type": "message"
+        }
+      ],
+      "key": "session-45689099-8b9a-4ec5-a950-ad50e15acfb7",
+      "tools": "7c1333788c88bd54"
+    },
+    {
+      "instructions": "a1286d5283a19d4e",
+      "items": [
+        {
+          "bytes": 641,
+          "hash": "de202dcde975a2bc",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 200,
+          "hash": "c2b92a647e39e5ed",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 697,
+          "hash": "410f332035b2a5a4",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-45689099-8b9a-4ec5-a950-ad50e15acfb7",
+      "tools": "82972965c358fc74"
+    },
+    {
+      "instructions": "a1286d5283a19d4e",
+      "items": [
+        {
+          "bytes": 173,
+          "hash": "36834da4fa62fd68",
+          "role": "developer",
+          "type": "message"
+        },
+        {
+          "bytes": 641,
+          "hash": "de202dcde975a2bc",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 200,
+          "hash": "c2b92a647e39e5ed",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 697,
+          "hash": "410f332035b2a5a4",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 202,
+          "hash": "7847cb9a57a7077b",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 221,
+          "hash": "ab1741d4751add36",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-45689099-8b9a-4ec5-a950-ad50e15acfb7",
+      "tools": "82972965c358fc74"
+    },
+    {
+      "instructions": "a1286d5283a19d4e",
+      "items": [
+        {
+          "bytes": 173,
+          "hash": "36834da4fa62fd68",
+          "role": "developer",
+          "type": "message"
+        },
+        {
+          "bytes": 641,
+          "hash": "de202dcde975a2bc",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 200,
+          "hash": "c2b92a647e39e5ed",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 697,
+          "hash": "410f332035b2a5a4",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 202,
+          "hash": "7847cb9a57a7077b",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 221,
+          "hash": "ab1741d4751add36",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "fd1fa7e54aa8fbde",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "be0adf4685824905",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "73532652f01381dd",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-45689099-8b9a-4ec5-a950-ad50e15acfb7",
+      "tools": "82972965c358fc74"
+    },
+    {
+      "instructions": "a1286d5283a19d4e",
+      "items": [
+        {
+          "bytes": 173,
+          "hash": "36834da4fa62fd68",
+          "role": "developer",
+          "type": "message"
+        },
+        {
+          "bytes": 641,
+          "hash": "de202dcde975a2bc",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 200,
+          "hash": "c2b92a647e39e5ed",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 697,
+          "hash": "410f332035b2a5a4",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 202,
+          "hash": "7847cb9a57a7077b",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 221,
+          "hash": "ab1741d4751add36",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "fd1fa7e54aa8fbde",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "be0adf4685824905",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "73532652f01381dd",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "979be7f5c9f9bcd1",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "83f1b386dbbdb5c2",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "9745bf17aadfade2",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-45689099-8b9a-4ec5-a950-ad50e15acfb7",
+      "tools": "82972965c358fc74"
+    },
+    {
+      "instructions": "a1286d5283a19d4e",
+      "items": [
+        {
+          "bytes": 173,
+          "hash": "36834da4fa62fd68",
+          "role": "developer",
+          "type": "message"
+        },
+        {
+          "bytes": 641,
+          "hash": "de202dcde975a2bc",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 200,
+          "hash": "c2b92a647e39e5ed",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 697,
+          "hash": "410f332035b2a5a4",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 202,
+          "hash": "7847cb9a57a7077b",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 221,
+          "hash": "ab1741d4751add36",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "fd1fa7e54aa8fbde",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "be0adf4685824905",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "73532652f01381dd",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "979be7f5c9f9bcd1",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "83f1b386dbbdb5c2",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "9745bf17aadfade2",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "43f57144fa9d6e4f",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "470a325f59e3345f",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "2fce9fc48d3face9",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-45689099-8b9a-4ec5-a950-ad50e15acfb7",
+      "tools": "82972965c358fc74"
+    },
+    {
+      "instructions": "a1286d5283a19d4e",
+      "items": [
+        {
+          "bytes": 173,
+          "hash": "36834da4fa62fd68",
+          "role": "developer",
+          "type": "message"
+        },
+        {
+          "bytes": 641,
+          "hash": "de202dcde975a2bc",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 200,
+          "hash": "c2b92a647e39e5ed",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 697,
+          "hash": "410f332035b2a5a4",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 202,
+          "hash": "7847cb9a57a7077b",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 221,
+          "hash": "ab1741d4751add36",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "fd1fa7e54aa8fbde",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "be0adf4685824905",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "73532652f01381dd",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "979be7f5c9f9bcd1",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "83f1b386dbbdb5c2",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "9745bf17aadfade2",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "43f57144fa9d6e4f",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "470a325f59e3345f",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "2fce9fc48d3face9",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "399191405f39fdfe",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "3bb8a9024903358f",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "5ccc7f3f5dc0088f",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-45689099-8b9a-4ec5-a950-ad50e15acfb7",
+      "tools": "82972965c358fc74"
+    },
+    {
+      "instructions": "a1286d5283a19d4e",
+      "items": [
+        {
+          "bytes": 173,
+          "hash": "36834da4fa62fd68",
+          "role": "developer",
+          "type": "message"
+        },
+        {
+          "bytes": 641,
+          "hash": "de202dcde975a2bc",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 200,
+          "hash": "c2b92a647e39e5ed",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 697,
+          "hash": "410f332035b2a5a4",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 202,
+          "hash": "7847cb9a57a7077b",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 221,
+          "hash": "ab1741d4751add36",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "fd1fa7e54aa8fbde",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "be0adf4685824905",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "73532652f01381dd",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "979be7f5c9f9bcd1",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "83f1b386dbbdb5c2",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "9745bf17aadfade2",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "43f57144fa9d6e4f",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "470a325f59e3345f",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "2fce9fc48d3face9",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "399191405f39fdfe",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "3bb8a9024903358f",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "5ccc7f3f5dc0088f",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "dabfec62b7a69a48",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "c25ee63105cce492",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "9f8489f767d8bc3a",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-45689099-8b9a-4ec5-a950-ad50e15acfb7",
+      "tools": "82972965c358fc74"
+    },
+    {
+      "instructions": "a1286d5283a19d4e",
+      "items": [
+        {
+          "bytes": 173,
+          "hash": "36834da4fa62fd68",
+          "role": "developer",
+          "type": "message"
+        },
+        {
+          "bytes": 641,
+          "hash": "de202dcde975a2bc",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 200,
+          "hash": "c2b92a647e39e5ed",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 697,
+          "hash": "410f332035b2a5a4",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 202,
+          "hash": "7847cb9a57a7077b",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 221,
+          "hash": "ab1741d4751add36",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "fd1fa7e54aa8fbde",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "be0adf4685824905",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "73532652f01381dd",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "979be7f5c9f9bcd1",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "83f1b386dbbdb5c2",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "9745bf17aadfade2",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "43f57144fa9d6e4f",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "470a325f59e3345f",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "2fce9fc48d3face9",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "399191405f39fdfe",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "3bb8a9024903358f",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "5ccc7f3f5dc0088f",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "dabfec62b7a69a48",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "c25ee63105cce492",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "9f8489f767d8bc3a",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "f4428b7bce1882ae",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "6851c0c8b1e29a4b",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "a0c719e1ad306a7a",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-45689099-8b9a-4ec5-a950-ad50e15acfb7",
+      "tools": "82972965c358fc74"
+    },
+    {
+      "instructions": "a1286d5283a19d4e",
+      "items": [
+        {
+          "bytes": 171,
+          "hash": "cceef6a90f52a8ee",
+          "role": "developer",
+          "type": "message"
+        },
+        {
+          "bytes": 641,
+          "hash": "de202dcde975a2bc",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 200,
+          "hash": "c2b92a647e39e5ed",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 697,
+          "hash": "410f332035b2a5a4",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 202,
+          "hash": "7847cb9a57a7077b",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 221,
+          "hash": "ab1741d4751add36",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "fd1fa7e54aa8fbde",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "be0adf4685824905",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "73532652f01381dd",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "979be7f5c9f9bcd1",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "83f1b386dbbdb5c2",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "9745bf17aadfade2",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "43f57144fa9d6e4f",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "470a325f59e3345f",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "2fce9fc48d3face9",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "399191405f39fdfe",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "3bb8a9024903358f",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "5ccc7f3f5dc0088f",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "dabfec62b7a69a48",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "c25ee63105cce492",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "9f8489f767d8bc3a",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "f4428b7bce1882ae",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "6851c0c8b1e29a4b",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "a0c719e1ad306a7a",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 200,
+          "hash": "54068fd72325c5d7",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 219,
+          "hash": "d0fe5eb29118a7a0",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-45689099-8b9a-4ec5-a950-ad50e15acfb7",
+      "tools": "82972965c358fc74"
+    }
+  ],
+  "transitions": [
+    {
+      "request": 2,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": false,
+      "unchanged_leading_input_items": 1,
+      "previous_input_items": 1,
+      "current_input_items": 3
+    },
+    {
+      "request": 3,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 0,
+      "previous_input_items": 3,
+      "current_input_items": 6
+    },
+    {
+      "request": 4,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 6,
+      "previous_input_items": 6,
+      "current_input_items": 9
+    },
+    {
+      "request": 5,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 9,
+      "previous_input_items": 9,
+      "current_input_items": 12
+    },
+    {
+      "request": 6,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 12,
+      "previous_input_items": 12,
+      "current_input_items": 15
+    },
+    {
+      "request": 7,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 15,
+      "previous_input_items": 15,
+      "current_input_items": 18
+    },
+    {
+      "request": 8,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 18,
+      "previous_input_items": 18,
+      "current_input_items": 21
+    },
+    {
+      "request": 9,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 21,
+      "previous_input_items": 21,
+      "current_input_items": 24
+    },
+    {
+      "request": 10,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 0,
+      "previous_input_items": 24,
+      "current_input_items": 26
+    }
+  ],
+  "finding": "Requests 4 through 9 retain every previous input item and stable instructions/tools/key, yet each receives only 3712 cached tokens. This no-image reproduction rules out image encoding as a necessary cause of the remaining miss pattern. It does not establish the downstream cause."
+}

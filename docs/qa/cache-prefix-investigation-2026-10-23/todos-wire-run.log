@@ -1,0 +1,1 @@
+{"label": "todos-wire", "binary_sha256": "d83bd05188b6e458bd634768e834d475b90e43d853896f832190e1dc056ab748", "exit_code": 0, "elapsed_seconds": 34.4, "status": "ok", "output": "DONE", "prompt_sha256": "2a46c447603ef71d3b96e347b90d9000a32ae31b07b04e9467d98331a1707b40", "cached_input": 37120, "uncached_input": 162296, "cached_input_percent": 18.61}

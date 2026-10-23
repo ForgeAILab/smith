@@ -1,0 +1,390 @@
+{
+  "label": "astra-after",
+  "profile": "visual",
+  "rows": [
+    {
+      "turn": 1,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-be5e8d60-d3ca-40cd-9eb2-1193528293ee",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": 18304,
+      "uncached_tokens": 283,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 6.51,
+      "quiet_before_seconds": 0,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 8809,
+        "invalidated_prefix_tokens": 717,
+        "state": "unsupported",
+        "observed_read_tokens": 18304,
+        "observed_write_tokens": 0,
+        "confidence": "estimated",
+        "cache_read_percent": 98,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "chatgpt",
+          "model": "gpt-6-astra",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 3600000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "27935df17fa8c6c281f658465e3b44b5",
+              "preserved_prefix_tokens": 8809,
+              "invalidated_prefix_tokens": 717,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 18
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-1",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    },
+    {
+      "turn": 2,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-be5e8d60-d3ca-40cd-9eb2-1193528293ee",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": 18304,
+      "uncached_tokens": 322,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 4.91,
+      "quiet_before_seconds": 0,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 8809,
+        "invalidated_prefix_tokens": 755,
+        "state": "unsupported",
+        "observed_read_tokens": 18304,
+        "observed_write_tokens": 0,
+        "confidence": "estimated",
+        "cache_read_percent": 98,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "chatgpt",
+          "model": "gpt-6-astra",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 3600000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "12c827cd9e3c49d3234265be00529a45",
+              "preserved_prefix_tokens": 8809,
+              "invalidated_prefix_tokens": 755,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 36
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-2",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    },
+    {
+      "turn": 3,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-be5e8d60-d3ca-40cd-9eb2-1193528293ee",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": 17664,
+      "uncached_tokens": 1001,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 5.58,
+      "quiet_before_seconds": 0,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 9532,
+        "invalidated_prefix_tokens": 70,
+        "state": "unsupported",
+        "observed_read_tokens": 17664,
+        "observed_write_tokens": 0,
+        "confidence": "estimated",
+        "cache_read_percent": 95,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "chatgpt",
+          "model": "gpt-6-astra",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 3600000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "3fb2635e77522082c5e07e8eb64648b4",
+              "preserved_prefix_tokens": 9532,
+              "invalidated_prefix_tokens": 70,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 54
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-3",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    },
+    {
+      "turn": 4,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-be5e8d60-d3ca-40cd-9eb2-1193528293ee",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": 17664,
+      "uncached_tokens": 1040,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 5.53,
+      "quiet_before_seconds": 5,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 9570,
+        "invalidated_prefix_tokens": 70,
+        "state": "unsupported",
+        "observed_read_tokens": 17664,
+        "observed_write_tokens": 0,
+        "confidence": "estimated",
+        "cache_read_percent": 94,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "chatgpt",
+          "model": "gpt-6-astra",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 3600000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "df5cdb237ab23dbe9e1f446be7b35316",
+              "preserved_prefix_tokens": 9570,
+              "invalidated_prefix_tokens": 70,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 72
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-4",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    }
+  ]
+}

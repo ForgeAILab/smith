@@ -1,0 +1,42 @@
+   Compiling smith-runtime v0.7.13 (/Volumes/Data/codes/ai/tui/crates/smith-runtime)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `smith-runtime` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.34s
+     Running unittests src/lib.rs (target/debug/deps/smith_runtime-0cdc9ce96d24de5a)
+
+running 29 tests
+test chatgpt::tests::absent_rate_limit_headers_yield_an_empty_snapshot_not_zeroes ... ok
+test chatgpt::tests::assistant_history_preserves_reasoning_text_and_tool_call_order ... ok
+test chatgpt::tests::live_chatgpt_responses ... ignored, requires explicitly injected ChatGPT test credentials and spends a bounded live request
+test chatgpt::tests::codex_rate_limit_headers_parse_both_reset_shapes ... ok
+test chatgpt::tests::changing_tail_context_does_not_move_ahead_of_cached_chatgpt_history ... ok
+test chatgpt::tests::hosted_search_declaration_uses_responses_wire_without_a_function_tool ... ok
+test chatgpt::tests::hosted_search_citation_recognizes_raw_and_escaped_urls_per_text_part ... ok
+test chatgpt::tests::hosted_search_citation_keeps_existing_links_and_appends_other_sources ... ok
+test chatgpt::tests::response_tool_names_are_backend_safe_collision_free_and_reversible ... ok
+test chatgpt::tests::hosted_search_stream_renders_unicode_citations_and_deduplicates_completed_items ... ok
+test chatgpt::tests::account_claims_are_extracted_without_rendering_tokens ... ok
+test chatgpt::tests::responses_usage_is_disjoint_and_terminal ... ok
+test chatgpt::tests::browser_url_pins_pkce_state_scopes_and_smith_originator ... ok
+test chatgpt::tests::pre_stream_auth_rejection_invalidates_exact_revision_for_one_runtime_replay ... ok
+test chatgpt::tests::context_only_cache_identity_reaches_the_chatgpt_routing_key ... ok
+test chatgpt::tests::the_account_header_follows_the_lease_not_the_frozen_config ... ok
+test chatgpt::tests::hosted_search_stream_normalizes_page_actions_and_query_lists ... ok
+test chatgpt::tests::tool_call_history_keeps_its_wire_name_when_activation_grows ... ok
+test chatgpt::tests::responses_cache_observation_preserves_presence_and_write_tokens ... ok
+test chatgpt::tests::direct_adapter_maps_tools_usage_headers_and_terminal_without_codex ... ok
+test chatgpt::tests::tool_result_text_only_is_byte_identical ... ok
+test chatgpt::tests::token_bundle_round_trips_only_through_a_secret ... ok
+test chatgpt::tests::truncated_responses_stream_fails_malformed_instead_of_inventing_finish ... ok
+test chatgpt::tests::tool_result_image_only_defaults_to_auto_detail ... ok
+test chatgpt::tests::usage_payload_without_rate_limit_reads_as_unmeasured ... ok
+test chatgpt::tests::tool_result_images_and_text_preserve_content_order ... ok
+test chatgpt::tests::concurrent_expiry_refreshes_once_and_persists_rotated_bundle ... ok
+test chatgpt::tests::usage_payload_maps_windows_and_treats_zero_delay_as_filler ... ok
+test chatgpt::tests::image_cache_prefix_is_stable_on_chatgpt_append_and_provider_restart ... ok
+
+test result: ok. 28 passed; 0 failed; 1 ignored; 0 measured; 670 filtered out; finished in 0.01s
+

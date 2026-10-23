@@ -1,0 +1,11 @@
+{
+  "files": {
+    "crates/smith-runtime/src/chatgpt/provider.rs": "e5a9376f39a6533860a701f2f08cc149be37717f9ee1e4a691f254eda17352df",
+    "crates/smith-runtime/src/chatgpt/encoding.rs": "6f3b5f18ed6d73708e55e70cfcedac0c0ea9c06e43de05588d73a1117e8c06d1",
+    "crates/smith-runtime/src/chatgpt/tests.rs": "3c85c81af84dda67dbd350a7b92ae5e14911a6165340e3dd1e7a216541e0d2d5"
+  },
+  "backup_directory": "/private/tmp/smith-cache-prefix-baseline",
+  "smith_agent_runtime_revision": "a5f1b1788e982c39e7c3a394c715a7d92cc7852b",
+  "local_agent_runtime_head": "b791341",
+  "codex_fetched_head": "970111f6cb"
+}

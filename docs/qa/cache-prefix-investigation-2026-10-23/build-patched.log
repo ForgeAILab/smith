@@ -1,0 +1,10 @@
+   Compiling smith-runtime v0.7.13 (/private/tmp/smith-cache-prefix-build-20261023/crates/smith-runtime)
+   Compiling smith-client v0.7.13 (/private/tmp/smith-cache-prefix-build-20261023/crates/smith-client)
+   Compiling smith-tui v0.7.13 (/private/tmp/smith-cache-prefix-build-20261023/crates/smith-tui)
+   Compiling smith-cli v0.7.13 (/private/tmp/smith-cache-prefix-build-20261023/crates/smith-cli)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `smith-cli` (bin "smith") generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 00s

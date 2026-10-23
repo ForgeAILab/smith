@@ -1,0 +1,26 @@
+   Compiling smith-runtime v0.7.13 (/Volumes/Data/codes/ai/tui/crates/smith-runtime)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `smith-runtime` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.05s
+     Running unittests src/lib.rs (target/debug/deps/smith_runtime-0cdc9ce96d24de5a)
+
+running 1 test
+
+thread 'chatgpt::tests::assistant_history_preserves_reasoning_text_and_tool_call_order' (7406261) panicked at crates/smith-runtime/src/chatgpt/tests.rs:1070:5:
+assertion `left == right` failed
+  left: [Object {"content": Array [Object {"annotations": Array [], "text": String("I will inspect the reference."), "type": String("output_text")}, Object {"annotations": Array [], "text": String("Then compare the render."), "type": String("output_text")}, Object {"annotations": Array [], "text": String("A later assistant block."), "type": String("output_text")}], "role": String("assistant"), "type": String("message")}, Object {"encrypted_content": String("signed-before-text"), "summary": Array [], "type": String("reasoning")}, Object {"arguments": String("{\"path\":\"reference.png\"}"), "call_id": String("read-reference"), "name": String("read"), "type": String("function_call")}, Object {"encrypted_content": String("signed-after-text"), "summary": Array [], "type": String("reasoning")}]
+ right: [Object {"encrypted_content": String("signed-before-text"), "summary": Array [], "type": String("reasoning")}, Object {"content": Array [Object {"annotations": Array [], "text": String("I will inspect the reference."), "type": String("output_text")}, Object {"annotations": Array [], "text": String("Then compare the render."), "type": String("output_text")}], "role": String("assistant"), "type": String("message")}, Object {"arguments": String("{\"path\":\"reference.png\"}"), "call_id": String("read-reference"), "name": String("read"), "type": String("function_call")}, Object {"content": Array [Object {"annotations": Array [], "text": String("A later assistant block."), "type": String("output_text")}], "role": String("assistant"), "type": String("message")}, Object {"encrypted_content": String("signed-after-text"), "summary": Array [], "type": String("reasoning")}]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test chatgpt::tests::assistant_history_preserves_reasoning_text_and_tool_call_order ... FAILED
+
+failures:
+
+failures:
+    chatgpt::tests::assistant_history_preserves_reasoning_text_and_tool_call_order
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 698 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p smith-runtime --lib`

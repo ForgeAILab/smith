@@ -1,0 +1,11 @@
+{
+  "before_binary": "/private/tmp/smith-cache-prefix-before",
+  "before_sha256": "70a2ac58715e04309cc73603efef93995d75c00f671e582476fb947cb5e79b62",
+  "config_sha256": "841a0ad9ef05ddd4c8c7e3c6a092bcd142f171f2b556db64d8e6fac8378730c1",
+  "after_binary": "/private/tmp/smith-cache-prefix-after",
+  "after_sha256": "258d82a5f4da5cc484386af24f122fa825e1560239b3456a0ca48e25c38701a1",
+  "final_binary": "/private/tmp/smith-cache-prefix-final",
+  "final_sha256": "5a52533518d21375ea2fc7bd5e832f55565257f711118e231265ddbb7eee9b78",
+  "versioned_binary": "/private/tmp/smith-cache-prefix-versioned",
+  "versioned_sha256": "736cec7de694187f53ad67d2318c6b4eaa9198c3d24688c539edf8b944ea2e0d"
+}

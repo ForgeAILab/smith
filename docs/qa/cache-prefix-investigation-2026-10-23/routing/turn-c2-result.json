@@ -1,0 +1,120 @@
+{
+  "label": "turn-c2",
+  "binary_sha256": "e92ca7b628f82d5ccdb2f967a937b37d5eebc2c378f5125a1e97cc4d9894bf80",
+  "exit_code": 0,
+  "elapsed_seconds": 30.66,
+  "status": "ok",
+  "output": "DONE",
+  "fixture_hashes": {
+    "fixture-0.txt": "da87a6231492b36fc435f82f30dfbb132176a92214dd222e6a7e88c80e2b8dbc",
+    "fixture-1.txt": "a7e002a751d0a2aa83e7626bd811c176ca67838a978206b01cbd295839fdf977",
+    "fixture-2.txt": "813272b1df842477ed9c3f511a5921243509dc56801d9a70a14e89908ae4d4b4",
+    "fixture-3.txt": "23816f2c6aa2cd850c7eda60ea8ac58f1e4e3d2432239a39e7dc1cbf1a23391d",
+    "fixture-4.txt": "2ba570f883da2f1d6941f36d6d682db52f5a9a0c691167638ff51bd7a01c8473",
+    "fixture-5.txt": "d60bc58009fbe0791bee2f43c6a516ee3758a296340f1067ee9d522355ffe1be"
+  },
+  "prompt_sha256": "659f7106de6f4faae59c1d79bfb17e91c237907ff8bf2a49672ef80fc00a08c0",
+  "cached_input": 111872,
+  "uncached_input": 27997,
+  "cached_input_percent": 79.98,
+  "provider_attempt_usage": [
+    {
+      "request": "req-1",
+      "input_uncached": 366,
+      "input_cached": 6400,
+      "output": 35
+    },
+    {
+      "request": "req-2",
+      "input_uncached": 4787,
+      "input_cached": 6400,
+      "output": 35
+    },
+    {
+      "request": "req-3",
+      "input_uncached": 4550,
+      "input_cached": 11008,
+      "output": 35
+    },
+    {
+      "request": "req-4",
+      "input_uncached": 4603,
+      "input_cached": 15360,
+      "output": 35
+    },
+    {
+      "request": "req-5",
+      "input_uncached": 4545,
+      "input_cached": 19840,
+      "output": 35
+    },
+    {
+      "request": "req-6",
+      "input_uncached": 4638,
+      "input_cached": 24192,
+      "output": 35
+    },
+    {
+      "request": "req-7",
+      "input_uncached": 4508,
+      "input_cached": 28672,
+      "output": 5
+    }
+  ],
+  "tool_calls": [
+    {
+      "event": "tool_call_requested",
+      "call": "call_NJ4tPp5S5wSm0KeXVwL73E3q",
+      "name": "read",
+      "argument_keys": [
+        "path"
+      ],
+      "argument_fingerprint": "7de98ab23393c6da6c87f046732d9f8a"
+    },
+    {
+      "event": "tool_call_requested",
+      "call": "call_1Q4IogLz2FeJzfRYUWep0ML3",
+      "name": "read",
+      "argument_keys": [
+        "path"
+      ],
+      "argument_fingerprint": "9cc7bdb52693c6da67ab423abc722305"
+    },
+    {
+      "event": "tool_call_requested",
+      "call": "call_AN5YWiA79xR5ET7xjsszedRJ",
+      "name": "read",
+      "argument_keys": [
+        "path"
+      ],
+      "argument_fingerprint": "9068dd7b4593c6da6349f173f22ccb44"
+    },
+    {
+      "event": "tool_call_requested",
+      "call": "call_u58SWcgVg2uW1DOO8bVEmAPH",
+      "name": "read",
+      "argument_keys": [
+        "path"
+      ],
+      "argument_fingerprint": "aab96e293893c6da5eda36f33bf71cf7"
+    },
+    {
+      "event": "tool_call_requested",
+      "call": "call_4VLghfzyeULxxTnOHWfgHgL8",
+      "name": "read",
+      "argument_keys": [
+        "path"
+      ],
+      "argument_fingerprint": "b11588460f93c6da5ae8943fd4c2de0e"
+    },
+    {
+      "event": "tool_call_requested",
+      "call": "call_Y9pppIunPDVs8VI57wBHJ8dy",
+      "name": "read",
+      "argument_keys": [
+        "path"
+      ],
+      "argument_fingerprint": "7ffe78a48293c6da56790604a66c9ab9"
+    }
+  ]
+}

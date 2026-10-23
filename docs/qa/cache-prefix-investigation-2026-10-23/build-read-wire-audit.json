@@ -1,0 +1,524 @@
+{
+  "source": "Temporary instrumented binary; hashes only. Build posture, same prompt/fixtures as plan-posture probe, no todos or registry activation.",
+  "requests": [
+    {
+      "instructions": "752b1e0124a0436e",
+      "items": [
+        {
+          "bytes": 584,
+          "hash": "2dfcf579854d34da",
+          "role": "user",
+          "type": "message"
+        }
+      ],
+      "key": "session-840d19ca-0a25-40a6-9590-a852310c05f8",
+      "tools": "7c1333788c88bd54"
+    },
+    {
+      "instructions": "752b1e0124a0436e",
+      "items": [
+        {
+          "bytes": 584,
+          "hash": "2dfcf579854d34da",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 127,
+          "hash": "ff1753ff8b88e558",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "8c7e24fb59bd973d",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "98faf931311933ae",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-840d19ca-0a25-40a6-9590-a852310c05f8",
+      "tools": "7c1333788c88bd54"
+    },
+    {
+      "instructions": "752b1e0124a0436e",
+      "items": [
+        {
+          "bytes": 584,
+          "hash": "2dfcf579854d34da",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 127,
+          "hash": "ff1753ff8b88e558",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "8c7e24fb59bd973d",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "98faf931311933ae",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "925306f59b737021",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "c9bf649e476d439a",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "a00c59a5b6721078",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-840d19ca-0a25-40a6-9590-a852310c05f8",
+      "tools": "7c1333788c88bd54"
+    },
+    {
+      "instructions": "752b1e0124a0436e",
+      "items": [
+        {
+          "bytes": 584,
+          "hash": "2dfcf579854d34da",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 127,
+          "hash": "ff1753ff8b88e558",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "8c7e24fb59bd973d",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "98faf931311933ae",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "925306f59b737021",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "c9bf649e476d439a",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "a00c59a5b6721078",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "efcc7658848939c5",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "59ae4551d8ad23e2",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "c63769c33b3c33ad",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-840d19ca-0a25-40a6-9590-a852310c05f8",
+      "tools": "7c1333788c88bd54"
+    },
+    {
+      "instructions": "752b1e0124a0436e",
+      "items": [
+        {
+          "bytes": 584,
+          "hash": "2dfcf579854d34da",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 127,
+          "hash": "ff1753ff8b88e558",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "8c7e24fb59bd973d",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "98faf931311933ae",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "925306f59b737021",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "c9bf649e476d439a",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "a00c59a5b6721078",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "efcc7658848939c5",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "59ae4551d8ad23e2",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "c63769c33b3c33ad",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "29c31a09d5a36ce3",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "a85aff7465e6f378",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "ab7755876d6ec761",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-840d19ca-0a25-40a6-9590-a852310c05f8",
+      "tools": "7c1333788c88bd54"
+    },
+    {
+      "instructions": "752b1e0124a0436e",
+      "items": [
+        {
+          "bytes": 584,
+          "hash": "2dfcf579854d34da",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 127,
+          "hash": "ff1753ff8b88e558",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "8c7e24fb59bd973d",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "98faf931311933ae",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "925306f59b737021",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "c9bf649e476d439a",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "a00c59a5b6721078",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "efcc7658848939c5",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "59ae4551d8ad23e2",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "c63769c33b3c33ad",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "29c31a09d5a36ce3",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "a85aff7465e6f378",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "ab7755876d6ec761",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "bd4dda48d093e062",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "85ad13e2cc490790",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "a70e4a8cc6d113bd",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-840d19ca-0a25-40a6-9590-a852310c05f8",
+      "tools": "7c1333788c88bd54"
+    },
+    {
+      "instructions": "752b1e0124a0436e",
+      "items": [
+        {
+          "bytes": 584,
+          "hash": "2dfcf579854d34da",
+          "role": "user",
+          "type": "message"
+        },
+        {
+          "bytes": 127,
+          "hash": "ff1753ff8b88e558",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "8c7e24fb59bd973d",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "98faf931311933ae",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "925306f59b737021",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "c9bf649e476d439a",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "a00c59a5b6721078",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "efcc7658848939c5",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "59ae4551d8ad23e2",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "c63769c33b3c33ad",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "29c31a09d5a36ce3",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "a85aff7465e6f378",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "ab7755876d6ec761",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "bd4dda48d093e062",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "85ad13e2cc490790",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "a70e4a8cc6d113bd",
+          "role": null,
+          "type": "function_call_output"
+        },
+        {
+          "bytes": 127,
+          "hash": "145f8103e7793c10",
+          "role": "assistant",
+          "type": "message"
+        },
+        {
+          "bytes": 123,
+          "hash": "a9fccd354eb0c24c",
+          "role": null,
+          "type": "function_call"
+        },
+        {
+          "bytes": 7638,
+          "hash": "6c548602893e3d80",
+          "role": null,
+          "type": "function_call_output"
+        }
+      ],
+      "key": "session-840d19ca-0a25-40a6-9590-a852310c05f8",
+      "tools": "7c1333788c88bd54"
+    }
+  ],
+  "transitions": [
+    {
+      "request": 2,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 1,
+      "previous_input_items": 1
+    },
+    {
+      "request": 3,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 4,
+      "previous_input_items": 4
+    },
+    {
+      "request": 4,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 7,
+      "previous_input_items": 7
+    },
+    {
+      "request": 5,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 10,
+      "previous_input_items": 10
+    },
+    {
+      "request": 6,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 13,
+      "previous_input_items": 13
+    },
+    {
+      "request": 7,
+      "cache_key_unchanged": true,
+      "instructions_unchanged": true,
+      "tools_unchanged": true,
+      "unchanged_leading_input_items": 16,
+      "previous_input_items": 16
+    }
+  ]
+}

@@ -1,0 +1,277 @@
+--- a/crates/smith-runtime/src/chatgpt/provider.rs
++++ b/crates/smith-runtime/src/chatgpt/provider.rs
+@@ -1,4 +1,5 @@
+ use super::*;
++use agent_runtime::registry::RegistryRevision;
+ 
+ /// Configuration for the direct experimental Responses adapter.
+ pub struct ChatGptProviderConfig {
+@@ -64,6 +65,7 @@
+         } else {
+             let mut contract = ProviderCacheContract::from_control(PromptCacheControl::Implicit);
+             contract.evidence.stream = true;
++            contract.key_revision = Some(RegistryRevision::new(CHATGPT_CACHE_KEY_REVISION));
+             capabilities.cache_contract = Some(contract);
+         }
+         Ok(Self {
+@@ -132,17 +134,9 @@
+         &self.transport
+     }
+ 
+-    /// Serializes a Responses request, keyed to the session for prefix caching.
+-    ///
+-    /// `prompt_cache_key` is the field the API documents for this, and sending
+-    /// none was not defensible. But a live probe of this endpoint showed the
+-    /// cache actually keys off **byte-identical prefix content**, not off this
+-    /// value: a request carrying a different key still hit a 3,584-token cache
+-    /// the moment its instructions and tool schemas matched bytes another
+-    /// session had just sent. So the key is worth sending and is not what earns
+-    /// the hit — keeping the prefix stable is. That is
+-    /// `smith_runtime::prompt`'s job, and the reason its stable sections are
+-    /// ordered ahead of everything that varies.
++    /// Serializes the planned order using Runtime's routing key, or the session
++    /// when no cache identity is available. Later host context stays in input
++    /// rather than changing the leading instruction field.
+     pub(super) fn build_payload(
+         &self,
+         request: &ProviderRequest,
+@@ -164,20 +158,17 @@
+                 "the experimental ChatGPT Responses binding does not accept provider extensions",
+             ));
+         }
+-        let instructions = request
+-            .messages
+-            .iter()
+-            .filter(|message| message.role == Role::System)
+-            .map(Message::joined_text)
+-            .filter(|text| !text.is_empty())
+-            .collect::<Vec<_>>()
+-            .join("\n\n");
++        // Only the leading instruction block belongs before conversation
++        // history. Hoisting later host context here makes a changing todo or
++        // continuation invalidate the otherwise unchanged history prefix.
++        let (instructions, messages) = match request.messages.split_first() {
++            Some((first, rest)) if first.role == Role::System => (first.joined_text(), rest),
++            _ => (String::new(), request.messages.as_slice()),
++        };
+         let tool_names = response_tool_names(&request.tools)?;
+         let mut input = Vec::new();
+-        for message in &request.messages {
+-            if message.role != Role::System {
+-                input.extend(response_items(message, &tool_names)?);
+-            }
++        for message in messages {
++            input.extend(response_items(message, &tool_names)?);
+         }
+         let mut tools = request
+             .tools
+--- a/crates/smith-runtime/src/chatgpt/encoding.rs
++++ b/crates/smith-runtime/src/chatgpt/encoding.rs
+@@ -5,7 +5,18 @@
+     tool_names: &BTreeMap<String, String>,
+ ) -> Result<Vec<Value>, ProviderError> {
+     Ok(match message.role {
+-        Role::System => Vec::new(),
++        Role::System => {
++            let text = message.joined_text();
++            if text.is_empty() {
++                Vec::new()
++            } else {
++                vec![json!({
++                    "type": "message",
++                    "role": "developer",
++                    "content": [{"type": "input_text", "text": text}],
++                })]
++            }
++        }
+         Role::User => vec![json!({
+             "type": "message",
+             "role": "user",
+@@ -21,30 +32,26 @@
+         })],
+         Role::Assistant => {
+             let mut items = Vec::new();
+-            let content = message
+-                .content
+-                .iter()
+-                .filter_map(|part| match part {
+-                    ContentPart::Text { text } => {
+-                        Some(json!({"type": "output_text", "text": text, "annotations": []}))
+-                    }
+-                    _ => None,
+-                })
+-                .collect::<Vec<_>>();
+-            if !content.is_empty() {
+-                items.push(json!({"type": "message", "role": "assistant", "content": content}));
+-            }
++            let mut content = Vec::new();
+             for part in &message.content {
+                 match part {
++                    ContentPart::Text { text } => {
++                        content
++                            .push(json!({"type": "output_text", "text": text, "annotations": []}));
++                    }
+                     ContentPart::Reasoning {
+                         signature: Some(signature),
+                         ..
+-                    } => items.push(json!({
+-                        "type": "reasoning",
+-                        "summary": [],
+-                        "encrypted_content": signature,
+-                    })),
++                    } => {
++                        flush_assistant_text(&mut items, &mut content);
++                        items.push(json!({
++                            "type": "reasoning",
++                            "summary": [],
++                            "encrypted_content": signature,
++                        }));
++                    }
+                     ContentPart::ToolCall(call) => {
++                        flush_assistant_text(&mut items, &mut content);
+                         let wire = response_wire_tool_name(&call.name);
+                         if tool_names
+                             .get(&wire)
+@@ -62,6 +69,7 @@
+                     _ => {}
+                 }
+             }
++            flush_assistant_text(&mut items, &mut content);
+             items
+         }
+         Role::Tool => message
+@@ -77,6 +85,16 @@
+             })
+             .collect(),
+     })
++}
++
++fn flush_assistant_text(items: &mut Vec<Value>, content: &mut Vec<Value>) {
++    if !content.is_empty() {
++        items.push(json!({
++            "type": "message",
++            "role": "assistant",
++            "content": std::mem::take(content),
++        }));
++    }
+ }
+ 
+ fn function_result_output(parts: &[ContentPart]) -> Value {
+--- a/crates/smith-runtime/src/chatgpt/tests.rs
++++ b/crates/smith-runtime/src/chatgpt/tests.rs
+@@ -1006,6 +1006,85 @@
+         );
+         previous = next;
+     }
++}
++
++#[test]
++fn changing_tail_context_does_not_move_ahead_of_cached_chatgpt_history() {
++    let provider = ChatGptProvider::new(
++        ReplayTransport::single(Vec::new()),
++        ChatGptProviderConfig::new("gpt-6-astra", Capabilities::basic_streaming(), "acct_test")
++            .unwrap(),
++        ProviderCredentialTarget::new("chatgpt").unwrap(),
++        Arc::new(StaticProviderCredentialSource::new(Secret::new(
++            "test-token",
++        ))),
++    );
++    let session = agent_runtime_core::ids::SessionId::new("cache-tail-session");
++    let mut request = ProviderRequest::new(
++        ModelId::new("gpt-6-astra"),
++        vec![
++            Message::system("Stable host instructions"),
++            Message::user("A long reference document that must keep its prefix"),
++            Message::assistant(vec![ContentPart::text("The reference is understood")]),
++            Message::system("Current todo state: implementing"),
++        ],
++    );
++    let (before, _) = provider.build_payload(&request, &session).unwrap();
++    request.messages[3] = Message::system("Current todo state: verifying");
++    let (after, _) = provider.build_payload(&request, &session).unwrap();
++
++    assert_eq!(before["instructions"], json!("Stable host instructions"));
++    assert_eq!(after["instructions"], before["instructions"]);
++    assert_eq!(after["prompt_cache_key"], before["prompt_cache_key"]);
++    let first = before["input"].as_array().unwrap();
++    let second = after["input"].as_array().unwrap();
++    assert_eq!(&first[..2], &second[..2]);
++    assert_eq!(first.len(), 3);
++    assert_eq!(
++        second[2],
++        json!({
++            "type":"message", "role":"developer",
++            "content":[{"type":"input_text","text":"Current todo state: verifying"}]
++        })
++    );
++}
++
++#[test]
++fn assistant_history_preserves_reasoning_text_and_tool_call_order() {
++    let reasoning = |signature: &str| ContentPart::Reasoning {
++        text: "[encrypted]".into(),
++        redacted: true,
++        signature: Some(signature.into()),
++        producer: None,
++    };
++    let message = Message::assistant(vec![
++        reasoning("signed-before-text"),
++        ContentPart::text("I will inspect the reference."),
++        ContentPart::text("Then compare the render."),
++        ContentPart::ToolCall(ToolCall {
++            id: ToolCallId::new("read-reference"),
++            name: "read".into(),
++            arguments: json!({"path":"reference.png"}),
++        }),
++        ContentPart::text("A later assistant block."),
++        reasoning("signed-after-text"),
++    ]);
++    assert_eq!(
++        response_items(&message, &BTreeMap::new()).unwrap(),
++        vec![
++            json!({"type":"reasoning","summary":[],"encrypted_content":"signed-before-text"}),
++            json!({"type":"message","role":"assistant","content":[
++                {"type":"output_text","text":"I will inspect the reference.","annotations":[]},
++                {"type":"output_text","text":"Then compare the render.","annotations":[]}
++            ]}),
++            json!({"type":"function_call","call_id":"read-reference","name":"read",
++                "arguments":"{\"path\":\"reference.png\"}"}),
++            json!({"type":"message","role":"assistant","content":[
++                {"type":"output_text","text":"A later assistant block.","annotations":[]}
++            ]}),
++            json!({"type":"reasoning","summary":[],"encrypted_content":"signed-after-text"}),
++        ]
++    );
+ }
+ 
+ #[test]
+--- a/crates/smith-runtime/src/chatgpt.rs
++++ b/crates/smith-runtime/src/chatgpt.rs
+@@ -76,6 +76,8 @@
+ pub const CHATGPT_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+ /// Fixed direct Responses endpoint used by the experimental provider.
+ pub const CHATGPT_RESPONSES_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
++/// Partitions cache identities when the native request projection changes.
++pub(crate) const CHATGPT_CACHE_KEY_REVISION: &str = "smith-chatgpt-prefix-2";
+ /// The account usage endpoint beside the Responses one, pinned from the
+ /// public Codex backend client (`/wham/usage` on `backend-api` hosts).
+ pub const CHATGPT_USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
+--- a/crates/smith-runtime/src/factory/provider/adapter.rs
++++ b/crates/smith-runtime/src/factory/provider/adapter.rs
+@@ -118,6 +118,16 @@
+         let mut contract = ProviderCacheContract::from_control(control);
+         contract.evidence.stream = true;
+         capabilities.cache_contract = Some(contract);
++    }
++
++    if adapter == Adapter::ChatGptResponses {
++        let contract = capabilities
++            .cache_contract
++            .as_mut()
++            .expect("supported adapter cache contract");
++        contract.key_revision = Some(RegistryRevision::new(
++            crate::chatgpt::CHATGPT_CACHE_KEY_REVISION,
++        ));
+     }
+ 
+     // The native Responses wire shape has offline fixtures for every

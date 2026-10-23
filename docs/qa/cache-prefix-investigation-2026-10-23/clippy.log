@@ -1,0 +1,28 @@
+    Checking tokio v1.53.3
+    Checking tokio-util v0.7.19
+    Checking tower v0.5.3
+    Checking tokio-rustls v0.26.4
+    Checking command-group v5.0.1
+    Checking tokio-stream v0.1.19
+    Checking process-wrap v9.1.0
+    Checking tower-http v0.6.11
+    Checking agent-runtime-core v0.7.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=a5f1b1788e982c39e7c3a394c715a7d92cc7852b#a5f1b178)
+    Checking h2 v0.4.16
+    Checking hyper v1.11.0
+    Checking hyper-util v0.1.20
+    Checking hyper-rustls v0.27.9
+    Checking reqwest v0.13.4
+    Checking rmcp v3.1.2
+    Checking agent-runtime-ability v0.7.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=a5f1b1788e982c39e7c3a394c715a7d92cc7852b#a5f1b178)
+    Checking agent-runtime-context v0.7.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=a5f1b1788e982c39e7c3a394c715a7d92cc7852b#a5f1b178)
+    Checking agent-runtime-provider v0.7.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=a5f1b1788e982c39e7c3a394c715a7d92cc7852b#a5f1b178)
+    Checking smith-host v0.7.13 (/Volumes/Data/codes/ai/tui/crates/smith-host)
+    Checking smith-config v0.7.13 (/Volumes/Data/codes/ai/tui/crates/smith-config)
+    Checking smith-tools v0.7.13 (/Volumes/Data/codes/ai/tui/crates/smith-tools)
+    Checking agent-runtime-lcm v0.7.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=a5f1b1788e982c39e7c3a394c715a7d92cc7852b#a5f1b178)
+    Checking agent-runtime v0.7.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=a5f1b1788e982c39e7c3a394c715a7d92cc7852b#a5f1b178)
+    Checking smith-plugin v0.7.13 (/Volumes/Data/codes/ai/tui/crates/smith-plugin)
+    Checking agent-runtime-mcp v0.7.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=a5f1b1788e982c39e7c3a394c715a7d92cc7852b#a5f1b178)
+    Checking smith-module v0.7.13 (/Volumes/Data/codes/ai/tui/crates/smith-module)
+    Checking smith-runtime v0.7.13 (/Volumes/Data/codes/ai/tui/crates/smith-runtime)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 19.66s

@@ -1,0 +1,27 @@
+--- a/crates/smith-runtime/src/chatgpt/provider.rs
++++ b/crates/smith-runtime/src/chatgpt/provider.rs
+@@ -239,6 +239,24 @@
+                 "reasoning".into(),
+                 json!({"effort": effort, "summary": "auto"}),
+             );
++        }
++        {
++            use std::hash::{Hash, Hasher};
++            let fingerprint = |value: &Value| {
++                let mut state = std::collections::hash_map::DefaultHasher::new();
++                value.to_string().hash(&mut state);
++                format!("{:016x}", state.finish())
++            };
++            let items = payload["input"].as_array().unwrap().iter().map(|item| {
++                json!({"type":item["type"],"role":item["role"],"hash":fingerprint(item),"bytes":item.to_string().len()})
++            }).collect::<Vec<_>>();
++            use std::io::Write;
++            let mut audit = std::fs::OpenOptions::new().create(true).append(true)
++                .open("/private/tmp/smith-cache-wire-audit.jsonl").unwrap();
++            writeln!(audit, "{}", json!({
++                "key":payload["prompt_cache_key"],"instructions":fingerprint(&payload["instructions"]),
++                "tools":fingerprint(&payload["tools"]),"items":items
++            })).unwrap();
+         }
+         Ok((payload, tool_names))
+     }

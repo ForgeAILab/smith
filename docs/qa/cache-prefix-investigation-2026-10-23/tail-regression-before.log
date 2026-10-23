@@ -1,0 +1,26 @@
+   Compiling smith-runtime v0.7.13 (/Volumes/Data/codes/ai/tui/crates/smith-runtime)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `smith-runtime` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 49.48s
+     Running unittests src/lib.rs (target/debug/deps/smith_runtime-0cdc9ce96d24de5a)
+
+running 1 test
+
+thread 'chatgpt::tests::changing_tail_context_does_not_move_ahead_of_cached_chatgpt_history' (7292549) panicked at crates/smith-runtime/src/chatgpt/tests.rs:1034:5:
+assertion `left == right` failed
+  left: String("Stable host instructions\n\nCurrent todo state: implementing")
+ right: String("Stable host instructions")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test chatgpt::tests::changing_tail_context_does_not_move_ahead_of_cached_chatgpt_history ... FAILED
+
+failures:
+
+failures:
+    chatgpt::tests::changing_tail_context_does_not_move_ahead_of_cached_chatgpt_history
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 697 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p smith-runtime --lib`
