@@ -35,6 +35,13 @@ opened object through a `max_bytes + 1` limiter.
 - **THEN** Smith reads no more than `max_bytes + 1`
 - **AND** returns the oversized-file outcome without retaining the full object
 
+#### Scenario: Project paths use a filesystem alias
+
+- **GIVEN** a confined project has an absolute filesystem alias such as macOS `/var` for `/private/var`
+- **WHEN** a workspace operation reads or creates a file through that project alias
+- **THEN** the operation resolves to the project directory capability
+- **AND** prepared paths already inside the chosen mount retain that capability across symlink changes
+
 #### Scenario: Explicit allow-all authorizes host filesystem tools
 
 - **GIVEN** the resolved invocation approval mode is `allow-all`

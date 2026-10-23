@@ -28,7 +28,7 @@ const INSTRUCTION_CEILING: u32 = 700;
 ///
 /// Names, descriptions, and complete input schemas for `read`, `list`,
 /// `search`, `edit`, `shell`, `task_output`, and `task_stop`. Includes the
-/// external-path and YOLO permission guidance added in 0.7.10.
+/// external-path and YOLO permission guidance.
 const TOOL_CEILING: u32 = 1_400;
 
 /// Instructions plus tools: the floor of any Smith request.

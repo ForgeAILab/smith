@@ -199,9 +199,17 @@ impl ProjectWorkspace {
     /// path accepted by the open directory capability.
     pub fn relative_path(&self, path: impl AsRef<Path>) -> Result<PathBuf, RuntimeError> {
         let path = path.as_ref();
-        // Prepared absolute paths must keep their chosen capability even if
-        // an ancestor is replaced by a symlink before I/O.
-        let resolved_absolute = if path.is_absolute() {
+        // Resolve aliases such as macOS /var only outside the chosen mount.
+        // Prepared paths inside it must keep their capability across symlink swaps.
+        let resolved_absolute = if path.is_absolute() && !path.starts_with(&self.capability_root) {
+            self.resolve_lexically(&path.to_string_lossy())
+                .ok_or_else(|| {
+                    RuntimeError::new(
+                        ErrorKind::Workspace,
+                        format!("path `{}` could not be resolved", path.display()),
+                    )
+                })?
+        } else if path.is_absolute() {
             path.to_path_buf()
         } else {
             self.root.join(path)
@@ -1092,6 +1100,29 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn absolute_project_aliases_support_reads_and_new_files() {
+        use std::os::unix::fs::symlink;
+
+        let (dir, _) = project();
+        let aliases = tempfile::tempdir().unwrap();
+        let alias = aliases.path().join("project");
+        symlink(dir.path(), &alias).unwrap();
+        let workspace = ProjectWorkspace::new(&alias).unwrap();
+        let source = alias.join("src/main.rs");
+        let read = workspace.read_bounded(&source, 4096).unwrap();
+        assert_eq!(read.bytes, std::fs::read(&source).unwrap());
+        let created = alias.join("created.txt");
+        workspace
+            .create_new(&created, b"created through alias")
+            .unwrap();
+        assert_eq!(
+            workspace.read_bounded(&created, 4096).unwrap().bytes,
+            b"created through alias"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_component_swapped_to_an_outside_symlink_cannot_escape() {
         use std::os::unix::fs::symlink;
 
@@ -1103,9 +1134,19 @@ mod tests {
         symlink(outside.path(), dir.path().join("src")).expect("swap symlink");
 
         for workspace in [workspace, host_workspace] {
-            assert!(workspace.read_bounded("src/secret.txt", 1024).is_err());
-            assert!(workspace.entries("src", true, true, 100).is_err());
-            assert!(workspace.create_new("src/created.txt", b"no").is_err());
+            for source in [PathBuf::from("src"), workspace.root.join("src")] {
+                assert!(
+                    workspace
+                        .read_bounded(source.join("secret.txt"), 1024)
+                        .is_err()
+                );
+                assert!(workspace.entries(&source, true, true, 100).is_err());
+                assert!(
+                    workspace
+                        .create_new(source.join("created.txt"), b"no")
+                        .is_err()
+                );
+            }
         }
         assert!(!outside.path().join("created.txt").exists());
     }
