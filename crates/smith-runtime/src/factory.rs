@@ -980,6 +980,7 @@ struct CapabilityStage {
     goal: Option<Arc<GoalComponent>>,
     delegation_slot:
         Option<Arc<std::sync::OnceLock<agent_runtime::delegation::DelegationCoordinator>>>,
+    delegation_wait_timers: Arc<crate::delegation::AgentWaitTimers>,
     advisor: Option<Arc<AdvisorTool>>,
     advisor_slot: Option<Arc<std::sync::OnceLock<agent_runtime::runtime::SessionHandle>>>,
 }

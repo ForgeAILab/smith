@@ -50,6 +50,13 @@ async fn the_agent_tool_spawns_waits_and_lists() {
     .expect("json");
     assert!(spawned.contains("child-1"), "{spawned}");
 
+    delegation
+        .coordinator()
+        .unwrap()
+        .wait_task_outcome(&agent_runtime_core::ids::ChildId::new("child-1"))
+        .await
+        .expect("child finishes before terminal wait");
+
     let waited = invoke_agent(
         &tool,
         serde_json::json!({ "action": "wait", "child_id": "child-1" }),
@@ -96,7 +103,7 @@ async fn the_agent_tool_spawns_waits_and_lists() {
 }
 
 #[tokio::test]
-async fn the_agent_tool_wait_is_bounded_without_stopping_the_child() {
+async fn the_agent_tool_wait_arms_without_stopping_the_child() {
     let fixture = Fixture::new();
     let provider = Arc::new(CrashThenReplyProvider::new());
     let smith = factory::build_request(request(&fixture, provider.clone()))
@@ -155,7 +162,7 @@ async fn the_agent_tool_wait_is_bounded_without_stopping_the_child() {
     ))
     .expect("json");
     assert!(waited.contains(r#"\"state\":\"running\""#), "{waited}");
-    assert!(waited.contains(r#"\"timed_out\":true"#), "{waited}");
+    assert!(waited.contains(r#"\"armed\":true"#), "{waited}");
 
     let children = delegation.coordinator().expect("a coordinator").list();
     assert!(matches!(children[0].state, ChildState::Running));
@@ -171,7 +178,7 @@ async fn the_agent_tool_wait_is_bounded_without_stopping_the_child() {
 }
 
 #[tokio::test]
-async fn the_default_foreground_wait_releases_the_parent_without_stopping_the_child() {
+async fn the_default_wait_returns_immediately_without_stopping_the_child() {
     let fixture = Fixture::new();
     let provider = Arc::new(CrashThenReplyProvider::new());
     let smith = factory::build_request(request(&fixture, provider.clone()))
@@ -190,13 +197,8 @@ async fn the_default_foreground_wait_releases_the_parent_without_stopping_the_ch
     let slot = Arc::new(OnceLock::new());
     slot.set(delegation.coordinator().expect("a coordinator").clone())
         .expect("an empty slot");
-    // Use a short policy in the test so the five-minute default behavior can be
-    // exercised without making the test sleep for five minutes. The production
-    // resolved default is five minutes; the child-lifetime assertion is the
-    // same at either duration.
-    let tool = AgentTool::new(slot).with_wait_policy(
-        DelegationWaitPolicy::new(20, 30).expect("a short test foreground policy"),
-    );
+    let tool = AgentTool::new(slot)
+        .with_wait_policy(DelegationWaitPolicy::new(20, 30).expect("a short test timer policy"));
     let ctx = InvocationContext {
         session: session.id().clone(),
         turn: None,
@@ -227,7 +229,7 @@ async fn the_default_foreground_wait_releases_the_parent_without_stopping_the_ch
         ),
     )
     .await
-    .expect("the foreground wait releases the parent")
+    .expect("the timer returns immediately")
     .expect("a wait outcome");
     let waited = serde_json::to_string(&waited.into_result_block(
         ToolCallId::new("call-2"),
@@ -236,7 +238,8 @@ async fn the_default_foreground_wait_releases_the_parent_without_stopping_the_ch
     ))
     .expect("json");
     assert!(waited.contains(r#"\"state\":\"running\""#), "{waited}");
-    assert!(waited.contains(r#"\"timed_out\":true"#), "{waited}");
+    assert!(waited.contains(r#"\"armed\":true"#), "{waited}");
+    assert!(waited.contains(r#"\"wake_after_ms\":20"#), "{waited}");
 
     let children = delegation.coordinator().expect("a coordinator").list();
     assert!(matches!(children[0].state, ChildState::Running));

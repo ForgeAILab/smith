@@ -28,6 +28,7 @@ impl App {
             inspected_child: None,
             inspected_detail: None,
             child_counts: BTreeMap::new(),
+            child_wait_deadlines: BTreeMap::new(),
             pending_spawns: VecDeque::new(),
             delegated_usage: BTreeMap::new(),
             child_usage_bindings: BTreeMap::new(),
@@ -159,6 +160,7 @@ impl App {
         }
         self.child_clocks.clear();
         self.child_counts.clear();
+        self.child_wait_deadlines.clear();
         self.child_dismiss_at.clear();
         self.retired_children.clear();
         if self

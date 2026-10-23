@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn armed_wait_shows_a_monitor_and_deadline_and_clears_on_completion() {
+    use agent_runtime_core::delegation::WorkspacePolicy;
+    use agent_runtime_core::ids::ChildId;
+    for width in [44, 80, 140] {
+        let mut app = App::new("model", "project");
+        app.apply(&event(RuntimeEvent::ChildSpawned {
+            child: ChildId::new("child-1"), workspace: WorkspacePolicy::ReadOnlyView,
+            max_turns: u32::MAX, max_tokens: None, deadline_ms: None,
+        }));
+        app.set_child_wait_deadlines(std::collections::BTreeMap::from([("child-1".into(), 45_296_000)]));
+        let screen = render(&app, width, 24, Theme::new().without_color());
+        assert!(screen.contains("monitor 12:34:56Z"), "{screen}");
+        app.set_child_wait_deadlines(Default::default());
+        assert!(!render(&app, width, 24, Theme::new().without_color()).contains("monitor"));
+        app.set_child_wait_deadlines(std::collections::BTreeMap::from([("child-1".into(), 45_296_000)]));
+        app.apply(&event(RuntimeEvent::ChildCompleted { child: ChildId::new("child-1"), result: "done".into() }));
+        assert!(!render(&app, width, 24, Theme::new().without_color()).contains("monitor"));
+    }
+}
+
+#[test]
 fn live_findings_agents_panel_labels_counts_and_omits_session_identity() {
     use crate::app::ChildCounts;
     use agent_runtime_core::ids::ChildId;

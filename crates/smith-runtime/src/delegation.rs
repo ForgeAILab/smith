@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use agent_runtime::ability::Ability;
 use agent_runtime::ability::activation::{ActivationContext, FailClosedPolicy};
@@ -665,9 +665,15 @@ impl ChildRuntimeFactory for SmithChildFactory {
 pub struct SmithDelegation {
     pub(crate) factory: Arc<SmithChildFactory>,
     pub(crate) slot: Arc<OnceLock<DelegationCoordinator>>,
+    pub(crate) wait_timers: Arc<AgentWaitTimers>,
 }
 
 impl SmithDelegation {
+    /// Process-local wait timers shared with the model-facing agent tool.
+    pub fn wait_timers(&self) -> &Arc<AgentWaitTimers> {
+        &self.wait_timers
+    }
+
     /// The coordinator, once [`wire_delegation`] has run.
     pub fn coordinator(&self) -> Option<&DelegationCoordinator> {
         self.slot.get()
@@ -685,14 +691,14 @@ pub async fn wire_delegation(
 
 /// Installs delegation with a resolved host wait policy.
 ///
-/// The policy is passed directly to Agent Runtime's coordinator; Smith does
-/// not implement a second waiting loop or silently widen the runtime maximum.
+/// Smith owns the model-facing timer; direct coordinator waits retain the
+/// runtime's maximum and may still be narrowed by the host policy.
 pub async fn wire_delegation_with_wait_policy(
     session: &SessionHandle,
     delegation: &SmithDelegation,
     wait_policy: DelegationWaitPolicy,
 ) -> Result<DelegationLifecycle, RuntimeError> {
-    wait_policy.resolve_timeout(None)?;
+    let runtime_wait_max = DelegationConfig::default().wait_max;
     let coordinator = DelegationCoordinator::new(
         session,
         delegation.factory.clone(),
@@ -702,8 +708,8 @@ pub async fn wire_delegation_with_wait_policy(
                 ..DelegationLimits::default()
             },
             delegation_tool_names: vec![AGENT_TOOL_NAME.to_owned()],
-            wait_default: wait_policy.runtime_default_timeout(),
-            wait_max: wait_policy.runtime_max_timeout(),
+            wait_default: wait_policy.default_timeout().min(runtime_wait_max),
+            wait_max: wait_policy.max_timeout().min(runtime_wait_max),
             // A delivered child reply follows the same inline rule as any
             // tool result the parent reads, including `agent result`.
             delivery_inline_bytes: delegation
@@ -720,12 +726,19 @@ pub async fn wire_delegation_with_wait_policy(
         .set(coordinator.clone())
         .map_err(|_| RuntimeError::new(ErrorKind::Conflict, "delegation is already wired"))?;
 
-    Ok(start_delegation_lifecycle_tasks(session, coordinator))
+    Ok(start_delegation_lifecycle_tasks(
+        session,
+        coordinator,
+        delegation.wait_timers.clone(),
+    ))
 }
 
 mod lifecycle;
 mod tool;
 mod transcript;
+mod wait_timers;
+
+pub use wait_timers::{AgentWaitTimers, ChildWaitMonitor};
 
 pub(crate) use lifecycle::DelegationParkingMonitor;
 use lifecycle::start_delegation_lifecycle_tasks;

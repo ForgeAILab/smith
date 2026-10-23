@@ -12,6 +12,9 @@ use std::time::Duration;
 #[path = "cli_contract/support.rs"]
 mod support;
 
+#[path = "setup_pty/wait_monitor.rs"]
+mod wait_monitor;
+
 const FAKE_CONFIG: &str = r#"
 default_profile = "dev"
 
@@ -1126,6 +1129,7 @@ expect {
     timeout { exit 124 }
     eof { exit 125 }
 }
+
 send -- "/quit\r"
 expect {
     -exact "TERMINAL_RESTORED" {}

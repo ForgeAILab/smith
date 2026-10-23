@@ -69,6 +69,7 @@ mod model_routes;
 mod profile_selection;
 mod result_delivery;
 mod transcript;
+mod wait_timers;
 
 const FAKE_CONFIG: &str = r#"
 default_profile = "dev"

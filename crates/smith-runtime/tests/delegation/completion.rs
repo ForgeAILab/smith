@@ -277,6 +277,7 @@ struct SpawnReadAnswerProvider {
     read: &'static str,
     parent_calls: Mutex<u32>,
     requests: Mutex<Vec<ProviderRequest>>,
+    coordinator: OnceLock<agent_runtime::delegation::DelegationCoordinator>,
 }
 
 impl SpawnReadAnswerProvider {
@@ -285,6 +286,7 @@ impl SpawnReadAnswerProvider {
             read,
             parent_calls: Mutex::new(0),
             requests: Mutex::new(Vec::new()),
+            coordinator: OnceLock::new(),
         }
     }
 
@@ -340,6 +342,19 @@ impl Provider for SpawnReadAnswerProvider {
             *calls += 1;
             *calls
         };
+        if step == 2 {
+            while self
+                .coordinator
+                .get()
+                .unwrap()
+                .status(&agent_runtime_core::ids::ChildId::new("child-1"))
+                .unwrap()
+                .state
+                == ChildState::Running
+            {
+                tokio::task::yield_now().await;
+            }
+        }
         let arguments = match (step, self.read) {
             (1, _) => serde_json::json!({"action": "spawn", "task": PONG_TASK_MARKER}),
             (2, _) => serde_json::json!({"action": "wait", "child_id": "child-1"}),
@@ -376,6 +391,10 @@ async fn assert_a_read_child_result_is_answered_once(read: &'static str, parent_
     let _lifecycle = wire_delegation(&session, delegation)
         .await
         .expect("delegation wires once");
+    provider
+        .coordinator
+        .set(delegation.coordinator().unwrap().clone())
+        .unwrap();
 
     session
         .run(UserInput::text(PONG_PARENT_INPUT))

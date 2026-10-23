@@ -859,6 +859,8 @@ pub struct App {
     /// current on the same poll-on-redraw as [`Self::inspected_detail`] —
     /// but for every visible child, not only the inspected one.
     pub(super) child_counts: BTreeMap<String, ChildCounts>,
+    /// Process-local wake deadlines supplied by the host on redraw.
+    pub(super) child_wait_deadlines: BTreeMap<String, u64>,
     /// Root spawn calls awaiting the child identity `ChildSpawned` reports.
     pub(super) pending_spawns: VecDeque<PendingSpawn>,
     /// Per-counter usage delegated children reported on their own live

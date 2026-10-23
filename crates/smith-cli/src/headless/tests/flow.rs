@@ -156,6 +156,7 @@ mode = "deny"
 struct SpawnWaitAnswerProvider {
     parent_calls: std::sync::Mutex<u32>,
     child_completion_requests: std::sync::Mutex<u32>,
+    coordinator: std::sync::OnceLock<agent_runtime::delegation::DelegationCoordinator>,
 }
 
 const PONG_PARENT_PROMPT: &str = "ask a sub-agent to reply pong";
@@ -203,6 +204,19 @@ impl Provider for SpawnWaitAnswerProvider {
             *calls += 1;
             *calls
         };
+        if step == 2 {
+            while self
+                .coordinator
+                .get()
+                .unwrap()
+                .status(&agent_runtime_core::ids::ChildId::new("child-1"))
+                .unwrap()
+                .state
+                == smith_runtime::ChildState::Running
+            {
+                tokio::task::yield_now().await;
+            }
+        }
         let arguments = match step {
             1 => serde_json::json!({"action": "spawn", "task": "reply pong"}),
             2 => serde_json::json!({"action": "wait", "child_id": "child-1"}),
@@ -264,6 +278,17 @@ max_output_tokens = 4096
     let host = smith_runtime::host::start(host_request(runtime, project.path()))
         .await
         .expect("a host");
+    provider
+        .coordinator
+        .set(
+            host.runtime()
+                .delegation()
+                .unwrap()
+                .coordinator()
+                .unwrap()
+                .clone(),
+        )
+        .unwrap();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 

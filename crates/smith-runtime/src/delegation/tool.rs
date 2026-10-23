@@ -31,6 +31,7 @@ pub struct AgentTool {
     slot: Arc<OnceLock<DelegationCoordinator>>,
     profiles: Vec<AgentToolProfile>,
     wait_policy: DelegationWaitPolicy,
+    wait_timers: Arc<AgentWaitTimers>,
     transcript: ChildTranscriptReader,
 }
 
@@ -43,6 +44,7 @@ impl AgentTool {
             slot,
             profiles: Vec::new(),
             wait_policy: DelegationWaitPolicy::default(),
+            wait_timers: Arc::new(AgentWaitTimers::default()),
             transcript: ChildTranscriptReader::new(
                 None,
                 crate::journal::DefaultRedactor::new(),
@@ -61,10 +63,17 @@ impl AgentTool {
         self
     }
 
-    /// Applies the same resolved wait bounds installed on the coordinator.
+    /// Applies the resolved host wake timer bounds.
     #[must_use]
     pub fn with_wait_policy(mut self, wait_policy: DelegationWaitPolicy) -> Self {
         self.wait_policy = wait_policy;
+        self
+    }
+
+    /// Shares process-local timers with the session's delegation lifecycle.
+    #[must_use]
+    pub fn with_wait_timers(mut self, wait_timers: Arc<AgentWaitTimers>) -> Self {
+        self.wait_timers = wait_timers;
         self
     }
 
@@ -128,7 +137,7 @@ enum AgentAction {
     },
     /// List every child and its status.
     List,
-    /// Wait for a bounded interval, then report the child status.
+    /// Report status immediately and optionally arm a single-use wake timer.
     Wait {
         child_id: String,
         #[serde(default)]
@@ -170,69 +179,6 @@ enum WorkspaceArg {
     Directory { path: String },
 }
 
-/// Waits in the foreground for at most `timeout`, keeping each shared-runtime
-/// wait call within its own hard maximum. A running result at the overall
-/// boundary is a soft handoff: the child is deliberately left untouched so
-/// the parent can finish its turn and park while the child continues.
-async fn wait_for_child_foreground(
-    coordinator: &DelegationCoordinator,
-    child: &agent_runtime_core::ids::ChildId,
-    timeout: Duration,
-    runtime_slice: Duration,
-) -> Result<(ChildStatus, bool), RuntimeError> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let slice = remaining.min(runtime_slice);
-        let status = if slice.is_zero() {
-            coordinator
-                .wait_with_options(
-                    child,
-                    agent_runtime::delegation::DelegationWaitOptions {
-                        timeout: Some(slice),
-                    },
-                )
-                .await?
-        } else {
-            // Runtime normally enforces the same bound through its injected
-            // clock. The host timer is a final safety net so a custom/frozen
-            // clock cannot keep the parent call open beyond its soft boundary.
-            match tokio::time::timeout(
-                slice,
-                coordinator.wait_with_options(
-                    child,
-                    agent_runtime::delegation::DelegationWaitOptions {
-                        timeout: Some(slice),
-                    },
-                ),
-            )
-            .await
-            {
-                Ok(result) => result?,
-                Err(_) => {
-                    coordinator
-                        .wait_with_options(
-                            child,
-                            agent_runtime::delegation::DelegationWaitOptions {
-                                timeout: Some(Duration::ZERO),
-                            },
-                        )
-                        .await?
-                }
-            }
-        };
-        if status.state != ChildState::Running {
-            return Ok((status, false));
-        }
-        // `slice == remaining` means the shared wait consumed the last
-        // foreground interval. Returning here does not stop the child; it
-        // merely releases the parent tool call.
-        if slice.is_zero() || slice >= remaining {
-            return Ok((status, true));
-        }
-    }
-}
-
 pub(super) fn status_json(status: &ChildStatus) -> Value {
     let state = match &status.state {
         ChildState::Running => "running".to_owned(),
@@ -264,15 +210,29 @@ pub(super) fn status_json(status: &ChildStatus) -> Value {
     })
 }
 
-fn wait_status_json(status: &ChildStatus, timed_out: bool) -> Value {
+fn wait_status_json(
+    status: &ChildStatus,
+    monitor: Option<ChildWaitMonitor>,
+    clamped: bool,
+) -> Value {
     let mut value = status_json(status);
     if let Value::Object(object) = &mut value {
-        object.insert("timed_out".to_owned(), Value::Bool(timed_out));
-        if timed_out {
+        object.insert("armed".to_owned(), json!(monitor.is_some()));
+        object.insert("clamped".to_owned(), json!(clamped));
+        object.insert(
+            "wake_after_ms".to_owned(),
+            json!(monitor.as_ref().map(|timer| timer.wake_after_ms)),
+        );
+        object.insert(
+            "deadline".to_owned(),
+            json!(monitor.as_ref().map(|timer| timer.deadline)),
+        );
+        if status.state == ChildState::Running {
+            object.remove("result");
             object.insert(
                 "note".to_owned(),
                 Value::String(
-                    "foreground wait expired; the child continues running in the background. Continue independent work or finish your turn and park; its terminal result will be delivered automatically. No polling is needed."
+                    "This call returned immediately. Continue independent work or end your turn to park. You will wake automatically when the child completes or the armed deadline expires. No polling is needed; the timer fires only once."
                         .to_owned(),
                 ),
             );
@@ -325,8 +285,8 @@ impl Tool for AgentTool {
     fn spec(&self) -> ToolSpec {
         let description = if self.profiles.is_empty() {
             "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
-             read-only tools unless tools=\"all\"), list, wait (foreground for up to five minutes by default; timeout_ms may request a shorter bound; zero \
-             is an immediate status check; an expired wait leaves the child running in the background and terminal results are delivered automatically), \
+             read-only tools unless tools=\"all\"), list, wait (returns immediately; sets a single-use wake deadline, five minutes by default and at most; zero \
+             checks status without setting a timer; end your turn to park and you will wake automatically on completion or the deadline), \
              result, transcript (inspect committed conversation on demand with bounded page_size and cursor; \
              use artifact.read for complete large entries; diagnostic reads preserve automatic completion), \
              follow_up (start a new task on an idle child), resume (continue an exact \
@@ -342,8 +302,8 @@ impl Tool for AgentTool {
         } else {
             format!(
                 "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
-                 read-only tools unless tools=\"all\"), list, wait (foreground for up to five minutes by default; timeout_ms may request a shorter bound; zero \
-                 is an immediate status check; an expired wait leaves the child running in the background and terminal results are delivered automatically), \
+                 read-only tools unless tools=\"all\"), list, wait (returns immediately; sets a single-use wake deadline, five minutes by default and at most; zero \
+                 checks status without setting a timer; end your turn to park and you will wake automatically on completion or the deadline), \
                  result, transcript (inspect committed conversation on demand with bounded page_size and cursor; \
                  use artifact.read for complete large entries; diagnostic reads preserve automatic completion), \
                  follow_up (start a new task on an idle child), resume \
@@ -413,7 +373,7 @@ impl Tool for AgentTool {
             json!({
                 "type": "integer",
                 "minimum": 0,
-                "description": "Optional bounded wait in milliseconds (0 checks immediately; values above the configured host maximum are rejected)."
+                "description": "Optional single-use wake timer in milliseconds. Returns immediately. 0 only checks status; positive values have no minimum and are clamped to the configured maximum (at most 300000). End your turn; you wake automatically."
             }),
         );
         properties.insert(
@@ -503,7 +463,7 @@ impl Tool for AgentTool {
                 timeout_ms,
             } => (
                 child_id.clone(),
-                "Wait for sub-agent",
+                "Monitor sub-agent",
                 Some(match timeout_ms {
                     Some(timeout_ms) => format!("{child_id} for {timeout_ms} ms"),
                     None => child_id.clone(),
@@ -570,8 +530,8 @@ impl Tool for AgentTool {
                 // non-child-enabled, or unrouted profile must fail without
                 // creating a child or a lifecycle event, so this has to
                 // short-circuit ahead of `coordinator.spawn` below.
-                let model = match profile {
-                    Some(name) => match self.find_profile(&name) {
+                let model = match &profile {
+                    Some(name) => match self.find_profile(name) {
                         Some(option) => ChildModelSelection::Explicit {
                             provider: Some(profile_route_key(&option.name, &option.revision)),
                             model: option.model.clone(),
@@ -604,13 +564,21 @@ impl Tool for AgentTool {
                     workspace,
                 };
                 match coordinator.spawn(spec).await {
-                    Ok(SpawnOutcome::Spawned { child, .. }) => Ok(ToolOutcome::json(json!({
-                        "spawned": child.as_str(),
-                        "note": "the result will be delivered when the child completes",
-                    }))),
-                    Ok(SpawnOutcome::Queued { child }) => Ok(ToolOutcome::json(json!({
-                        "queued": child.as_str(),
-                    }))),
+                    Ok(SpawnOutcome::Spawned { child, .. }) => {
+                        self.wait_timers
+                            .task_started(child.as_str(), profile.as_deref());
+                        Ok(ToolOutcome::json(json!({
+                            "spawned": child.as_str(),
+                            "note": "the result will be delivered when the child completes",
+                        })))
+                    }
+                    Ok(SpawnOutcome::Queued { child }) => {
+                        self.wait_timers
+                            .task_started(child.as_str(), profile.as_deref());
+                        Ok(ToolOutcome::json(json!({
+                            "queued": child.as_str(),
+                        })))
+                    }
                     Ok(SpawnOutcome::AtCapacity { running, limit }) => {
                         Ok(ToolOutcome::json(json!({
                             "at_capacity": { "running": running, "limit": limit },
@@ -629,37 +597,51 @@ impl Tool for AgentTool {
                 timeout_ms,
             } => {
                 let child = agent_runtime_core::ids::ChildId::new(child_id);
-                let timeout = match self.wait_policy.resolve_timeout(timeout_ms) {
-                    Ok(timeout) => timeout,
+                let timeout = self.wait_policy.resolve_timeout(timeout_ms);
+                let status = match coordinator.status(&child) {
+                    Ok(status) => status,
                     Err(err) => return Ok(ToolOutcome::error(err.message)),
                 };
-                let (status, timed_out) = match wait_for_child_foreground(
-                    coordinator,
-                    &child,
-                    timeout,
-                    self.wait_policy.runtime_slice(),
-                )
-                .await
-                {
-                    Ok(result) => result,
-                    Err(err) => return Ok(ToolOutcome::error(err.message)),
+                let clamped = timeout_ms
+                    .is_some_and(|requested| requested > self.wait_policy.max_timeout_ms());
+                let monitor = if status.state == ChildState::Running {
+                    self.wait_timers.arm(child.as_str(), timeout)
+                } else {
+                    self.wait_timers.cancel(child.as_str());
+                    None
                 };
                 // The status carries the completed result text; when it is
                 // the child's latest outcome, the model now has it.
-                if let (Some(text), Ok(Some(outcome))) = (
-                    status.last_result.as_deref(),
-                    coordinator.task_outcome(&child),
-                ) && matches!(&outcome, ChildTaskOutcome::Completed { result, .. } if result.text == text)
+                if status.state != ChildState::Running
+                    && let Ok(Some(outcome)) = coordinator.task_outcome(&child)
                 {
                     acknowledge_delivered(coordinator, ctx, &outcome);
+                    if matches!(outcome, ChildTaskOutcome::NeedsInput { .. }) {
+                        let mut value = wait_status_json(&status, None, clamped);
+                        value.as_object_mut().expect("status object").extend(
+                            task_outcome_json(&outcome)
+                                .as_object()
+                                .expect("outcome object")
+                                .clone(),
+                        );
+                        return Ok(ToolOutcome::json(value));
+                    }
                 }
-                Ok(ToolOutcome::json(wait_status_json(&status, timed_out)))
+                Ok(ToolOutcome::json(wait_status_json(
+                    &status, monitor, clamped,
+                )))
             }
             AgentAction::Result { child_id } => {
                 let outcome = coordinator
                     .task_outcome(&agent_runtime_core::ids::ChildId::new(child_id.clone()));
                 match outcome {
                     Ok(Some(outcome)) => {
+                        if coordinator
+                            .status(&agent_runtime_core::ids::ChildId::new(&child_id))
+                            .is_ok_and(|status| status.state != ChildState::Running)
+                        {
+                            self.wait_timers.cancel(&child_id);
+                        }
                         acknowledge_delivered(coordinator, ctx, &outcome);
                         Ok(ToolOutcome::json(task_outcome_json(&outcome)))
                     }
@@ -694,9 +676,12 @@ impl Tool for AgentTool {
             AgentAction::FollowUp { child_id, task } => {
                 let child = agent_runtime_core::ids::ChildId::new(child_id);
                 match coordinator.follow_up(&child, UserInput::text(task)).await {
-                    Ok(()) => Ok(ToolOutcome::json(json!({
-                        "follow_up_sent": child.as_str(),
-                    }))),
+                    Ok(()) => {
+                        self.wait_timers.task_restarted(child.as_str());
+                        Ok(ToolOutcome::json(json!({
+                            "follow_up_sent": child.as_str(),
+                        })))
+                    }
                     Err(err) => Ok(ToolOutcome::error(err.message)),
                 }
             }
@@ -713,7 +698,10 @@ impl Tool for AgentTool {
             AgentAction::Stop { child_id } => {
                 let child = agent_runtime_core::ids::ChildId::new(child_id);
                 match coordinator.stop(&child).await {
-                    Ok(status) => Ok(ToolOutcome::json(status_json(&status))),
+                    Ok(status) => {
+                        self.wait_timers.cancel(child.as_str());
+                        Ok(ToolOutcome::json(status_json(&status)))
+                    }
                     Err(err) => Ok(ToolOutcome::error(err.message)),
                 }
             }

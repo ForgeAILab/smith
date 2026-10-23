@@ -590,7 +590,8 @@ pub(super) fn live_flow(kind: Kind) {
     if let Some(profile) = &child_profile {
         let spawn_args = json!({"action":"spawn", "task":"Reply with exactly the word PONG.", "profile":profile});
         second_prompt.push_str(&format!(" Then call agent {spawn_args}, then agent \
-            {{\"action\":\"wait\",\"child_id\":\"<returned spawned id>\",\"timeout_ms\":60000}} once. Report its result."));
+            {{\"action\":\"wait\",\"child_id\":\"<returned spawned id>\",\"timeout_ms\":60000}} once. \
+            This returns immediately: end your turn and you will wake automatically. Report PONG when the child result arrives."));
     }
     if advisor_enabled {
         second_prompt.push_str(" Then call smith MCP advisor {} once and report its answer.");
@@ -613,7 +614,16 @@ pub(super) fn live_flow(kind: Kind) {
         Some(&smith),
         deadline,
     );
-    path.assert_launches(2, &cli.context);
+    let continuation_count = second
+        .iter()
+        .filter(|line| {
+            matches!(
+                line["event"]["payload"]["source"]["kind"].as_str(),
+                Some("delegation.child-completion" | "delegation.wait-timeout")
+            )
+        })
+        .count();
+    path.assert_launches(2 + continuation_count, &cli.context);
     agent_call(&second, &cli.context);
     let (resumed_smith, resumed_external) = identity(&second, &cli.context);
     assert_eq!(
@@ -663,18 +673,27 @@ pub(super) fn live_flow(kind: Kind) {
         );
         let waited = history_result_json(wait_result, &cli.context);
         assert_eq!(waited["child_id"], child_id, "{}: {waited}", cli.context);
-        assert_eq!(
-            waited["timed_out"], false,
-            "{}: child missed wait deadline: {waited}",
-            cli.context
-        );
-        assert!(
-            waited["result"]
-                .as_str()
-                .is_some_and(|text| text.contains("PONG")),
-            "{}: child result lacks PONG: {waited}; model history: {snapshot}",
-            cli.context
-        );
+        if waited["state"] == "running" {
+            assert_eq!(waited["armed"], true, "{}: {waited}", cli.context);
+            assert_eq!(waited["wake_after_ms"], 60000, "{}: {waited}", cli.context);
+            assert!(
+                journal.iter().any(
+                    |entry| entry["payload"]["source"]["kind"] == "delegation.child-completion"
+                ),
+                "{}: no automatic completion delivery",
+                cli.context
+            );
+        } else {
+            assert_eq!(waited["state"], "idle", "{}: {waited}", cli.context);
+            assert_eq!(waited["armed"], false, "{}: {waited}", cli.context);
+            assert!(
+                waited["result"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("PONG")),
+                "{}: child result lacks PONG: {waited}",
+                cli.context
+            );
+        }
     }
     if advisor_enabled {
         let (_, _, advisor_result) =

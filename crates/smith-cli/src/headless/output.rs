@@ -416,6 +416,9 @@ pub(super) struct ApprovalOutput {
 
 #[derive(Debug, Default, Serialize)]
 pub(super) struct LifecycleOutput {
+    /// Attributed delegation continuation counts, independent of user turns.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) continuations: BTreeMap<String, u32>,
     pub(super) attempts_committed: u32,
     pub(super) attempts_discarded: u32,
     #[serde(skip_serializing_if = "Option::is_none")]

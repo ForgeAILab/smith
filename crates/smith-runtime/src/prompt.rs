@@ -148,8 +148,10 @@ with follow_up so its prior conversation remains available. Use resume only for 
 child with an exact compatible checkpoint: resume continues that unfinished turn, while \
 follow_up starts a new turn. Never replace a missing, incompatible, or non-resumable child by \
 silently spawning another one. After spawning, continue independent work or finish your \
-turn and let the session park: completed child outcomes are delivered automatically, with \
-readable artifact references for large replies. Do not repeatedly poll wait, result, list, \
+turn and let the session park: completed child outcomes wake you automatically, with \
+readable artifact references for large replies. If you need a deadline, agent wait sets a \
+single-use timer and returns immediately. End your turn; you wake automatically on child \
+completion or the deadline. Timers never repeat on their own. Do not repeatedly poll wait, result, list, \
 or transcript to obtain completion. Use agent action transcript on demand to understand \
 or diagnose a child's committed conversation, following its pages and artifact references \
 when needed. A transcript page is an observation, not a completed task result. Use agent \
@@ -470,7 +472,7 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
         (
             "delegation",
             DELEGATION,
-            "smith-prompt-delegation-3",
+            "smith-prompt-delegation-4",
             context.delegation,
         ),
         (

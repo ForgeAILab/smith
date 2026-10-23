@@ -76,6 +76,25 @@ impl HeadlessFold {
     pub(super) fn apply(&mut self, event: &EventEnvelope) {
         self.cache_projection.apply(event);
         observe_sequence(&mut self.last_sequence, event.seq, &mut self.sequence_error);
+        if let RuntimeEvent::InternalTurnStarted { source } = &event.payload
+            && matches!(
+                source.kind.as_str(),
+                "delegation.child-completion" | "delegation.wait-timeout"
+            )
+        {
+            let count = self
+                .lifecycle
+                .continuations
+                .entry(source.kind.clone())
+                .or_default();
+            *count = count.saturating_add(1);
+            if source.kind == "delegation.wait-timeout"
+                && let Some(turn) = &event.turn
+            {
+                self.active_child_completion_turns
+                    .insert(turn.as_str().to_owned());
+            }
+        }
         if matches!(
             &event.payload,
             RuntimeEvent::InternalTurnStarted { source } if source.kind == "goal"
@@ -512,6 +531,29 @@ mod tests {
         ));
         assert!(fold.active_child_completion_turns.is_empty());
         assert!(fold.exit(no_goal, || false));
+    }
+
+    #[test]
+    fn wait_timeout_is_attributed_without_advancing_the_completion_cursor() {
+        let mut fold = fold();
+        fold.apply(&completed(1, "root", TurnFinish::Completed));
+        fold.apply(&event(
+            2,
+            "timeout",
+            RuntimeEvent::InternalTurnStarted {
+                source: internal_source("delegation.wait-timeout", "wait-timers"),
+            },
+        ));
+        assert_eq!(fold.lifecycle.continuations["delegation.wait-timeout"], 1);
+        assert_eq!(fold.observed_delivery_revision, 0);
+        assert!(!fold.exit(no_goal, || panic!(
+            "an accepted timeout turn is still active"
+        )));
+        fold.apply(&completed(3, "timeout", TurnFinish::Completed));
+        assert!(
+            fold.exit(no_goal, || false),
+            "timers alone cannot keep headless alive"
+        );
     }
 
     #[test]

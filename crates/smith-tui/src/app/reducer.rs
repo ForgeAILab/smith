@@ -360,6 +360,12 @@ impl App {
                 self.turn_usage = Default::default();
             }
             RuntimeEvent::TurnStarted | RuntimeEvent::InternalTurnStarted { .. } => {
+                if let RuntimeEvent::InternalTurnStarted { source } = &envelope.payload
+                    && source.kind == "delegation.wait-timeout"
+                {
+                    self.transcript
+                        .push_notice(NoticeKind::Monitor, source.kind.clone());
+                }
                 if matches!(envelope.payload, RuntimeEvent::TurnStarted) {
                     self.status.record_user_turn();
                 }

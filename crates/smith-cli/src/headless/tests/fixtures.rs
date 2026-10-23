@@ -990,6 +990,7 @@ fn machine_result_v2() {
             session_provenance: UsageProvenance::ProviderReported,
         },
         lifecycle: LifecycleOutput {
+            continuations: Default::default(),
             attempts_committed: 1,
             attempts_discarded: 0,
             activation: Some(ActivationOutput {
@@ -1208,6 +1209,7 @@ fn lifecycle_text() {
             session_provenance: UsageProvenance::Unknown,
         },
         lifecycle: LifecycleOutput {
+            continuations: Default::default(),
             attempts_committed: 2,
             attempts_discarded: 1,
             activation: Some(ActivationOutput {

@@ -290,6 +290,19 @@ impl App {
         self.child_counts.get(child).copied()
     }
 
+    /// Replaces live wake deadlines; historical tool results never arm tags.
+    pub fn set_child_wait_deadlines(&mut self, deadlines: BTreeMap<String, u64>) {
+        self.child_wait_deadlines = deadlines;
+    }
+
+    /// Current host-supplied wake time, only while the child is running.
+    pub fn child_wait_deadline(&self, child: &str) -> Option<u64> {
+        self.children
+            .get(child)
+            .filter(|summary| summary.state.is_running())?;
+        self.child_wait_deadlines.get(child).copied()
+    }
+
     /// Starts the linger countdown for a child that just finished cleanly.
     ///
     /// A child under inspection never retires out from under the reader; the

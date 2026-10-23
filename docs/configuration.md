@@ -189,20 +189,19 @@ The numeric bounds and zero meanings are:
 | `child_agents.wait_default_timeout_ms` | `300000` | `0..=300000`; zero is an immediate status check |
 | `child_agents.wait_max_timeout_ms` | `300000` | `1..=300000`; must be at least the default |
 
-`agent.wait` accepts the optional `timeout_ms`. With no override it waits in the
-foreground for up to five minutes, then returns a successful `running` result
-with `timed_out = true`; the child is left running in the background and its
-terminal result is delivered automatically. A shorter valid timeout can be
-requested, zero performs an immediate status check, and a value above the
-resolved maximum is rejected before waiting. A parent is
-`parked-awaiting-child` only while a direct child is still nonterminal; no
-provider stream or tool call is kept open after the foreground wait boundary.
-Terminal child outcomes are preserved and automatically admitted through an
-ordinary, attributed continuation at the next safe boundary, unless the parent
-model already received the outcome from the agent tool's `wait` or `result`
-action; that outcome is not delivered a second time. Child progress
-and child provider/tool work do not reset the parent's inactivity or cache-touch
-clocks.
+`agent.wait` returns immediately, arming a single-use timer for a running child.
+It reports `armed`, `wake_after_ms`, `deadline` (Unix milliseconds), and `clamped`.
+The default is five minutes; positive durations have no minimum and are clamped
+to the configured maximum. Zero only checks status. Re-arming replaces the timer.
+End your turn to park: completion or expiry wakes you automatically. The panel
+shows `monitor` with the wake time. Timers never repeat, survive restart, or
+extend headless process life; shutdown cancels them.
+
+Expiry admits one `delegation.wait-timeout` turn containing status without
+partial output. Completion supersedes pending expiry; user input takes priority.
+Outcomes already read through `wait` or `result` are not delivered again.
+`parked-awaiting-child` requires live child work and holds no provider stream or
+tool call. Child activity does not reset parent inactivity or cache-touch clocks.
 
 `context.idle_compaction_ms` remains a deprecated one-release alias for
 `context.cache.inactivity_limit_ms`. Equal values in one layer are accepted;
@@ -1208,8 +1207,8 @@ reserve, or estimated-count slack.
 | `context.cache.handoff_checkpoint` | `true` | Permit a conformance-gated same-model handoff |
 | `context.cache.idle_compaction` | `true` | Attempt ordinary semantic compaction once at inactivity |
 | `context.cache.resume_capsule` | `true` | Persist the redaction-safe cold-continuation projection |
-| `child_agents.wait_default_timeout_ms` | `300000` | Default five-minute foreground `agent.wait` boundary; zero is an immediate status check |
-| `child_agents.wait_max_timeout_ms` | `300000` | Maximum accepted foreground `agent.wait.timeout_ms`; timeout leaves the child running |
+| `child_agents.wait_default_timeout_ms` | `300000` | Default single-use `agent.wait` wake timer; zero only checks status |
+| `child_agents.wait_max_timeout_ms` | `300000` | Maximum wake timer duration; larger tool requests are clamped |
 | `limits.max_retries` | `5` | Retries after the first provider attempt (six attempts total). Exponential backoff with equal jitter: 0.5–1s, 1–2s, 2–4s, 4–8s, 8–16s; later waits cap at 15–30s. Longer provider retry hints take precedence; rate limits without a hint wait at least 2s. |
 | `limits.max_tool_steps` | `0` | Tool-loop ceiling per turn; `0` removes it |
 | `limits.turn_time_limit_ms` | `0` | Whole-turn deadline; `0` removes it |

@@ -31,20 +31,49 @@ fn action(action: &str, pointer: &str) -> Value {
     json!({"call":{"tool":"agent","arguments":{"action":action,"child_id":{"$last":pointer}}}})
 }
 
+fn run_after_child_completions(
+    fixture: &BridgeFixture,
+    script: Value,
+    gates: &[std::path::PathBuf],
+) -> super::support::StandInRun {
+    let (script, record) = script_files(fixture.smith.project.path(), &script);
+    let mut command = fixture.command(None, "allow-all");
+    command
+        .env("CLI_STAND_IN_SCRIPT", script)
+        .env("CLI_STAND_IN_RECORD", &record);
+    let mut process = Process::spawn(&mut command, fixture.deadline);
+    for gate in gates {
+        loop {
+            let line = process.next("child completion before terminal wait");
+            fixture.cleanup.capture();
+            if line["event"]["payload"]["event"] == "child_completed" {
+                break;
+            }
+        }
+        std::fs::write(gate, "continue").unwrap();
+    }
+    recorded_run(process.finish(Some(&record)), &record)
+}
+
 #[test]
 fn provider_child_wait_is_acknowledged_and_all_actions_round_trip() {
     for codex in [false, true] {
         let fixture = BridgeFixture::configured(codex, "delegation = true", CHILD);
-        let run = fixture.run(
+        let gates = [
+            fixture.smith.project.path().join("first-completed"),
+            fixture.smith.project.path().join("second-completed"),
+        ];
+        let run = run_after_child_completions(
+            &fixture,
             json!([
-                {"list_tools":true}, spawn("review the first task"), action("wait", "/spawned"),
+                {"list_tools":true}, spawn("review the first task"), {"wait_file":gates[0]}, action("wait", "/spawned"),
                 {"say_last":true}, {"call":{"tool":"agent","arguments":{"action":"list"}}},
                 action("result", "/children/0/child_id"),
                 {"call":{"tool":"agent","arguments":{"action":"follow_up",
                     "child_id":{"$last":"/child_id"},"task":"review the second task"}}},
-                action("wait", "/follow_up_sent"), action("stop", "/child_id"), {"say":"done"}
+                {"wait_file":gates[1]}, action("wait", "/follow_up_sent"), action("stop", "/child_id"), {"say":"done"}
             ]),
-            None,
+            &gates,
         );
         successful(&run);
         assert_eq!(run.record["server"]["name"], "smith");
@@ -73,7 +102,7 @@ fn provider_child_wait_is_acknowledged_and_all_actions_round_trip() {
         let child = calls[0]["spawned"].as_str().expect("spawned child");
         assert_eq!(calls[1]["child_id"], child);
         assert_eq!(calls[1]["state"], "idle");
-        assert_eq!(calls[1]["timed_out"], false);
+        assert_eq!(calls[1]["armed"], false);
         assert_eq!(calls[1]["result"], REPLY);
         assert_eq!(calls[2]["children"].as_array().unwrap().len(), 1);
         assert_eq!(calls[2]["children"][0]["child_id"], child);
@@ -84,7 +113,7 @@ fn provider_child_wait_is_acknowledged_and_all_actions_round_trip() {
         // projection therefore still reads the last assistant reply.
         assert_eq!(calls[5]["result"], REPLY);
         assert_eq!(calls[5]["state"], "idle");
-        assert_eq!(calls[5]["timed_out"], false);
+        assert_eq!(calls[5]["armed"], false);
         assert_eq!(calls[5]["turns_used"], 2);
         assert_eq!(calls[6]["child_id"], child);
         // Stop on an idle durable child returns the native status shape.
@@ -161,7 +190,17 @@ fn spawn_obeys_native_delegation_approval_and_refusal_creates_no_child() {
                 script.push(json!({"call":{"tool":"agent", "arguments":{"action":"list"}}}));
             }
             script.push(json!({"say":"approval policy survived"}));
-            let run = fixture.run_policy(json!(script), None, policy);
+            let run = if policy == "allow-all" {
+                let gate = fixture
+                    .smith
+                    .project
+                    .path()
+                    .join("approval-child-completed");
+                script.insert(1, json!({"wait_file":gate}));
+                run_after_child_completions(&fixture, json!(script), &[gate])
+            } else {
+                fixture.run_policy(json!(script), None, policy)
+            };
             assert_eq!(
                 run.output.status.code(),
                 native.output.status.code(),
@@ -204,7 +243,14 @@ fn spawn_obeys_native_delegation_approval_and_refusal_creates_no_child() {
                         .expect("native wait text"),
                 )
                 .expect("native wait JSON");
-                assert_eq!(native_wait["result"], REPLY, "{native_wait}");
+                assert!(
+                    matches!(native_wait["state"].as_str(), Some("idle" | "running")),
+                    "{native_wait}"
+                );
+                assert_eq!(native_wait["armed"], native_wait["state"] == "running");
+                if native_wait["state"] == "idle" {
+                    assert_eq!(native_wait["result"], REPLY, "{native_wait}");
+                }
                 let child = response_value(&replies[0]);
                 let child_session = response_value(&replies[1]);
                 assert!(child["spawned"].is_string(), "{child}");
@@ -394,6 +440,79 @@ fn unread_provider_outcome_gets_one_internal_resumed_harness_turn() {
 }
 
 #[test]
+fn running_child_wait_returns_immediately_and_timeout_wakes_the_harness() {
+    for codex in [false, true] {
+        let model = if codex {
+            "cli/codex/gpt-6-sol"
+        } else {
+            "cli/claude-code/sonnet"
+        };
+        let fixture = BridgeFixture::configured(
+            codex,
+            "delegation = true",
+            &CHILD.replace("child-model", model),
+        );
+        let release = fixture.smith.project.path().join("release-monitored-child");
+        let (script, record) = script_files(
+            fixture.smith.project.path(),
+            &json!({
+                "initial":[spawn("monitored harness child"),
+                    {"call":{"tool":"agent","arguments":{"action":"wait","child_id":{"$last":"/spawned"},"timeout_ms":10}}},
+                    {"say":"parent parked"}],
+                "resumed":[{"say":"wake handled"}],
+                "by_prompt":{"monitored harness child":[{"say":"private partial child output"},{"wait_file":release},{"say":"child finished"}]}
+            }),
+        );
+        let mut command = fixture.command(None, "allow-all");
+        command
+            .env("CLI_STAND_IN_SCRIPT", script)
+            .env("CLI_STAND_IN_RECORD", &record);
+        let mut process = Process::spawn(&mut command, fixture.deadline);
+        loop {
+            let line = process.next("single-use wait timeout wakes harness root");
+            fixture.cleanup.capture();
+            if line["event"]["payload"]["source"]["kind"] == "delegation.wait-timeout" {
+                break;
+            }
+        }
+        std::fs::write(release, "finish child").unwrap();
+        let run = recorded_run(process.finish(Some(&record)), &record);
+        successful(&run);
+        let root = &run.invocations()[0];
+        let replies = responses(root, "agent");
+        let waited = response_value(&replies[1]);
+        assert_eq!(waited["state"], "running");
+        assert_eq!(waited["armed"], true);
+        assert_eq!(waited["wake_after_ms"], 10);
+        let wakes = run
+            .invocations()
+            .iter()
+            .filter(|invocation| {
+                invocation["prompt"].as_str().is_some_and(|prompt| {
+                    prompt.starts_with("[Delivered by the host: delegation.wait-timeout]\n")
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(wakes.len(), 1);
+        assert_eq!(wakes[0]["resume"], root["session_id"]);
+        let prompt = wakes[0]["prompt"].as_str().unwrap();
+        assert!(
+            prompt.contains("child-1") && prompt.contains("worker") && prompt.contains("running"),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("private partial child output"), "{prompt}");
+        assert_eq!(
+            result(&run)["lifecycle"]["continuations"]["delegation.wait-timeout"],
+            1
+        );
+        assert_eq!(
+            result(&run)["lifecycle"]["continuations"]["delegation.child-completion"],
+            1
+        );
+    }
+}
+
+#[test]
 fn delegation_disabled_removes_tool_and_guidance() {
     for codex in [false, true] {
         let fixture = BridgeFixture::configured(codex, "delegation = false", "");
@@ -448,10 +567,15 @@ fn harness_child_receives_neither_agent_nor_advisor() {
             "---\ndescription: inspect the child bridge\n---\nChild guidance",
         )
         .unwrap();
-        let run = fixture.run(json!({
-            "initial":[spawn("inspect harness child"), action("wait", "/spawned"), {"say":"read child"}],
-            "by_prompt":{"inspect harness child":[{"list_tools":true},{"say":"harness child ran"}]}
-        }), None);
+        let gate = fixture.smith.project.path().join("harness-child-completed");
+        let run = run_after_child_completions(
+            &fixture,
+            json!({
+                "initial":[spawn("inspect harness child"), {"wait_file":gate}, action("wait", "/spawned"), {"say":"read child"}],
+                "by_prompt":{"inspect harness child":[{"list_tools":true},{"say":"harness child ran"}]}
+            }),
+            &[gate],
+        );
         successful(&run);
         assert_eq!(run.invocations().len(), 2);
         let child = run
@@ -523,10 +647,15 @@ fn result_without_wait_acknowledges_the_terminal_outcome() {
 fn resume_of_a_stopped_child_returns_native_refusal_without_starting_a_turn() {
     for codex in [false, true] {
         let fixture = BridgeFixture::configured(codex, "delegation = true", CHILD);
-        let run = fixture.run(json!([
-            spawn("complete then stop"), action("wait", "/spawned"), action("stop", "/child_id"),
-            action("resume", "/child_id"), {"say":"resume refused safely"}
-        ]), None);
+        let gate = fixture.smith.project.path().join("stopped-child-completed");
+        let run = run_after_child_completions(
+            &fixture,
+            json!([
+                spawn("complete then stop"), {"wait_file":gate}, action("wait", "/spawned"), action("stop", "/child_id"),
+                action("resume", "/child_id"), {"say":"resume refused safely"}
+            ]),
+            &[gate],
+        );
         successful(&run);
         let replies = responses(&run.record, "agent");
         let waited = response_value(&replies[1]);

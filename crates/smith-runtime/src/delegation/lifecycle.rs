@@ -9,6 +9,7 @@ pub struct DelegationLifecycle {
     cancel: Cancellation,
     signal: Arc<tokio::sync::Notify>,
     tasks: std::sync::Mutex<Option<Vec<tokio::task::JoinHandle<()>>>>,
+    wait_timers: Arc<AgentWaitTimers>,
 }
 
 /// Cloneable notification seam used by the host cache controller. It exposes
@@ -51,6 +52,7 @@ impl DelegationLifecycle {
     /// Freezes new admission first, then cancels and boundedly drains both
     /// process-owned workers.
     pub async fn shutdown(&self) {
+        self.wait_timers.shutdown();
         self.parking
             .lock()
             .expect("delegation parking state poisoned")
@@ -77,6 +79,7 @@ impl DelegationLifecycle {
 
 impl Drop for DelegationLifecycle {
     fn drop(&mut self) {
+        self.wait_timers.shutdown();
         self.cancel.cancel(CancelReason::Shutdown);
         self.signal.notify_waiters();
         for task in self
@@ -122,6 +125,7 @@ pub fn next_admission_retry_delay(previous: Option<Duration>) -> Duration {
 pub(super) fn start_delegation_lifecycle_tasks(
     session: &SessionHandle,
     coordinator: DelegationCoordinator,
+    wait_timers: Arc<AgentWaitTimers>,
 ) -> DelegationLifecycle {
     let parking = Arc::new(std::sync::Mutex::new(DelegationParking::new()));
     let signal = Arc::new(tokio::sync::Notify::new());
@@ -134,6 +138,7 @@ pub(super) fn start_delegation_lifecycle_tasks(
     let event_coordinator = coordinator.clone();
     let event_session = session.clone();
     let event_cancel = cancel.clone();
+    let event_timers = wait_timers.clone();
     let event_task = tokio::spawn(async move {
         let mut events = event_session.subscribe();
         loop {
@@ -167,9 +172,20 @@ pub(super) fn start_delegation_lifecycle_tasks(
                 | RuntimeEvent::ChildCompleted { child, .. }
                 | RuntimeEvent::ChildStopped { child, .. }
                 | RuntimeEvent::ChildFailed { child, .. } => {
-                    state.child_terminal(child.as_str());
+                    // A delayed event from the previous task must not cancel
+                    // a timer already armed for this child's follow-up.
+                    if !event_coordinator
+                        .status(&child)
+                        .is_ok_and(|status| status.state == ChildState::Running)
+                    {
+                        event_timers.cancel(child.as_str());
+                        state.child_terminal(child.as_str());
+                    }
                 }
-                RuntimeEvent::SessionShutdown => state.shutdown(),
+                RuntimeEvent::SessionShutdown => {
+                    event_timers.shutdown();
+                    state.shutdown();
+                }
                 _ => {}
             }
             drop(state);
@@ -179,12 +195,15 @@ pub(super) fn start_delegation_lifecycle_tasks(
             .lock()
             .expect("delegation parking state poisoned")
             .shutdown();
+        event_timers.shutdown();
         event_signal.notify_waiters();
     });
 
     let admission_parking = parking;
     let admission_signal = signal;
     let admission_cancel = cancel.clone();
+    let admission_timers = wait_timers.clone();
+    let admission_session = session.clone();
     let admission_task = tokio::spawn(async move {
         let mut initial_snapshot = true;
         let mut retry_delay: Option<Duration> = None;
@@ -208,6 +227,7 @@ pub(super) fn start_delegation_lifecycle_tasks(
             // that advances the canonical cursor.
             progressed |= reconcile_ready_outcome_snapshot(
                 &admission_parking,
+                &admission_timers,
                 coordinator.take_ready_task_outcomes(),
                 initial_snapshot,
             );
@@ -236,6 +256,7 @@ pub(super) fn start_delegation_lifecycle_tasks(
                         turn.completed().await;
                         progressed |= reconcile_ready_outcome_snapshot(
                             &admission_parking,
+                            &admission_timers,
                             coordinator.take_ready_task_outcomes(),
                             false,
                         );
@@ -256,6 +277,7 @@ pub(super) fn start_delegation_lifecycle_tasks(
                             .admission_stale(revision);
                         progressed |= reconcile_ready_outcome_snapshot(
                             &admission_parking,
+                            &admission_timers,
                             coordinator.take_ready_task_outcomes(),
                             false,
                         );
@@ -284,6 +306,41 @@ pub(super) fn start_delegation_lifecycle_tasks(
             {
                 break;
             }
+            let deadline = admission_timers.next_deadline();
+            let can_admit_timeout = {
+                let state = admission_parking
+                    .lock()
+                    .expect("delegation parking state poisoned")
+                    .snapshot();
+                !state.user_input_ready
+                    && !state.admission_in_flight
+                    && state.ready_outcomes.is_empty()
+                    && matches!(
+                        state.state,
+                        ParentParkingState::Idle | ParentParkingState::ParkedAwaitingChild
+                    )
+            };
+            if can_admit_timeout {
+                match admission_timers.try_admit(&admission_session, &coordinator) {
+                    Ok(Some(agent_runtime::runtime::InternalTurnAdmission::Accepted(turn))) => {
+                        progressed = true;
+                        turn.completed().await;
+                    }
+                    Ok(Some(agent_runtime::runtime::InternalTurnAdmission::Busy)) | Err(_) => {
+                        transient_refusal = true;
+                    }
+                    Ok(Some(agent_runtime::runtime::InternalTurnAdmission::Shutdown)) => break,
+                    _ => {}
+                }
+            }
+            // Expired timers stay pending only until a safe admission boundary;
+            // they never schedule a second wake or re-arm themselves.
+            let expiry = async {
+                match deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
             if progressed {
                 retry_delay = None;
             } else if transient_refusal {
@@ -293,6 +350,8 @@ pub(super) fn start_delegation_lifecycle_tasks(
                 retry_delay = Some(delay);
                 tokio::select! {
                     _ = &mut notified => {}
+                    _ = admission_timers.changed() => {}
+                    _ = expiry => {}
                     _ = tokio::time::sleep(delay) => {}
                     _ = admission_cancel.cancelled() => break,
                 }
@@ -300,6 +359,8 @@ pub(super) fn start_delegation_lifecycle_tasks(
                 retry_delay = None;
                 tokio::select! {
                     _ = &mut notified => {}
+                    _ = admission_timers.changed() => {}
+                    _ = expiry => {}
                     _ = admission_cancel.cancelled() => break,
                 }
             }
@@ -314,11 +375,13 @@ pub(super) fn start_delegation_lifecycle_tasks(
         cancel,
         signal: handle_signal,
         tasks: std::sync::Mutex::new(Some(vec![event_task, admission_task])),
+        wait_timers,
     }
 }
 
 fn reconcile_ready_outcome_snapshot(
     parking: &Arc<std::sync::Mutex<DelegationParking>>,
+    wait_timers: &AgentWaitTimers,
     outcomes: Vec<ChildTaskOutcome>,
     recovered: bool,
 ) -> bool {
@@ -326,6 +389,9 @@ fn reconcile_ready_outcome_snapshot(
         .iter()
         .map(terminal_outcome_key)
         .collect::<Vec<_>>();
+    for key in &keys {
+        wait_timers.cancel(&key.child_id);
+    }
     let mut state = parking.lock().expect("delegation parking state poisoned");
     for key in &keys {
         // The lossless Runtime snapshot closes the local live-child

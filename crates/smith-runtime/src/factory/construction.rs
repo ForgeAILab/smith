@@ -630,6 +630,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     let built = compose::runtime(builder).await?;
     let delegation = delegation::assemble(capabilities.delegation_slot.clone().map(|slot| {
         SmithDelegation {
+            wait_timers: capabilities.delegation_wait_timers.clone(),
             factory: Arc::new(SmithChildFactory {
                 default_route: SmithChildRoute {
                     hosted_tools: web.hosted,

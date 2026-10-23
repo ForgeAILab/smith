@@ -646,10 +646,10 @@ pub struct ContextCacheSection {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChildAgentPolicySection {
-    /// Default timeout for `agent.wait`, in milliseconds.
+    /// Default single-use wake timer for `agent.wait`, in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_default_timeout_ms: Option<u64>,
-    /// Maximum accepted `agent.wait.timeout_ms`, in milliseconds.
+    /// Maximum `agent.wait` timer duration; larger tool requests are clamped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_max_timeout_ms: Option<u64>,
 }

@@ -77,6 +77,9 @@ pub(super) fn prepare(
         }
     }
 
+    let delegation_wait_timers = Arc::new(crate::delegation::AgentWaitTimers::new(
+        request.config.agent.profile.name.clone(),
+    ));
     let delegation_slot = if !delegation_eligible(request) {
         None
     } else {
@@ -88,6 +91,7 @@ pub(super) fn prepare(
         .map_err(FactoryError::Runtime)?;
         tools.push(Arc::new(
             AgentTool::new(slot.clone())
+                .with_wait_timers(delegation_wait_timers.clone())
                 .with_profiles(agent_tool_profiles)
                 .with_wait_policy(wait_policy)
                 .with_transcript_output(
@@ -112,6 +116,7 @@ pub(super) fn prepare(
         todo,
         goal,
         delegation_slot,
+        delegation_wait_timers,
         advisor,
         advisor_slot,
     })

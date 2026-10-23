@@ -500,6 +500,16 @@ impl TuiLoop<'_> {
                     .collect(),
             );
         }
+        self.app.set_child_wait_deadlines(
+            self.host
+                .runtime()
+                .delegation()
+                .map(|delegation| delegation.wait_timers().snapshot())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|monitor| (monitor.child_id, monitor.deadline))
+                .collect(),
+        );
         // The title rides the redraw cadence: every input that can
         // change it (model switch, project label, activity
         // transition) marks the frame dirty on its way in, and the

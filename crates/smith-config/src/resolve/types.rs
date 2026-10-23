@@ -750,12 +750,12 @@ pub struct ResolvedCachePolicy {
     pub resume_capsule: Sourced<bool>,
 }
 
-/// Resolved bounded parent wait policy.
+/// Resolved single-use parent wake timer policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedChildAgents {
-    /// Default `agent.wait` timeout; zero means immediate status check.
+    /// Default `agent.wait` timer; zero checks status without arming a timer.
     pub wait_default_timeout_ms: Sourced<u64>,
-    /// Maximum accepted `agent.wait.timeout_ms`.
+    /// Maximum `agent.wait` timer duration; larger tool requests are clamped.
     pub wait_max_timeout_ms: Sourced<u64>,
 }
 

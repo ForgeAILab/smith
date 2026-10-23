@@ -927,6 +927,16 @@ fn agent_row(
             render_child_counts(counts)
         );
     }
+    if let Some(deadline) = app.child_wait_deadline(child_id) {
+        let seconds = deadline / 1_000 % 86_400;
+        activity = format!(
+            "monitor {:02}:{:02}:{:02}Z {} {activity}",
+            seconds / 3_600,
+            seconds / 60 % 60,
+            seconds % 60,
+            glyph::SEPARATOR
+        );
+    }
     // The selected row is already bold and marked; letting it keep its state
     // colour means the eye does not lose a failure by landing on it.
     let tone = summary.state.tone();

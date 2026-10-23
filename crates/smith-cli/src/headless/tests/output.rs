@@ -356,6 +356,7 @@ fn machine_result_v2_compatibility_fixture_is_stable() {
             session_provenance: UsageProvenance::ProviderReported,
         },
         lifecycle: LifecycleOutput {
+            continuations: Default::default(),
             attempts_committed: 1,
             attempts_discarded: 0,
             activation: Some(ActivationOutput {
@@ -556,6 +557,7 @@ fn text_projection_reports_lifecycle_without_exposing_todo_or_argument_content()
             session_provenance: UsageProvenance::Unknown,
         },
         lifecycle: LifecycleOutput {
+            continuations: Default::default(),
             attempts_committed: 2,
             attempts_discarded: 1,
             activation: Some(ActivationOutput {
