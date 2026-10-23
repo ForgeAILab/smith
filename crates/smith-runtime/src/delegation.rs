@@ -191,6 +191,7 @@ pub struct SmithChildFactory {
     pub(crate) workspace: Arc<dyn Workspace>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) artifact_store: Option<Arc<dyn ArtifactStore>>,
+    pub(crate) artifact_catalog: Option<Arc<dyn crate::artifact::ArtifactCatalog>>,
     pub(crate) session_store: Option<Arc<dyn SessionStore>>,
     pub(crate) checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     pub(crate) skills: Vec<Arc<dyn Ability>>,
@@ -486,7 +487,12 @@ impl ChildRuntimeFactory for SmithChildFactory {
         tools.push(Arc::new(crate::questionnaire::SmithQuestionnaireTool));
         tools.push(Arc::new(WriteTodosTool::new()));
         if let Some(store) = self.artifact_store.clone() {
-            tools.push(Arc::new(route.tool_output_context.reader(store)));
+            tools.extend(
+                route
+                    .tool_output_context
+                    // A child never delegates, so it has no children to name.
+                    .artifact_tools(store, self.artifact_catalog.clone(), None),
+            );
         }
         let todo_component = Arc::new(TodoComponent::public());
         let sandbox_names = module_plan
@@ -748,3 +754,16 @@ pub use transcript::{
     ChildTranscriptEntry, ChildTranscriptPage, ChildTranscriptReader,
     project_child_transcript_history,
 };
+
+impl crate::tool_output::ChildDirectory for OnceLock<DelegationCoordinator> {
+    fn child_for_session(
+        &self,
+        session: &agent_runtime_core::ids::SessionId,
+    ) -> Option<agent_runtime_core::ids::ChildId> {
+        self.get()?
+            .list()
+            .into_iter()
+            .find(|status| &status.session == session)
+            .map(|status| status.child)
+    }
+}

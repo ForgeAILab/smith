@@ -87,7 +87,9 @@ pub async fn start_with_modules(
     let (paths, journal_slot, checkpoint_barrier, ring) = if persistence {
         let paths = paths(&config, &request.project_root)?;
         if request.runtime.artifact_store.is_none() {
-            request.runtime.artifact_store = Some(Arc::new(SmithArtifactStore::new(paths.clone())));
+            let store = Arc::new(SmithArtifactStore::new(paths.clone()));
+            request.runtime.artifact_catalog = Some(store.clone());
+            request.runtime.artifact_store = Some(store);
         }
         let inner = FileSessionStore::new(paths.clone());
         // A saved effort a higher layer answered for this run, kept so the

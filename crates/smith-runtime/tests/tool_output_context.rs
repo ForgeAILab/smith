@@ -325,7 +325,7 @@ async fn no_artifact_store_does_not_claim_recoverable_offloading() {
             .policy()
             .tools
             .iter()
-            .any(|name| name == "artifact.read")
+            .any(|name| name == "artifact.read" || name == "artifact.list")
     );
     host.session().run(UserInput::text("reply")).await.unwrap();
     host.shutdown().await.unwrap();

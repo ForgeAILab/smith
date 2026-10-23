@@ -668,6 +668,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                 workspace,
                 clock,
                 artifact_store: request.artifact_store.clone(),
+                artifact_catalog: request.artifact_catalog.clone(),
                 session_store: request
                     .session_store
                     .clone()

@@ -248,7 +248,7 @@ fn request(fixture: &Fixture, provider: Arc<dyn Provider>) -> RuntimeRequest {
 }
 
 async fn invoke_agent(
-    tool: &AgentTool,
+    tool: &dyn Tool,
     arguments: serde_json::Value,
     ctx: &InvocationContext,
 ) -> Result<ToolOutcome, RuntimeError> {

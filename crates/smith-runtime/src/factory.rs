@@ -127,6 +127,7 @@ use smith_host::rotation::{HeadlessRotation, RotationPolicy};
 
 use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
 use crate::advisor::{AdvisorRoute, AdvisorTool};
+use crate::artifact::ArtifactCatalog;
 use crate::authority::SmithToolAuthority;
 use crate::background_tasks::BackgroundServices;
 use crate::catalog::CatalogLayers;
@@ -419,6 +420,10 @@ pub struct RuntimeRequest {
     /// bounded reader and offloads oversized exact tool outcomes before the
     /// runtime applies its model-facing bound.
     pub artifact_store: Option<Arc<dyn ArtifactStore>>,
+    /// Owner-scoped listing over `artifact_store`. Only a store that can
+    /// enumerate its records supplies one; with it, Smith also registers
+    /// `artifact.list` and lets the reader's not-found error name it.
+    pub artifact_catalog: Option<Arc<dyn ArtifactCatalog>>,
     /// Canonical event observers, such as the JSON Lines journal.
     pub observers: Vec<Arc<dyn EventObserver>>,
     /// The shared persistence redactor. A standard Smith host injects this
@@ -490,6 +495,7 @@ impl RuntimeRequest {
             checkpoint_barrier: None,
             secret_store: None,
             artifact_store: None,
+            artifact_catalog: None,
             observers: Vec::new(),
             persistence_redactor: None,
             clock: None,

@@ -8,7 +8,16 @@ pub(super) fn prepare(
     advisor_route: Option<Arc<AdvisorRoute>>,
     module_tools: Vec<(Arc<dyn Tool>, agent_runtime::registry::RegistrySource)>,
 ) -> Result<CapabilityStage, FactoryError> {
-    let mut tools = tools(request);
+    // Created before the tool set so the artifact lister can name the
+    // children this session spawns; the agent tool fills it below.
+    let delegation_slot =
+        delegation_eligible(request).then(|| Arc::new(std::sync::OnceLock::new()));
+    let mut tools = tools_with_children(
+        request,
+        delegation_slot
+            .clone()
+            .map(|slot| slot as Arc<dyn crate::tool_output::ChildDirectory>),
+    );
     let (advisor, advisor_slot) = if advisor_eligible(request) {
         let route = advisor_route.ok_or_else(|| {
             FactoryError::Runtime(RuntimeError::config("advisor route was not prepared"))
@@ -80,10 +89,7 @@ pub(super) fn prepare(
     let delegation_wait_timers = Arc::new(crate::delegation::AgentWaitTimers::new(
         request.config.agent.profile.name.clone(),
     ));
-    let delegation_slot = if !delegation_eligible(request) {
-        None
-    } else {
-        let slot = Arc::new(std::sync::OnceLock::new());
+    let delegation_slot = if let Some(slot) = delegation_slot {
         let wait_policy = DelegationWaitPolicy::new(
             request.config.child_agents.wait_default_timeout_ms.value,
             request.config.child_agents.wait_max_timeout_ms.value,
@@ -102,6 +108,8 @@ pub(super) fn prepare(
         ) as Arc<dyn Tool>);
         ability_sources.push(agent_runtime::registry::RegistrySource::BuiltIn);
         Some(slot)
+    } else {
+        None
     };
     for (tool, source) in module_tools {
         tools.push(tool);
@@ -124,6 +132,14 @@ pub(super) fn prepare(
 
 /// The tools this run registers.
 pub(super) fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
+    tools_with_children(request, None)
+}
+
+/// [`tools`], with the directory the artifact lister resolves children by.
+fn tools_with_children(
+    request: &RuntimeRequest,
+    children: Option<Arc<dyn crate::tool_output::ChildDirectory>>,
+) -> Vec<Arc<dyn Tool>> {
     let read_only = request.config.agent.active_posture().is_read_only();
     let background = request
         .background_services
@@ -157,9 +173,13 @@ pub(super) fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
         tools.push(Arc::new(crate::questionnaire::SmithQuestionnaireTool));
     }
     if let Some(store) = request.artifact_store.clone() {
-        tools.push(Arc::new(
-            ToolOutputContextPolicy::from_config(&request.config).reader(store),
-        ));
+        tools.extend(
+            ToolOutputContextPolicy::from_config(&request.config).artifact_tools(
+                store,
+                request.artifact_catalog.clone(),
+                children,
+            ),
+        );
     }
     if todo_planning_eligible(request) {
         tools.push(Arc::new(WriteTodosTool::new()));

@@ -113,6 +113,118 @@ async fn oversized_shell_output_is_recoverable_from_the_session_artifact_store()
 }
 
 #[tokio::test]
+async fn an_invented_artifact_id_is_recovered_through_the_listing() {
+    let fixture = Fixture::with_config(&format!(
+        "{CONFIG}\n[limits]\ntool_output_limit_bytes = 1024\n"
+    ));
+    let step = |id: &str, name: &str, arguments: serde_json::Value| {
+        let mut stream = tool_call_fragments(0, id, name, &arguments.to_string());
+        stream.push(ProviderStreamEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
+        ScriptedStream::new(stream)
+    };
+    let invented = format!("a-{}", "0".repeat(64));
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            step(
+                "large-shell-call",
+                "shell",
+                serde_json::json!({ "command": "yes 'listed artifact line' | head -c 4096" }),
+            ),
+            step(
+                "activate-artifact-tools",
+                "registry.activate",
+                serde_json::json!({ "ids": ["tool:artifact.read", "tool:artifact.list"] }),
+            ),
+            step(
+                "invented-read",
+                "artifact.read",
+                serde_json::json!({ "id": invented }),
+            ),
+            step("list-artifacts", "artifact.list", serde_json::json!({})),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "found the real id".into(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ],
+    ));
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.provider = Some(provider.clone());
+    let host = start(request).await.expect("a hosted session");
+    let tools = &host.runtime().policy().tools;
+    assert!(
+        tools.iter().any(|tool| tool == "artifact.read"),
+        "{tools:?}"
+    );
+    assert!(
+        tools.iter().any(|tool| tool == "artifact.list"),
+        "{tools:?}"
+    );
+
+    host.session()
+        .run(UserInput::text(
+            "Use shell to produce the large diagnostic output.",
+        ))
+        .await
+        .expect("the turn completes");
+
+    let requests = provider.requests();
+    let results = requests
+        .last()
+        .expect("a final provider request")
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter_map(|part| match part {
+            agent_runtime_core::content::ContentPart::ToolResult(result) => Some(result),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let text = |name: &str| {
+        let result = results
+            .iter()
+            .find(|result| result.name == name)
+            .unwrap_or_else(|| panic!("a {name} result in {results:?}"));
+        (
+            result.is_error,
+            result.content[0].as_text().unwrap().to_owned(),
+        )
+    };
+    let shell = text("shell").1;
+    let real = shell
+        .split("[artifact id=")
+        .nth(1)
+        .and_then(|marker| marker.split_whitespace().next())
+        .unwrap_or_else(|| panic!("an offloaded shell result: {shell}"))
+        .to_owned();
+
+    let (failed, missing) = text("artifact.read");
+    assert!(failed, "{missing}");
+    assert!(missing.contains("never constructed"), "{missing}");
+    assert!(missing.contains("artifact.list"), "{missing}");
+
+    let (failed, listing) = text("artifact.list");
+    assert!(!failed, "{listing}");
+    let listing: serde_json::Value = serde_json::from_str(&listing).unwrap();
+    let rows = listing["artifacts"].as_array().unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| row["id"] == real.as_str() && row["purpose"] == "tool-output"),
+        "{listing}"
+    );
+    assert!(rows.iter().all(|row| row["id"] != invented.as_str()));
+
+    host.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
 async fn a_protected_live_event_resolves_its_safe_display_from_canonical_history() {
     const OLD: &str = "TOP_SECRET_OLD_BODY";
     const NEW: &str = "TOP_SECRET_NEW_BODY";

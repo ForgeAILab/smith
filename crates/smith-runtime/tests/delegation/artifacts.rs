@@ -66,6 +66,16 @@ async fn child_artifact_policy_case(lines: usize, inline_bytes: u32) {
     let smith = factory::build_request(runtime_request)
         .await
         .expect("a runtime with protected artifact transfer");
+    // A store supplied without a catalog keeps its reader but cannot list.
+    let tools = &smith.policy().tools;
+    assert!(
+        tools.iter().any(|tool| tool == "artifact.read"),
+        "{tools:?}"
+    );
+    assert!(
+        !tools.iter().any(|tool| tool == "artifact.list"),
+        "{tools:?}"
+    );
     let session = smith
         .runtime()
         .start_session(StartSession::new())

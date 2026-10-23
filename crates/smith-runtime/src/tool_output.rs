@@ -6,24 +6,44 @@
 
 use std::sync::Arc;
 
+use agent_runtime::harness::ARTIFACT_READ_PERMISSION;
 use agent_runtime::harness::{
     ArtifactOffloader, ArtifactReadTool, ComponentDescriptor, ToolOutputPatch, ToolOutputProcessor,
     ToolOutputView,
 };
+use agent_runtime::registry::Permission;
 use agent_runtime::registry::RegistryRevision;
-use agent_runtime_core::artifact::ArtifactStore;
+use agent_runtime_core::artifact::{ArtifactRef, ArtifactStore};
 use agent_runtime_core::content::ContentPart;
 use agent_runtime_core::error::RuntimeError;
+use agent_runtime_core::ids::{ChildId, SessionId};
+use agent_runtime_core::security::{PermissionSet, SecurityResource};
 use agent_runtime_core::tool::{
-    InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolContent, ToolOutcome,
-    ToolSpec,
+    InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolCallDisplay, ToolContent,
+    ToolEffects, ToolOutcome, ToolSpec,
 };
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use smith_config::resolve::ResolvedConfig;
 
+use crate::artifact::ArtifactCatalog;
+
 /// Dedicated retrieval affordance: a broad `read` query can rank the file reader first.
 pub const ARTIFACT_DISCOVERY_QUERY: &str = "artifact-read";
+
+/// The session's artifact inventory, beside Runtime's `artifact.read`.
+pub const ARTIFACT_LIST_TOOL_NAME: &str = "artifact.list";
+
+/// Retrieval affordance for the lister, disjoint from the reader's.
+pub const ARTIFACT_LIST_DISCOVERY_QUERY: &str = "artifact-list";
+
+/// Runtime's exact message for an id no stored artifact has.
+const ARTIFACT_NOT_FOUND: &str = "artifact not found";
+
+const DEFAULT_LIST_ROWS: usize = 20;
+const MAX_LIST_ROWS: usize = 100;
+const MAX_PURPOSE_CHARS: usize = 128;
 
 /// Resolved byte bounds. These are not tokenizer-exact or whole-request limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +87,40 @@ impl ToolOutputContextPolicy {
         ContextArtifactReader {
             inner: ArtifactReadTool::new(store),
             page_bytes: self.artifact_page_bytes,
+            lister_registered: false,
         }
+    }
+
+    /// Lists the session's artifacts in pages that fit the inline allowance.
+    pub fn lister(
+        self,
+        catalog: Arc<dyn ArtifactCatalog>,
+        children: Option<Arc<dyn ChildDirectory>>,
+    ) -> ContextArtifactLister {
+        ContextArtifactLister {
+            catalog,
+            children,
+            // Leave room for the page envelope around the rows.
+            page_bytes: (self.inline_bytes as usize).saturating_sub(256).max(512),
+        }
+    }
+
+    /// The reader and, when `catalog` is present, the lister it may name.
+    /// Both come from here so a reader never names a lister that is absent.
+    /// `children` resolves copied child artifacts to child ids; only a
+    /// runtime that delegates has one.
+    pub fn artifact_tools(
+        self,
+        store: Arc<dyn ArtifactStore>,
+        catalog: Option<Arc<dyn ArtifactCatalog>>,
+        children: Option<Arc<dyn ChildDirectory>>,
+    ) -> Vec<Arc<dyn Tool>> {
+        let mut reader = self.reader(store);
+        let Some(catalog) = catalog else {
+            return vec![Arc::new(reader)];
+        };
+        reader.lister_registered = true;
+        vec![Arc::new(reader), Arc::new(self.lister(catalog, children))]
     }
 }
 
@@ -96,7 +149,9 @@ impl ToolOutputProcessor for ContextOffloader {
         view: &ToolOutputView,
         outcome: ToolOutcome,
     ) -> Result<ToolOutputPatch, RuntimeError> {
-        if view.call.name == "artifact.read" {
+        // Both already bound their own pages; offloading either would answer
+        // a lookup with yet another reference.
+        if view.call.name == "artifact.read" || view.call.name == ARTIFACT_LIST_TOOL_NAME {
             return Ok(ToolOutputPatch::outcome(outcome));
         }
         let Some(parts) = outcome.content.as_inline() else {
@@ -127,6 +182,30 @@ impl ToolOutputProcessor for ContextOffloader {
 pub struct ContextArtifactReader {
     inner: ArtifactReadTool,
     page_bytes: u32,
+    /// Whether the same tool set registers [`ContextArtifactLister`], which
+    /// the not-found error may then name.
+    lister_registered: bool,
+}
+
+impl ContextArtifactReader {
+    /// Runtime's bare "artifact not found" gives a model that invented an id
+    /// nothing to do but guess again; say where real ids come from instead.
+    fn explain_missing(&self, error: RuntimeError) -> RuntimeError {
+        if error.message != ARTIFACT_NOT_FOUND {
+            return error;
+        }
+        let mut message = format!(
+            "{ARTIFACT_NOT_FOUND}: no artifact with this id exists in this session. Artifact \
+             ids are copied exactly from tool results or host messages, never constructed."
+        );
+        if self.lister_registered {
+            message.push_str(&format!(
+                " Call {ARTIFACT_LIST_TOOL_NAME} to see this session's artifacts (find it with \
+                 registry.search, query: {ARTIFACT_LIST_DISCOVERY_QUERY}, if absent)."
+            ));
+        }
+        RuntimeError { message, ..error }
+    }
 }
 
 #[async_trait]
@@ -184,7 +263,237 @@ impl Tool for ContextArtifactReader {
                 "artifact.read must be prepared with the current page bound",
             ));
         }
-        self.inner.invoke(prepared, ctx).await
+        self.inner
+            .invoke(prepared, ctx)
+            .await
+            .map_err(|error| self.explain_missing(error))
+    }
+}
+
+/// Metadata-only inventory of the invoking session's artifacts.
+///
+/// Ownership comes from the runtime-owned invocation context, exactly as for
+/// reads, and the call asks for the same `artifact.read` authority over a
+/// `session-artifact` resource, so it stays as unattended as reading.
+#[derive(Debug)]
+pub struct ContextArtifactLister {
+    catalog: Arc<dyn ArtifactCatalog>,
+    children: Option<Arc<dyn ChildDirectory>>,
+    /// Serialized page budget: rows stop before the page would exceed it, so
+    /// a listing never needs offloading itself.
+    page_bytes: usize,
+}
+
+/// The delegating session's view of its own children, by child session.
+///
+/// A stored child reply names its child in provenance, but a copied child
+/// artifact names only the child session its lineage came from.
+pub trait ChildDirectory: Send + Sync + std::fmt::Debug {
+    /// The child whose session is `session`, if this runtime spawned it.
+    fn child_for_session(&self, session: &SessionId) -> Option<ChildId>;
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListArguments {
+    #[serde(default)]
+    purpose: Option<String>,
+    #[serde(default)]
+    child_id: Option<String>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_list_rows")]
+    limit: usize,
+}
+
+const fn default_list_rows() -> usize {
+    DEFAULT_LIST_ROWS
+}
+
+impl ListArguments {
+    fn parse(arguments: &Value) -> Result<Self, RuntimeError> {
+        let parsed: Self = serde_json::from_value(arguments.clone()).map_err(|error| {
+            RuntimeError::tool(format!("invalid {ARTIFACT_LIST_TOOL_NAME} input: {error}"))
+        })?;
+        if !(1..=MAX_LIST_ROWS).contains(&parsed.limit) {
+            return Err(RuntimeError::tool(format!(
+                "{ARTIFACT_LIST_TOOL_NAME} limit must be in 1..={MAX_LIST_ROWS}"
+            )));
+        }
+        for (field, value) in [("purpose", &parsed.purpose), ("child_id", &parsed.child_id)] {
+            if value
+                .as_ref()
+                .is_some_and(|value| value.is_empty() || value.chars().count() > MAX_PURPOSE_CHARS)
+            {
+                return Err(RuntimeError::tool(format!(
+                    "{ARTIFACT_LIST_TOOL_NAME} {field} must contain 1..={MAX_PURPOSE_CHARS} characters"
+                )));
+            }
+        }
+        Ok(parsed)
+    }
+
+    fn canonical(&self) -> Value {
+        json!({
+            "purpose": self.purpose,
+            "child_id": self.child_id,
+            "offset": self.offset,
+            "limit": self.limit,
+        })
+    }
+}
+
+impl ContextArtifactLister {
+    /// The child behind an artifact: named outright on a stored reply,
+    /// resolved through the lineage's child session on a copy.
+    fn child_of(&self, reference: &ArtifactRef) -> Option<ChildId> {
+        let provenance = &reference.provenance;
+        provenance.child.clone().or_else(|| {
+            let source = provenance.derived_from.as_ref()?;
+            self.children.as_ref()?.child_for_session(&source.session)
+        })
+    }
+}
+
+fn artifact_row(reference: &ArtifactRef, child: Option<&ChildId>) -> Value {
+    let provenance = &reference.provenance;
+    json!({
+        "id": reference.id.as_str(),
+        "purpose": provenance.purpose,
+        "media_type": reference.media_type,
+        "bytes": reference.byte_length,
+        "turn": provenance.turn.as_ref().map(|turn| turn.as_str()),
+        "call": provenance.call.as_ref().map(|call| call.as_str()),
+        "child_id": child.map(ChildId::as_str),
+        "copied_from_session": provenance
+            .derived_from
+            .as_ref()
+            .map(|source| source.session.as_str()),
+    })
+}
+
+#[async_trait]
+impl Tool for ContextArtifactLister {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            ARTIFACT_LIST_TOOL_NAME,
+            format!(
+                "List this session's stored artifacts, newest first: metadata only (id, purpose, \
+                 media type, bytes, turn, call, the child that produced it, and the child \
+                 session a copied artifact came from), never content. Use it to find a real \
+                 artifact id; ids are never constructed. Filter by purpose or child_id. Read a \
+                 listed artifact with artifact.read. Purposes include \
+                 tool-output (your offloaded tool results), delegation.child-reply (a child's \
+                 full reply), delegation.child-result (artifacts a child produced, copied to \
+                 you), and child-transcript. Pages hold at most {MAX_LIST_ROWS} rows; follow \
+                 next_offset."
+            ),
+            json!({
+                "type": "object",
+                "properties": {
+                    "purpose": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_PURPOSE_CHARS,
+                        "description": "Only list artifacts with exactly this purpose."
+                    },
+                    "child_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_PURPOSE_CHARS,
+                        "description": "Only list artifacts a child produced, such as child-1."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Rows to skip; use next_offset from the previous page."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_LIST_ROWS,
+                        "default": DEFAULT_LIST_ROWS
+                    }
+                },
+                "additionalProperties": false
+            }),
+            ToolEffects::default(),
+        )
+        .with_permission_upper_bound(PermissionSet::single(Permission::other(
+            ARTIFACT_READ_PERMISSION,
+        )))
+    }
+
+    async fn prepare(
+        &self,
+        arguments: Value,
+        ctx: &PreparationContext,
+    ) -> Result<PreparedToolCall, RuntimeError> {
+        let arguments = ListArguments::parse(&arguments)?;
+        let filters = [arguments.purpose.as_deref(), arguments.child_id.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let detail = if filters.is_empty() {
+            format!("from row {}", arguments.offset)
+        } else {
+            format!("{} from row {}", filters.join(", "), arguments.offset)
+        };
+        Ok(PreparedToolCall::new(
+            ctx.call_id.clone(),
+            ARTIFACT_LIST_TOOL_NAME,
+            arguments.canonical(),
+            PermissionSet::single(Permission::other(ARTIFACT_READ_PERMISSION)),
+            SecurityResource::other("session-artifact", "index"),
+            ToolEffects::default(),
+            ToolCallDisplay::new("List session artifacts").with_detail(detail),
+        ))
+    }
+
+    async fn invoke(
+        &self,
+        prepared: PreparedToolCall,
+        ctx: &InvocationContext,
+    ) -> Result<ToolOutcome, RuntimeError> {
+        let arguments = ListArguments::parse(prepared.arguments())?;
+        let owned = self
+            .catalog
+            .list_owned(&ctx.session)
+            .await
+            .map_err(|error| RuntimeError::tool(error.to_string()))?;
+        let matching = owned
+            .iter()
+            .map(|reference| (reference, self.child_of(reference)))
+            .filter(|(reference, child)| {
+                arguments
+                    .purpose
+                    .as_ref()
+                    .is_none_or(|purpose| &reference.provenance.purpose == purpose)
+                    && arguments.child_id.as_ref().is_none_or(|wanted| {
+                        child.as_ref().is_some_and(|child| child.as_str() == wanted)
+                    })
+            })
+            .collect::<Vec<_>>();
+        let total = matching.len();
+        let mut rows = Vec::new();
+        let mut used = 0;
+        for (reference, child) in matching.iter().skip(arguments.offset).take(arguments.limit) {
+            let row = artifact_row(reference, child.as_ref());
+            let size = row.to_string().len() + 1;
+            // Always return at least one row, so a page can never stall.
+            if !rows.is_empty() && used + size > self.page_bytes {
+                break;
+            }
+            used += size;
+            rows.push(row);
+        }
+        let end = arguments.offset.saturating_add(rows.len());
+        Ok(ToolOutcome::json(json!({
+            "artifacts": rows,
+            "total": total,
+            "offset": arguments.offset,
+            "next_offset": (end < total).then_some(end),
+        })))
     }
 }
 
@@ -530,6 +839,255 @@ mod tests {
             serde_json::to_value(result.outcome).unwrap(),
             serde_json::to_value(raw).unwrap()
         );
+    }
+    async fn put(
+        store: &SmithArtifactStore,
+        session: &str,
+        purpose: &str,
+        key: &str,
+    ) -> ArtifactRef {
+        store
+            .put(ArtifactWrite {
+                bytes: format!("{session} {purpose} {key}").into_bytes(),
+                media_type: "text/plain".into(),
+                sensitivity: agent_runtime_core::artifact::ArtifactSensitivity::Sensitive,
+                retention: agent_runtime_core::artifact::ArtifactRetention::Session,
+                provenance: agent_runtime_core::artifact::ArtifactProvenance::new(
+                    SessionId::new(session),
+                    purpose,
+                ),
+                idempotency_key: key.into(),
+            })
+            .await
+            .unwrap()
+    }
+    async fn call(tool: &dyn Tool, arguments: Value) -> Result<ToolOutcome, RuntimeError> {
+        let prep = preparation();
+        let prepared = tool.prepare(arguments, &prep).await?;
+        tool.invoke(prepared, &invocation(&prep)).await
+    }
+    fn named<'a>(tools: &'a [Arc<dyn Tool>], name: &str) -> &'a dyn Tool {
+        tools
+            .iter()
+            .find(|tool| tool.spec().name == name)
+            .unwrap_or_else(|| panic!("{name} is registered"))
+            .as_ref()
+    }
+    #[tokio::test]
+    async fn lister_pages_only_the_owners_metadata_and_filters_by_purpose() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(dir.path());
+        for key in ["a", "b", "c"] {
+            put(&store, "owner", "delegation.child-result", key).await;
+        }
+        let reply = put(&store, "owner", "delegation.child-reply", "reply").await;
+        put(&store, "other", "delegation.child-reply", "hidden").await;
+        let tools = policy().artifact_tools(
+            store.clone(),
+            Some(store.clone() as Arc<dyn ArtifactCatalog>),
+            None,
+        );
+        let lister = named(&tools, ARTIFACT_LIST_TOOL_NAME);
+
+        let replies = call(lister, json!({"purpose": "delegation.child-reply"}))
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(replies["total"], 1, "{replies}");
+        assert_eq!(
+            replies["artifacts"][0]["id"],
+            reply.id.as_str(),
+            "{replies}"
+        );
+        assert_eq!(replies["artifacts"][0]["bytes"], reply.byte_length);
+        assert!(replies["artifacts"][0].get("content").is_none());
+        assert!(replies["next_offset"].is_null());
+
+        let first = call(lister, json!({"limit": 2})).await.unwrap().value;
+        assert_eq!(first["total"], 4, "{first}");
+        assert_eq!(first["artifacts"].as_array().unwrap().len(), 2);
+        assert_eq!(first["next_offset"], 2);
+        let rest = call(lister, json!({"offset": 2, "limit": 2}))
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(rest["artifacts"].as_array().unwrap().len(), 2);
+        assert!(rest["next_offset"].is_null(), "{rest}");
+        let listed = [&first, &rest]
+            .iter()
+            .flat_map(|page| page["artifacts"].as_array().unwrap().clone())
+            .map(|row| row["id"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(listed.len(), 4);
+        let reader = named(&tools, "artifact.read");
+        for id in &listed {
+            call(reader, json!({"id": id})).await.unwrap();
+        }
+
+        for invalid in [
+            json!({"limit": 0}),
+            json!({"limit": 101}),
+            json!({"purpose": ""}),
+        ] {
+            assert!(call(lister, invalid).await.is_err());
+        }
+        // A listing is sized to fit, so it is never itself offloaded.
+        let mut list_view = view();
+        list_view.call.name = ARTIFACT_LIST_TOOL_NAME.into();
+        let raw = ToolOutcome::text("x".repeat(9000));
+        let result = policy()
+            .offloader(store)
+            .unwrap()
+            .process(&list_view, raw.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(result.outcome).unwrap(),
+            serde_json::to_value(raw).unwrap()
+        );
+    }
+    #[derive(Debug)]
+    struct OneChild;
+    impl ChildDirectory for OneChild {
+        fn child_for_session(&self, session: &SessionId) -> Option<ChildId> {
+            (session.as_str() == "child-session-1").then(|| ChildId::new("child-1"))
+        }
+    }
+    #[tokio::test]
+    async fn lister_attributes_replies_and_copies_to_their_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(dir.path());
+        let attributed = |purpose: &str, key: &str, child: &str| ArtifactWrite {
+            bytes: key.as_bytes().to_vec(),
+            media_type: "text/plain".into(),
+            sensitivity: agent_runtime_core::artifact::ArtifactSensitivity::Sensitive,
+            retention: agent_runtime_core::artifact::ArtifactRetention::Session,
+            provenance: agent_runtime_core::artifact::ArtifactProvenance::new(
+                SessionId::new("owner"),
+                purpose,
+            )
+            .with_child(ChildId::new(child)),
+            idempotency_key: key.into(),
+        };
+        let reply = store
+            .put(attributed("delegation.child-reply", "reply-1", "child-1"))
+            .await
+            .unwrap();
+        store
+            .put(attributed("delegation.child-reply", "reply-2", "child-2"))
+            .await
+            .unwrap();
+        let mut copied = attributed("delegation.child-result", "copied-1", "unused");
+        copied.provenance.child = None;
+        copied.provenance =
+            copied
+                .provenance
+                .with_derived_from(agent_runtime_core::artifact::ArtifactLineage {
+                    session: SessionId::new("child-session-1"),
+                    id: agent_runtime_core::artifact::ArtifactId::new("a-source").unwrap(),
+                    digest: reply.digest.clone(),
+                });
+        let copy = store.put(copied).await.unwrap();
+        put(&store, "owner", "tool-output", "own").await;
+
+        let tools = policy().artifact_tools(
+            store.clone(),
+            Some(store.clone() as Arc<dyn ArtifactCatalog>),
+            Some(Arc::new(OneChild)),
+        );
+        let lister = named(&tools, ARTIFACT_LIST_TOOL_NAME);
+        let first = call(lister, json!({"child_id": "child-1"}))
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(first["total"], 2, "{first}");
+        let ids = first["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                assert_eq!(row["child_id"], "child-1", "{row}");
+                row["id"].as_str().unwrap().to_owned()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            ids,
+            [reply.id.as_str().to_owned(), copy.id.as_str().to_owned()].into()
+        );
+        let replies = call(
+            lister,
+            json!({"child_id": "child-2", "purpose": "delegation.child-reply"}),
+        )
+        .await
+        .unwrap()
+        .value;
+        assert_eq!(replies["total"], 1, "{replies}");
+        let everything = call(lister, json!({})).await.unwrap().value;
+        let own = everything["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["purpose"] == "tool-output")
+            .unwrap();
+        assert!(own["child_id"].is_null(), "{own}");
+        assert!(call(lister, json!({"child_id": ""})).await.is_err());
+    }
+    #[tokio::test]
+    async fn a_missing_id_names_the_lister_only_when_it_is_registered() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(dir.path());
+        let invented =
+            json!({"id": "a-0000000000000000000000000000000000000000000000000000000000000000"});
+
+        let with_lister = policy().artifact_tools(
+            store.clone(),
+            Some(store.clone() as Arc<dyn ArtifactCatalog>),
+            None,
+        );
+        let error = call(named(&with_lister, "artifact.read"), invented.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            error.message.starts_with(ARTIFACT_NOT_FOUND),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains("never constructed"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains(ARTIFACT_LIST_TOOL_NAME),
+            "{}",
+            error.message
+        );
+
+        let alone = policy().artifact_tools(store.clone(), None, None);
+        assert_eq!(alone.len(), 1);
+        let error = call(named(&alone, "artifact.read"), invented)
+            .await
+            .unwrap_err();
+        assert!(
+            error.message.contains("never constructed"),
+            "{}",
+            error.message
+        );
+        assert!(
+            !error.message.contains(ARTIFACT_LIST_TOOL_NAME),
+            "{}",
+            error.message
+        );
+
+        // Ownership failures keep Runtime's own error.
+        let foreign = put(&store, "other", "tool-output", "foreign").await;
+        let error = call(
+            named(&with_lister, "artifact.read"),
+            json!({"id": foreign.id.as_str()}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.message, "artifact access denied");
     }
     #[derive(Debug)]
     struct FailedStore;

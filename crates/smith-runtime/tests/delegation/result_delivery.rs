@@ -217,7 +217,7 @@ async fn a_reply_over_the_inline_budget_is_delivered_as_an_excerpt_and_a_readabl
     let page = store
         .read(ArtifactRead {
             session: session.id().clone(),
-            id: agent_runtime_core::artifact::ArtifactId::new(id).expect("an artifact id"),
+            id: agent_runtime_core::artifact::ArtifactId::new(id.clone()).expect("an artifact id"),
             offset: 0,
             limit: MAX_ARTIFACT_READ_BYTES,
         })
@@ -225,6 +225,62 @@ async fn a_reply_over_the_inline_budget_is_delivered_as_an_excerpt_and_a_readabl
         .expect("the parent reads its own copy of the reply");
     assert_eq!(String::from_utf8(page.bytes).unwrap(), long_reply());
     assert_eq!(page.next_offset, None);
+
+    // agent result cites the same stored copy, so a model that lost the
+    // delivery can recover the id it named.
+    let slot = Arc::new(OnceLock::new());
+    slot.set(coordinator.clone()).unwrap();
+    let ctx = InvocationContext {
+        session: session.id().clone(),
+        turn: None,
+        call_id: ToolCallId::new("result-after-delivery"),
+        request: RequestId::new("result-after-delivery"),
+        workspace: Arc::new(LexicalWorkspace::new("/repo")),
+        clock: Arc::new(SystemClock),
+        cancel: Cancellation::new(),
+        deadline: Deadline::never(),
+        output_limit: 1_000_000,
+    };
+    let result = invoke_agent(
+        &AgentTool::new(slot.clone()),
+        serde_json::json!({"action": "result", "child_id": child.as_str()}),
+        &ctx,
+    )
+    .await
+    .expect("a result outcome")
+    .value;
+    assert_eq!(result["result"]["reply_artifact"], id.as_str(), "{result}");
+
+    // Runtime names the child on its stored reply, so listing by child finds
+    // it without the delivery.
+    let tools = smith_runtime::tool_output::ToolOutputContextPolicy {
+        inline_bytes: 8192,
+        artifact_page_bytes: 2048,
+    }
+    .artifact_tools(
+        store.clone(),
+        Some(store.clone() as Arc<dyn smith_runtime::artifact::ArtifactCatalog>),
+        Some(slot as Arc<dyn smith_runtime::tool_output::ChildDirectory>),
+    );
+    let lister = tools
+        .iter()
+        .find(|tool| tool.spec().name == smith_runtime::tool_output::ARTIFACT_LIST_TOOL_NAME)
+        .expect("a lister beside the reader");
+    let listed = invoke_agent(
+        lister.as_ref(),
+        serde_json::json!({"child_id": child.as_str(), "purpose": "delegation.child-reply"}),
+        &ctx,
+    )
+    .await
+    .expect("a listing")
+    .value;
+    assert_eq!(listed["total"], 1, "{listed}");
+    assert_eq!(listed["artifacts"][0]["id"], id.as_str(), "{listed}");
+    assert_eq!(
+        listed["artifacts"][0]["child_id"],
+        child.as_str(),
+        "{listed}"
+    );
 
     session.shutdown().await.expect("a clean shutdown");
 }

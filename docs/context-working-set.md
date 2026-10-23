@@ -54,6 +54,24 @@ therefore reject an old incompatible prepared artifact read instead of silently
 reusing it. Session ownership, integrity checks and artifact-transfer policy stay
 unchanged. Artifact pages are not recursively offloaded into new artifacts.
 
+## Listing artifacts
+
+When Smith's own artifact store backs the session, `artifact.list` sits beside
+the reader (discovery query `artifact-list`). It returns metadata only, never
+content: id, purpose, media type, byte length, originating turn and call, the
+child that produced it (`child_id`), and the child session a copied artifact
+came from. Rows are the calling session's own artifacts, newest first, 20 per
+page by default and at most 100, sized to fit the inline allowance; follow
+`next_offset`. Optional `purpose` and `child_id` filters narrow them; for
+example `child_id = "child-1"` with `delegation.child-reply` finds that child's
+full reply. Other purposes include
+`delegation.child-result` for artifacts a child produced and `tool-output` for
+your own offloaded results. Listing needs the same authority as reading.
+
+Artifact ids come only from tool results and host messages; they are never
+constructed. When a read names an id that does not exist, the error says so and
+points to `artifact.list`.
+
 ## Inspection and recovery
 
 `/context` retains its existing last-request category breakdown and confidence

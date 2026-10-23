@@ -12,6 +12,7 @@ use agent_runtime_core::artifact::{
     ArtifactChunk, ArtifactDigest, ArtifactError, ArtifactId, ArtifactRead, ArtifactRef,
     ArtifactStore, ArtifactWrite, MAX_ARTIFACT_MEDIA_TYPE_CHARS,
 };
+use agent_runtime_core::ids::SessionId;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -147,6 +148,94 @@ impl fmt::Debug for SmithArtifactStore {
 struct StoredArtifact {
     schema_version: u32,
     reference: ArtifactRef,
+    /// When the record was first written, in Unix milliseconds. Records
+    /// written before listing existed lack it and fall back to file mtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created_at_ms: Option<u64>,
+}
+
+/// Owner-scoped metadata listing over a Smith artifact store.
+///
+/// Runtime's [`ArtifactStore`] can only read a reference the caller already
+/// holds. A model that lost or never saw an id needs the session's own
+/// inventory, which only the concrete Smith store can enumerate.
+#[async_trait]
+pub trait ArtifactCatalog: Send + Sync + fmt::Debug {
+    /// Every readable artifact `session` owns, newest first, ties by id.
+    async fn list_owned(&self, session: &SessionId) -> Result<Vec<ArtifactRef>, ArtifactError>;
+}
+
+#[async_trait]
+impl ArtifactCatalog for SmithArtifactStore {
+    async fn list_owned(&self, session: &SessionId) -> Result<Vec<ArtifactRef>, ArtifactError> {
+        // One directory holds every session of the project, so this scan is
+        // linear in the project's artifacts. It runs only on an explicit
+        // listing call; an owner index is the step up if that ever matters.
+        let mut entries = match tokio::fs::read_dir(self.directory()).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(_) => {
+                return Err(ArtifactError::Unavailable {
+                    detail: "protected Smith artifact storage is unavailable".into(),
+                });
+            }
+        };
+        let mut owned = Vec::new();
+        // A failed directory read is not a damaged record: returning what was
+        // seen so far would present a partial inventory as complete.
+        while let Some(entry) =
+            entries
+                .next_entry()
+                .await
+                .map_err(|_| ArtifactError::Unavailable {
+                    detail: "protected Smith artifact storage is unavailable".into(),
+                })?
+        {
+            let path = entry.path();
+            if !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".metadata.json"))
+            {
+                continue;
+            }
+            // A record this store cannot trust is skipped, not fatal: one
+            // damaged file must not hide every other artifact.
+            let Ok(Some(record)) = self.load_record(&path).await else {
+                continue;
+            };
+            if &record.reference.provenance.session != session {
+                continue;
+            }
+            let created = match record.created_at_ms {
+                Some(created) => created,
+                None => modified_ms(&entry).await,
+            };
+            owned.push((created, record.reference));
+        }
+        owned.sort_by(|(left_at, left), (right_at, right)| {
+            right_at
+                .cmp(left_at)
+                .then_with(|| left.id.as_str().cmp(right.id.as_str()))
+        });
+        Ok(owned.into_iter().map(|(_, reference)| reference).collect())
+    }
+}
+
+async fn modified_ms(entry: &tokio::fs::DirEntry) -> u64 {
+    entry
+        .metadata()
+        .await
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .map_or(0, unix_ms)
+}
+
+fn unix_ms(time: std::time::SystemTime) -> u64 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 #[async_trait]
@@ -178,6 +267,7 @@ impl ArtifactStore for SmithArtifactStore {
         let metadata = serde_json::to_vec(&StoredArtifact {
             schema_version: ARTIFACT_SCHEMA_VERSION,
             reference: reference.clone(),
+            created_at_ms: Some(unix_ms(std::time::SystemTime::now())),
         })
         .map_err(|_| ArtifactError::Unavailable {
             detail: "artifact metadata could not be encoded".into(),
@@ -385,6 +475,34 @@ mod tests {
             store.put(write("session-1", b"second")).await,
             Err(ArtifactError::Integrity { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn listing_returns_only_the_owners_records_newest_first() {
+        let root = tempfile::tempdir().unwrap();
+        let store = store(root.path());
+        assert!(
+            store
+                .list_owned(&SessionId::new("owner"))
+                .await
+                .unwrap()
+                .is_empty(),
+            "a store with no directory lists nothing"
+        );
+        let mut older = write("owner", b"older");
+        older.idempotency_key = "older".into();
+        let older = store.put(older).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let mut newer = write("owner", b"newer");
+        newer.idempotency_key = "newer".into();
+        let newer = store.put(newer).await.unwrap();
+        store.put(write("someone-else", b"private")).await.unwrap();
+        tokio::fs::write(store.directory().join("damaged.metadata.json"), b"{")
+            .await
+            .unwrap();
+
+        let listed = store.list_owned(&SessionId::new("owner")).await.unwrap();
+        assert_eq!(listed, vec![newer, older]);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

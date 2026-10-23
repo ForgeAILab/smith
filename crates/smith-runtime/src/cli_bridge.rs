@@ -29,6 +29,7 @@ use agent_runtime_core::tool::ToolSpec;
 
 use crate::capability_limits::CORE_TOOL_NAMES;
 use crate::prompt::cli_bridge_instruction_fragments;
+use crate::tool_output::ARTIFACT_LIST_TOOL_NAME;
 
 pub(crate) const BRIDGE_SERVER_NAME: &str = "smith";
 
@@ -162,9 +163,11 @@ fn remove_unsupported_artifact_reader(
     specs: &mut Vec<ToolSpec>,
     omissions: &mut Vec<BridgeOmission>,
 ) {
+    // The lister only describes artifacts; like the reader, it needs some
+    // other bridged tool whose output could have produced one.
     if specs
         .iter()
-        .any(|spec| spec.name != ARTIFACT_READ_TOOL_NAME)
+        .any(|spec| spec.name != ARTIFACT_READ_TOOL_NAME && spec.name != ARTIFACT_LIST_TOOL_NAME)
     {
         return;
     }
@@ -288,6 +291,7 @@ mod tests {
             AGENT_TOOL_NAME,
             ADVISOR_TOOL_NAME,
             ARTIFACT_READ_TOOL_NAME,
+            ARTIFACT_LIST_TOOL_NAME,
             CAPABILITY_SEARCH_TOOL_NAME,
             CAPABILITY_ACTIVATE_TOOL_NAME,
             "mcp__docs__lookup",
@@ -298,6 +302,7 @@ mod tests {
             AGENT_TOOL_NAME,
             ADVISOR_TOOL_NAME,
             ARTIFACT_READ_TOOL_NAME,
+            ARTIFACT_LIST_TOOL_NAME,
             CAPABILITY_SEARCH_TOOL_NAME,
             CAPABILITY_ACTIVATE_TOOL_NAME,
             "mcp__docs__lookup",
@@ -393,6 +398,12 @@ mod tests {
                 false,
                 vec![],
             ),
+            (
+                "only artifact tools",
+                vec![ARTIFACT_READ_TOOL_NAME, ARTIFACT_LIST_TOOL_NAME],
+                false,
+                vec![],
+            ),
             ("everything denied", vec![], false, vec![]),
             ("empty input with skills", vec![], true, vec![]),
         ];
@@ -451,6 +462,18 @@ mod tests {
                 vec![BridgeOmission::NoSupportingTool {
                     name: ARTIFACT_READ_TOOL_NAME.into(),
                 }],
+            ),
+            (
+                vec![ARTIFACT_READ_TOOL_NAME, ARTIFACT_LIST_TOOL_NAME],
+                true,
+                vec![
+                    BridgeOmission::NoSupportingTool {
+                        name: ARTIFACT_READ_TOOL_NAME.into(),
+                    },
+                    BridgeOmission::NoSupportingTool {
+                        name: ARTIFACT_LIST_TOOL_NAME.into(),
+                    },
+                ],
             ),
             (vec!["registry.future_tool"], false, vec![]),
         ] {

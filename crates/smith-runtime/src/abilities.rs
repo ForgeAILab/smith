@@ -23,6 +23,7 @@ use agent_runtime_core::tool::{Tool, ToolSpec, canonicalize_json};
 
 use crate::advisor::ADVISOR_TOOL_NAME;
 use crate::delegation::AGENT_TOOL_NAME;
+use crate::tool_output::ARTIFACT_LIST_TOOL_NAME;
 
 /// Named readiness fact required before `ask_user` may activate.
 pub(crate) const INTERACTION_READY_CONFIG: &str = "host.interaction";
@@ -239,6 +240,9 @@ fn keywords(name: &str) -> Vec<&'static str> {
             "review",
         ],
         ARTIFACT_READ_TOOL_NAME => vec!["artifact", "read", "output", "page"],
+        // Disjoint from the reader's words, so a read query never also
+        // surfaces the lister and a lost-id query never surfaces the reader.
+        ARTIFACT_LIST_TOOL_NAME => vec!["inventory", "catalog", "ids", "lost", "missing"],
         GET_GOAL_TOOL_NAME => vec!["goal", "persistent", "status", "objective", "budget"],
         CREATE_GOAL_TOOL_NAME => vec!["goal", "persistent", "create", "objective", "multi-turn"],
         UPDATE_GOAL_TOOL_NAME => vec![
@@ -269,6 +273,7 @@ fn affordances(name: &str, permissions: &[Permission]) -> Vec<&'static str> {
         QUESTIONNAIRE_TOOL_NAME => vec!["user-interaction", "task-question"],
         WRITE_TODOS_TOOL_NAME => vec!["plan-management"],
         ARTIFACT_READ_TOOL_NAME => vec!["artifact-read"],
+        ARTIFACT_LIST_TOOL_NAME => vec!["artifact-list"],
         GET_GOAL_TOOL_NAME => vec!["goal-read"],
         CREATE_GOAL_TOOL_NAME | UPDATE_GOAL_TOOL_NAME => vec!["goal-management"],
         _ => Vec::new(),
@@ -773,5 +778,49 @@ mod tests {
             selected_from(&view, crate::tool_output::ARTIFACT_DISCOVERY_QUERY),
             BTreeSet::from([RegistryId::tool(ARTIFACT_READ_TOOL_NAME)])
         );
+    }
+
+    #[test]
+    fn each_artifact_discovery_query_selects_only_its_own_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::session::SessionPaths::new(
+            dir.path(),
+            &crate::session::ProjectId::new("artifact-discovery").unwrap(),
+        );
+        let store = Arc::new(crate::artifact::SmithArtifactStore::new(paths));
+        let policy = crate::tool_output::ToolOutputContextPolicy {
+            inline_bytes: 8192,
+            artifact_page_bytes: 2048,
+        };
+        let mut tools = built_in_and_agent_tools();
+        tools.extend(policy.artifact_tools(
+            store.clone(),
+            Some(store as Arc<dyn crate::artifact::ArtifactCatalog>),
+            None,
+        ));
+        let view = view_for(tools);
+        for (query, tool) in [
+            (
+                crate::tool_output::ARTIFACT_DISCOVERY_QUERY,
+                ARTIFACT_READ_TOOL_NAME,
+            ),
+            (
+                crate::tool_output::ARTIFACT_LIST_DISCOVERY_QUERY,
+                ARTIFACT_LIST_TOOL_NAME,
+            ),
+        ] {
+            let candidates = CapabilityResolver::new()
+                .retrieve(&view, &RoutingQuery::derive(query, Vec::<String>::new()))
+                .candidates
+                .into_iter()
+                .map(|candidate| candidate.descriptor.id().clone())
+                .collect::<Vec<_>>();
+            assert_eq!(candidates, [RegistryId::tool(tool)], "{query}");
+            assert_eq!(
+                selected_from(&view, query),
+                BTreeSet::from([RegistryId::tool(tool)]),
+                "{query}"
+            );
+        }
     }
 }
