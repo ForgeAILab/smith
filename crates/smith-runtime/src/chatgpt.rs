@@ -18,10 +18,10 @@ use agent_runtime_core::clock::{Clock, Deadline, SystemClock, Timestamp};
 use agent_runtime_core::content::{ContentPart, Message, Role};
 use agent_runtime_core::provider::{
     AuthKind, Capabilities, FinishReason, HostedSearchAction, HostedSource, HostedTool,
-    ModelDescriptor, ModelId, PromptCacheControl, Provider, ProviderCacheBehavior,
-    ProviderCacheContract, ProviderCallContext, ProviderError, ProviderErrorKind, ProviderRequest,
-    ProviderStream, ProviderStreamEvent, RateLimitSnapshot, RateLimitWindow, ReasoningSupport,
-    ToolChoice,
+    ModelDescriptor, ModelId, PromptCacheControl, Provider, ProviderAttemptPurpose,
+    ProviderCacheBehavior, ProviderCacheContract, ProviderCallContext, ProviderError,
+    ProviderErrorKind, ProviderRequest, ProviderStream, ProviderStreamEvent, RateLimitSnapshot,
+    RateLimitWindow, ReasoningSupport, ToolChoice,
 };
 use agent_runtime_core::provider_credential::{
     CredentialInvalidation, ProviderAuthRejection, ProviderCredentialError,
@@ -76,6 +76,12 @@ pub const CHATGPT_ISSUER: &str = "https://auth.openai.com";
 pub const CHATGPT_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// Fixed direct Responses endpoint used by the experimental provider.
 pub const CHATGPT_RESPONSES_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
+/// Partitions cache identities when the native request projection changes.
+pub(crate) const CHATGPT_CACHE_KEY_REVISION: &str = "smith-chatgpt-prefix-2";
+/// Sticky-routing token the endpoint issues per turn; see `turn_state`.
+const CHATGPT_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+/// Sessions whose turn-state tokens are kept at once.
+const MAX_TURN_STATES: usize = 256;
 /// The account usage endpoint beside the Responses one, pinned from the
 /// public Codex backend client (`/wham/usage` on `backend-api` hosts).
 pub const CHATGPT_USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";

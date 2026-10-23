@@ -5,7 +5,18 @@ pub(super) fn response_items(
     tool_names: &BTreeMap<String, String>,
 ) -> Result<Vec<Value>, ProviderError> {
     Ok(match message.role {
-        Role::System => Vec::new(),
+        Role::System => {
+            let text = message.joined_text();
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![json!({
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": text}],
+                })]
+            }
+        }
         Role::User => vec![json!({
             "type": "message",
             "role": "user",
@@ -21,30 +32,26 @@ pub(super) fn response_items(
         })],
         Role::Assistant => {
             let mut items = Vec::new();
-            let content = message
-                .content
-                .iter()
-                .filter_map(|part| match part {
-                    ContentPart::Text { text } => {
-                        Some(json!({"type": "output_text", "text": text, "annotations": []}))
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            if !content.is_empty() {
-                items.push(json!({"type": "message", "role": "assistant", "content": content}));
-            }
+            let mut content = Vec::new();
             for part in &message.content {
                 match part {
+                    ContentPart::Text { text } => {
+                        content
+                            .push(json!({"type": "output_text", "text": text, "annotations": []}));
+                    }
                     ContentPart::Reasoning {
                         signature: Some(signature),
                         ..
-                    } => items.push(json!({
-                        "type": "reasoning",
-                        "summary": [],
-                        "encrypted_content": signature,
-                    })),
+                    } => {
+                        flush_assistant_text(&mut items, &mut content);
+                        items.push(json!({
+                            "type": "reasoning",
+                            "summary": [],
+                            "encrypted_content": signature,
+                        }));
+                    }
                     ContentPart::ToolCall(call) => {
+                        flush_assistant_text(&mut items, &mut content);
                         let wire = response_wire_tool_name(&call.name);
                         if tool_names
                             .get(&wire)
@@ -62,6 +69,7 @@ pub(super) fn response_items(
                     _ => {}
                 }
             }
+            flush_assistant_text(&mut items, &mut content);
             items
         }
         Role::Tool => message
@@ -77,6 +85,16 @@ pub(super) fn response_items(
             })
             .collect(),
     })
+}
+
+fn flush_assistant_text(items: &mut Vec<Value>, content: &mut Vec<Value>) {
+    if !content.is_empty() {
+        items.push(json!({
+            "type": "message",
+            "role": "assistant",
+            "content": std::mem::take(content),
+        }));
+    }
 }
 
 fn function_result_output(parts: &[ContentPart]) -> Value {

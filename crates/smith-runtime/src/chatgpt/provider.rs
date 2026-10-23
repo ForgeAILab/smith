@@ -1,4 +1,5 @@
 use super::*;
+use agent_runtime::registry::RegistryRevision;
 
 /// Configuration for the direct experimental Responses adapter.
 pub struct ChatGptProviderConfig {
@@ -64,6 +65,7 @@ impl ChatGptProviderConfig {
         } else {
             let mut contract = ProviderCacheContract::from_control(PromptCacheControl::Implicit);
             contract.evidence.stream = true;
+            contract.key_revision = Some(RegistryRevision::new(CHATGPT_CACHE_KEY_REVISION));
             capabilities.cache_contract = Some(contract);
         }
         Ok(Self {
@@ -88,6 +90,9 @@ pub struct ChatGptProvider<T: HttpTransport> {
     credential_target: ProviderCredentialTarget,
     credential_minimum_validity_ms: u64,
     clock: Arc<dyn Clock>,
+    /// Each session's sticky-routing token for its current turn, with the
+    /// account it was issued to.
+    turn_states: std::sync::Mutex<BTreeMap<String, (String, String)>>,
 }
 
 impl<T: HttpTransport> fmt::Debug for ChatGptProvider<T> {
@@ -118,6 +123,7 @@ impl<T: HttpTransport> ChatGptProvider<T> {
             credential_target,
             credential_minimum_validity_ms: CHATGPT_CREDENTIAL_MINIMUM_VALIDITY_MS,
             clock: Arc::new(SystemClock),
+            turn_states: std::sync::Mutex::default(),
         }
     }
 
@@ -132,17 +138,9 @@ impl<T: HttpTransport> ChatGptProvider<T> {
         &self.transport
     }
 
-    /// Serializes a Responses request, keyed to the session for prefix caching.
-    ///
-    /// `prompt_cache_key` is the field the API documents for this, and sending
-    /// none was not defensible. But a live probe of this endpoint showed the
-    /// cache actually keys off **byte-identical prefix content**, not off this
-    /// value: a request carrying a different key still hit a 3,584-token cache
-    /// the moment its instructions and tool schemas matched bytes another
-    /// session had just sent. So the key is worth sending and is not what earns
-    /// the hit — keeping the prefix stable is. That is
-    /// `smith_runtime::prompt`'s job, and the reason its stable sections are
-    /// ordered ahead of everything that varies.
+    /// Serializes the planned order using Runtime's routing key, or the session
+    /// when no cache identity is available. Later host context stays in input
+    /// rather than changing the leading instruction field.
     pub(super) fn build_payload(
         &self,
         request: &ProviderRequest,
@@ -164,20 +162,17 @@ impl<T: HttpTransport> ChatGptProvider<T> {
                 "the experimental ChatGPT Responses binding does not accept provider extensions",
             ));
         }
-        let instructions = request
-            .messages
-            .iter()
-            .filter(|message| message.role == Role::System)
-            .map(Message::joined_text)
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        // Only the leading instruction block belongs before conversation
+        // history. Hoisting later host context here makes a changing todo or
+        // continuation invalidate the otherwise unchanged history prefix.
+        let (instructions, messages) = match request.messages.split_first() {
+            Some((first, rest)) if first.role == Role::System => (first.joined_text(), rest),
+            _ => (String::new(), request.messages.as_slice()),
+        };
         let tool_names = response_tool_names(&request.tools)?;
         let mut input = Vec::new();
-        for message in &request.messages {
-            if message.role != Role::System {
-                input.extend(response_items(message, &tool_names)?);
-            }
+        for message in messages {
+            input.extend(response_items(message, &tool_names)?);
         }
         let mut tools = request
             .tools
@@ -250,6 +245,65 @@ impl<T: HttpTransport> ChatGptProvider<T> {
             );
         }
         Ok((payload, tool_names))
+    }
+
+    /// The turn-state token to replay, or none when this request starts a turn.
+    ///
+    /// The endpoint issues `x-codex-turn-state` on a turn's first response and
+    /// expects it back on every later request of that turn. Without it each
+    /// tool-loop request is routed afresh, lands on a server that never saw
+    /// this session's history, and reuses only the prefix every session
+    /// shares. A request whose newest non-system message is a tool result
+    /// continues the turn; anything else starts one, which drops the old token
+    /// because replaying it into a different turn breaks the server contract.
+    /// A token issued to another account is dropped the same way, as Codex
+    /// does when the credential owner changes.
+    pub(super) fn turn_state(
+        &self,
+        request: &ProviderRequest,
+        session: &str,
+        account: &str,
+    ) -> Option<String> {
+        let continues_turn = request
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role != Role::System)
+            .is_some_and(|message| message.role == Role::Tool);
+        let mut states = self.turn_states.lock().expect("turn states");
+        match states.get(session) {
+            Some((issued_to, token)) if continues_turn && issued_to == account => {
+                Some(token.clone())
+            }
+            _ => {
+                states.remove(session);
+                None
+            }
+        }
+    }
+
+    /// Keeps the first token a turn's responses carry, as the contract asks.
+    pub(super) fn record_turn_state(
+        &self,
+        session: &str,
+        account: &str,
+        headers: &[(String, String)],
+    ) {
+        let Some((_, token)) = headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(CHATGPT_TURN_STATE_HEADER))
+        else {
+            return;
+        };
+        let mut states = self.turn_states.lock().expect("turn states");
+        if !states.contains_key(session) && states.len() >= MAX_TURN_STATES {
+            // Sessions that ended mid-turn would otherwise accumulate; losing
+            // a live session's token costs routing affinity, not correctness.
+            states.clear();
+        }
+        states
+            .entry(session.to_owned())
+            .or_insert_with(|| (account.to_owned(), token.clone()));
     }
 
     async fn acquire_credential(
@@ -374,6 +428,14 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
             .validate_cache_identity()
             .map_err(|message| ProviderError::new(ProviderErrorKind::BadRequest, message))?;
         let (payload, tool_names) = self.build_payload(&request, &ctx.session)?;
+        // The endpoint routes a conversation by this header, as Codex sends
+        // it: the same value as `prompt_cache_key`. A per-request id here sent
+        // every session's Nth request under one shared id and scattered each
+        // session's own requests across servers.
+        let routing_key = payload["prompt_cache_key"]
+            .as_str()
+            .expect("the payload carries a cache key")
+            .to_owned();
         let body = serde_json::to_vec(&payload).map_err(|_| {
             ProviderError::new(
                 ProviderErrorKind::BadRequest,
@@ -389,7 +451,15 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
             .account()
             .unwrap_or(&self.config.account_id)
             .to_owned();
-        let http = HttpRequest {
+        // Only a request offering tools can be continued by another one.
+        // Advisor, vision and module one-shots reuse the caller's session
+        // mid-turn and offer none, so they must not touch its token.
+        let routes_turn = ctx.purpose == ProviderAttemptPurpose::Ordinary
+            && !(request.tools.is_empty() && request.hosted_tools.is_empty());
+        let turn_state = routes_turn
+            .then(|| self.turn_state(&request, ctx.session.as_str(), &account_id))
+            .flatten();
+        let mut http = HttpRequest {
             url: CHATGPT_RESPONSES_ENDPOINT.into(),
             headers: vec![
                 ("content-type".into(), "application/json".into()),
@@ -398,12 +468,16 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
                     "authorization".into(),
                     format!("Bearer {}", lease.secret().expose()),
                 ),
-                ("chatgpt-account-id".into(), account_id),
+                ("chatgpt-account-id".into(), account_id.clone()),
                 ("originator".into(), "smith".into()),
-                ("session-id".into(), ctx.request_id.as_str().to_owned()),
+                ("session-id".into(), routing_key),
+                ("thread-id".into(), ctx.session.as_str().to_owned()),
             ],
             body,
         };
+        if let Some(token) = turn_state {
+            http.headers.push((CHATGPT_TURN_STATE_HEADER.into(), token));
+        }
         let post = self.transport.post_response(http);
         tokio::pin!(post);
         let response = tokio::select! {
@@ -432,6 +506,9 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
         // Read before the body moves: these headers describe the credential
         // that served this attempt, and nothing downstream can recover them
         // once the stream is running.
+        if routes_turn {
+            self.record_turn_state(ctx.session.as_str(), &account_id, &response.headers);
+        }
         let rate_limits = codex_rate_limit_snapshot(&response.headers);
         let mut bytes = response.body;
         let cancel = ctx.cancel.clone();

@@ -941,6 +941,85 @@ fn hosted_search_declaration_uses_responses_wire_without_a_function_tool() {
 }
 
 #[test]
+fn changing_tail_context_does_not_move_ahead_of_cached_chatgpt_history() {
+    let provider = ChatGptProvider::new(
+        ReplayTransport::single(Vec::new()),
+        ChatGptProviderConfig::new("gpt-6-astra", Capabilities::basic_streaming(), "acct_test")
+            .unwrap(),
+        ProviderCredentialTarget::new("chatgpt").unwrap(),
+        Arc::new(StaticProviderCredentialSource::new(Secret::new(
+            "test-token",
+        ))),
+    );
+    let session = agent_runtime_core::ids::SessionId::new("cache-tail-session");
+    let mut request = ProviderRequest::new(
+        ModelId::new("gpt-6-astra"),
+        vec![
+            Message::system("Stable host instructions"),
+            Message::user("A long reference document that must keep its prefix"),
+            Message::assistant(vec![ContentPart::text("The reference is understood")]),
+            Message::system("Current todo state: implementing"),
+        ],
+    );
+    let (before, _) = provider.build_payload(&request, &session).unwrap();
+    request.messages[3] = Message::system("Current todo state: verifying");
+    let (after, _) = provider.build_payload(&request, &session).unwrap();
+
+    assert_eq!(before["instructions"], json!("Stable host instructions"));
+    assert_eq!(after["instructions"], before["instructions"]);
+    assert_eq!(after["prompt_cache_key"], before["prompt_cache_key"]);
+    let first = before["input"].as_array().unwrap();
+    let second = after["input"].as_array().unwrap();
+    assert_eq!(&first[..2], &second[..2]);
+    assert_eq!(first.len(), 3);
+    assert_eq!(
+        second[2],
+        json!({
+            "type":"message", "role":"developer",
+            "content":[{"type":"input_text","text":"Current todo state: verifying"}]
+        })
+    );
+}
+
+#[test]
+fn assistant_history_preserves_reasoning_text_and_tool_call_order() {
+    let reasoning = |signature: &str| ContentPart::Reasoning {
+        text: "[encrypted]".into(),
+        redacted: true,
+        signature: Some(signature.into()),
+        producer: None,
+    };
+    let message = Message::assistant(vec![
+        reasoning("signed-before-text"),
+        ContentPart::text("I will inspect the reference."),
+        ContentPart::text("Then compare the render."),
+        ContentPart::ToolCall(ToolCall {
+            id: ToolCallId::new("read-reference"),
+            name: "read".into(),
+            arguments: json!({"path":"reference.png"}),
+        }),
+        ContentPart::text("A later assistant block."),
+        reasoning("signed-after-text"),
+    ]);
+    assert_eq!(
+        response_items(&message, &BTreeMap::new()).unwrap(),
+        vec![
+            json!({"type":"reasoning","summary":[],"encrypted_content":"signed-before-text"}),
+            json!({"type":"message","role":"assistant","content":[
+                {"type":"output_text","text":"I will inspect the reference.","annotations":[]},
+                {"type":"output_text","text":"Then compare the render.","annotations":[]}
+            ]}),
+            json!({"type":"function_call","call_id":"read-reference","name":"read",
+                "arguments":"{\"path\":\"reference.png\"}"}),
+            json!({"type":"message","role":"assistant","content":[
+                {"type":"output_text","text":"A later assistant block.","annotations":[]}
+            ]}),
+            json!({"type":"reasoning","summary":[],"encrypted_content":"signed-after-text"}),
+        ]
+    );
+}
+
+#[test]
 fn hosted_search_stream_renders_unicode_citations_and_deduplicates_completed_items() {
     let mut state = StreamState {
         buffer_text: true,
@@ -1148,4 +1227,170 @@ fn hosted_search_citation_recognizes_raw_and_escaped_urls_per_text_part() {
             }]
         );
     }
+}
+
+/// Issues a new `x-codex-turn-state` token on every response, so a test can
+/// tell which response's token a later request replays.
+#[derive(Debug, Default)]
+struct TurnRoutingTransport {
+    requests: Mutex<Vec<HttpRequest>>,
+}
+
+impl TurnRoutingTransport {
+    fn requests(&self) -> Vec<HttpRequest> {
+        self.requests.lock().expect("requests").clone()
+    }
+}
+
+#[async_trait]
+impl HttpTransport for TurnRoutingTransport {
+    async fn post_stream(
+        &self,
+        request: HttpRequest,
+    ) -> Result<agent_runtime::provider::transport::ByteStream, ProviderError> {
+        Ok(self.post_response(request).await?.body)
+    }
+
+    async fn post_response(
+        &self,
+        request: HttpRequest,
+    ) -> Result<agent_runtime::provider::transport::HttpResponse, ProviderError> {
+        let mut requests = self.requests.lock().expect("requests");
+        requests.push(request);
+        let body = b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n".to_vec();
+        Ok(agent_runtime::provider::transport::HttpResponse {
+            status: 200,
+            headers: vec![(
+                "x-codex-turn-state".into(),
+                format!("route-{}", requests.len()),
+            )],
+            body: Box::pin(futures_util::stream::once(async move { Ok(body) })),
+        })
+    }
+}
+
+fn routing_provider() -> ChatGptProvider<TurnRoutingTransport> {
+    ChatGptProvider::new(
+        TurnRoutingTransport::default(),
+        ChatGptProviderConfig::new(
+            "gpt-5.6-terra",
+            Capabilities::basic_streaming(),
+            "acct_test",
+        )
+        .expect("config"),
+        ProviderCredentialTarget::new("chatgpt").expect("target"),
+        Arc::new(StaticProviderCredentialSource::new(Secret::new(
+            "access-token-canary",
+        ))) as Arc<dyn ProviderCredentialSource>,
+    )
+}
+
+fn sent_header<'a>(request: &'a HttpRequest, name: &str) -> Option<&'a str> {
+    request
+        .headers
+        .iter()
+        .find(|(header, _)| header == name)
+        .map(|(_, value)| value.as_str())
+}
+
+fn read_round(path: &str) -> [Message; 2] {
+    [
+        Message::assistant(vec![ContentPart::ToolCall(ToolCall {
+            id: ToolCallId::new(path),
+            name: "read".into(),
+            arguments: json!({"path": path}),
+        })]),
+        Message::tool_result(agent_runtime_core::content::ToolResultBlock {
+            call_id: ToolCallId::new(path),
+            name: "read".into(),
+            is_error: false,
+            content: vec![ContentPart::text("inert")],
+        }),
+    ]
+}
+
+/// The endpoint routes by `session-id` and the per-turn `x-codex-turn-state`
+/// token. Sending the per-request id there put every session's Nth request
+/// under one shared id, and with no token each tool-loop request landed on a
+/// server holding only the prefix all sessions share. A live probe of three
+/// concurrent sessions reused 28–32% of input that way, and 73–80% (the
+/// probe's ceiling is about 78%) with both headers.
+#[tokio::test]
+async fn routing_headers_follow_the_session_and_replay_the_turn_token() {
+    let provider = routing_provider();
+    let mut history = vec![Message::system("Be concise"), Message::user("Read a, b")];
+    let mut calls = vec![(history.clone(), true)];
+    history.extend(read_round("a"));
+    calls.push((history.clone(), true));
+    // An advisor or vision one-shot inside the turn shares the session but
+    // offers no tools.
+    calls.push((vec![Message::user("advise")], false));
+    history.extend(read_round("b"));
+    // Host context after a tool result still continues the same turn.
+    history.push(Message::system("todo updated"));
+    calls.push((history.clone(), true));
+    history.push(Message::user("Now read c"));
+    calls.push((history, true));
+
+    for (index, (messages, offers_tools)) in calls.into_iter().enumerate() {
+        let mut request = ProviderRequest::new(ModelId::new("gpt-5.6-terra"), messages);
+        if offers_tools {
+            request.tools.push(ToolSchema {
+                name: "read".into(),
+                description: "Read a file".into(),
+                input_schema: json!({"type": "object"}),
+            });
+        }
+        let ctx = ProviderCallContext {
+            session: agent_runtime_core::ids::SessionId::new("session-routing"),
+            request_id: RequestId::new(format!("req-{}", index + 1)),
+            attempt_id: AttemptId::new(format!("attempt-{}", index + 1)),
+            cache_identity: None,
+            purpose: ProviderAttemptPurpose::Ordinary,
+            cancel: Cancellation::new(),
+            deadline: Deadline::never(),
+        };
+        provider
+            .stream(request, ctx)
+            .await
+            .expect("stream")
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    let sent = provider.transport().requests();
+    assert_eq!(sent.len(), 5);
+    for request in &sent {
+        let payload: Value = serde_json::from_slice(&request.body).expect("payload");
+        assert_eq!(
+            sent_header(request, "session-id"),
+            payload["prompt_cache_key"].as_str()
+        );
+        assert_eq!(sent_header(request, "thread-id"), Some("session-routing"));
+    }
+    let tokens = sent
+        .iter()
+        .map(|request| sent_header(request, "x-codex-turn-state"))
+        .collect::<Vec<_>>();
+    // The turn keeps its first token; later responses' tokens are ignored.
+    assert_eq!(tokens, [None, Some("route-1"), None, Some("route-1"), None]);
+}
+
+/// A token belongs to the account it was issued to; a rotated credential
+/// starts fresh routing rather than replaying another owner's state.
+#[test]
+fn turn_token_is_not_replayed_for_another_account() {
+    let provider = routing_provider();
+    let mut messages = vec![Message::user("Read a")];
+    messages.extend(read_round("a"));
+    let continuing = ProviderRequest::new(ModelId::new("gpt-5.6-terra"), messages);
+    let issued = [("x-codex-turn-state".to_owned(), "route-1".to_owned())];
+
+    provider.record_turn_state("session", "acct_a", &issued);
+    assert_eq!(
+        provider.turn_state(&continuing, "session", "acct_a"),
+        Some("route-1".to_owned())
+    );
+    assert_eq!(provider.turn_state(&continuing, "session", "acct_b"), None);
+    assert_eq!(provider.turn_state(&continuing, "session", "acct_a"), None);
 }

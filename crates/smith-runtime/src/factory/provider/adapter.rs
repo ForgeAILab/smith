@@ -120,6 +120,16 @@ pub(in crate::factory) fn apply_adapter_cache_capability(
         capabilities.cache_contract = Some(contract);
     }
 
+    if adapter == Adapter::ChatGptResponses {
+        let contract = capabilities
+            .cache_contract
+            .as_mut()
+            .expect("supported adapter cache contract");
+        contract.key_revision = Some(RegistryRevision::new(
+            crate::chatgpt::CHATGPT_CACHE_KEY_REVISION,
+        ));
+    }
+
     // The native Responses wire shape has offline fixtures for every
     // SyntheticConformance gate only at OpenAI's official endpoint. Generic
     // compatible and user-supplied endpoints remain observation-only even
