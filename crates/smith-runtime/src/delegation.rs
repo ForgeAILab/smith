@@ -333,6 +333,9 @@ impl ChildRuntimeFactory for SmithChildFactory {
             "agent_profile_placement": "child",
             "agent_profile_posture": route.agent_profile_posture.as_str(),
             "context_policy_revision": route.context_policy.revision,
+            // The request sizer is deliberately absent: its revision moves with
+            // estimate formulas, and an interrupted child must stay resumable
+            // across upgrades that only change estimates.
             "prompt_revisions": prompt_revisions,
             "skill_names": skill_names,
             "workspace_root": self.workspace.root(),
@@ -568,6 +571,12 @@ impl ChildRuntimeFactory for SmithChildFactory {
         };
 
         let mut builder = RuntimeBuilder::new(route.model.clone())
+            .request_sizer(Arc::new(
+                crate::image_sizing::SmithRequestSizer::for_provider_and_model(
+                    &route.provider_kind,
+                    route.model.as_str(),
+                ),
+            ))
             .provider(route.provider.clone())
             .observer(route.web_search_session.clone())
             .provider_name(route.provider_name.clone())
