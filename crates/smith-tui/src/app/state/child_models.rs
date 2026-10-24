@@ -1,5 +1,8 @@
 use super::*;
 
+use smith_runtime::client::LimitKind;
+use smith_runtime::delegation::child_limit_label;
+
 /// Coordinator-owned turn and token counts for one visible child.
 ///
 /// Kept as its own type so the client can say precisely what it does and
@@ -28,6 +31,12 @@ pub enum ChildState {
     NeedsInput,
     /// The child's latest task completed.
     Completed,
+    /// The child's latest task stopped at a limit before a final answer.
+    /// The child still accepts a follow-up.
+    LimitReached {
+        /// The limit that stopped the task.
+        limit: LimitKind,
+    },
     /// The child has no active turn.
     Idle,
     /// The child's turn was interrupted.
@@ -76,6 +85,9 @@ impl ChildState {
             Self::Resuming => "resuming".into(),
             Self::NeedsInput => "needs input".into(),
             Self::Completed => "completed".into(),
+            Self::LimitReached { limit } => {
+                format!("stopped at its {}", child_limit_label(*limit)).into()
+            }
             Self::Idle => ReportChildState::Idle.label(),
             Self::Interrupted { resumable } => ReportChildState::Interrupted {
                 resumable: *resumable,
@@ -109,7 +121,7 @@ impl ChildState {
 
     /// Whether the child can accept a new follow-up turn.
     pub fn accepts_follow_up(&self) -> bool {
-        self.retires_when_read() || matches!(self, Self::NeedsInput)
+        self.retires_when_read() || matches!(self, Self::NeedsInput | Self::LimitReached { .. })
     }
 
     /// Whether an interrupted child has an exact checkpoint to continue.
@@ -121,7 +133,7 @@ impl ChildState {
     pub fn tone(&self) -> Tone {
         match self {
             Self::Failed => Tone::Danger,
-            Self::NeedsInput => Tone::Warning,
+            Self::NeedsInput | Self::LimitReached { .. } => Tone::Warning,
             Self::Completed | Self::Idle => Tone::Success,
             Self::Running | Self::Resuming => Tone::Default,
             _ => Tone::Dim,

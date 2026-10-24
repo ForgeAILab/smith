@@ -710,6 +710,7 @@ fn fixture_timeline_view(
                             }
                             TimelineChildEvent::NeedsInput
                             | TimelineChildEvent::Completed
+                            | TimelineChildEvent::LimitReached { .. }
                             | TimelineChildEvent::Failed => {}
                         }
                     }

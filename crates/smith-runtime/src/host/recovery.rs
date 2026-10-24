@@ -18,10 +18,10 @@ pub(super) fn unresolved_ephemeral_work(
                 RuntimeEvent::ChildSpawned { child, .. } => {
                     children.insert(child.clone());
                 }
-                // Completed and needs-input children remain live coordinator
-                // entries that can accept a follow-up. Their in-memory state
-                // is lost across process exit, so only truly terminal
-                // lifecycle events resolve ephemeral work.
+                // Completed, limit-stopped, and needs-input children remain
+                // live coordinator entries that can accept a follow-up. Their
+                // in-memory state is lost across process exit, so only truly
+                // terminal lifecycle events resolve ephemeral work.
                 RuntimeEvent::ChildStopped { child, .. }
                 | RuntimeEvent::ChildFailed { child, .. } => {
                     children.remove(child);

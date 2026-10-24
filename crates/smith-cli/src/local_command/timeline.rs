@@ -157,6 +157,15 @@ pub(crate) fn runtime_entries(events: &[SmithEvent]) -> RuntimeTimeline {
                     event: TimelineChildEvent::Completed,
                 });
             }
+            SmithEventKind::ChildLimitReached { child, limit } => {
+                timeline.children.insert(child.clone());
+                timeline.entries.push(TimelineEntry::ChildEvent {
+                    child: child.to_string(),
+                    event: TimelineChildEvent::LimitReached {
+                        limit: limit.as_str().to_owned(),
+                    },
+                });
+            }
             SmithEventKind::ChildStopped { child, reason } => {
                 timeline.children.insert(child.clone());
                 timeline.entries.push(TimelineEntry::ChildEvent {

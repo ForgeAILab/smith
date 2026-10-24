@@ -331,6 +331,55 @@
     }
 
     #[test]
+    fn a_limit_stopped_child_leaves_running_and_names_its_limit() {
+        let mut app = app();
+        let child = ChildId::new("child-1");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::ChildSpawned {
+            child: child.clone(),
+            workspace: WorkspacePolicy::ReadOnlyView,
+            max_turns: 3,
+            max_tokens: None,
+            deadline_ms: None,
+        }));
+        app.apply(&event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: true,
+        }));
+        assert_eq!(app.status.activity, Activity::ParkedAwaitingChild);
+
+        app.apply(&event(RuntimeEvent::ChildLimitReached {
+            child: child.clone(),
+            limit: smith_runtime::client::LimitKind::Output,
+        }));
+
+        let summary = &app.children[child.as_str()];
+        assert_eq!(summary.state.label().as_ref(), "stopped at its output limit");
+        assert!(!summary.state.is_running());
+        assert!(summary.state.accepts_follow_up());
+        assert!(
+            !summary.retires_when_read(),
+            "a stopped task is not a success that dismisses itself"
+        );
+        assert_eq!(summary.state.tone(), Tone::Warning);
+        assert_eq!(
+            summary.detail.as_deref(),
+            Some("stopped at its output limit before a final answer")
+        );
+        assert!(app.transcript.blocks().iter().any(|block| {
+            matches!(
+                block,
+                Block::Notice { text, .. }
+                    if text == "child-1 stopped at its output limit before a final answer"
+            )
+        }));
+        assert!(!app.transcript.blocks().iter().any(|block| {
+            matches!(block, Block::Notice { text, .. } if text.contains("completed"))
+        }));
+        assert_eq!(app.status.activity, Activity::Idle);
+    }
+
+    #[test]
     fn completed_parent_turn_projects_parked_without_an_open_provider_turn() {
         let mut app = app();
         let child = ChildId::new("child-parked");
@@ -760,6 +809,7 @@
             workspace: "ReadOnlyView".to_owned(),
             incompatibility: None,
             last_result: None,
+            stopped_at_limit: None,
         };
         let mut app = app();
         app.restore_child("child-a", ChildState::Running, None);

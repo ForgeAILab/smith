@@ -85,6 +85,13 @@ fn runtime_timeline_uses_stable_ids_terminal_plan_and_redacted_gate_evidence() {
                 result: "secret-child-result".to_owned(),
             },
         ),
+        envelope(
+            7,
+            RuntimeEvent::ChildLimitReached {
+                child: ChildId::new("child-2"),
+                limit: smith_runtime::client::LimitKind::Output,
+            },
+        ),
     ];
 
     let timeline = runtime_entries(&events);
@@ -96,6 +103,7 @@ fn runtime_timeline_uses_stable_ids_terminal_plan_and_redacted_gate_evidence() {
             "root turn-7 · completed · plan 0 active/0 pending/2 done/1 cancelled · gates 1 passed/0 failed",
             "child child-2 · started · ReadOnlyView · 1 turn limit",
             "child child-2 · task completed",
+            "child child-2 · task stopped at limit (output)",
         ]
     );
     assert!(!joined.contains("secret-command"));

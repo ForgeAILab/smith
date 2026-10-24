@@ -1006,6 +1006,27 @@ impl App {
                 );
                 self.arm_child_dismissal(child.as_str());
             }
+            RuntimeEvent::ChildLimitReached { child, limit } => {
+                let state = ChildState::LimitReached { limit: *limit };
+                let detail = format!("{} before a final answer", state.label());
+                let profile = self.carried_child_profile(child.as_str());
+                self.children.insert(
+                    child.to_string(),
+                    ChildSummary {
+                        state,
+                        detail: Some(detail.clone()),
+                        profile,
+                    },
+                );
+                self.settle_child_clock(child.as_str());
+                self.settle_child_tool_calls(child.as_str());
+                // No answer to keep: whatever the child last said is a step,
+                // not the task's result. The row stays until the user or the
+                // parent follows up.
+                self.push_child_notice(child.as_str(), NoticeKind::Limit, detail.clone());
+                self.transcript
+                    .push_notice(NoticeKind::SubAgent, format!("{child} {detail}"));
+            }
             RuntimeEvent::ChildStopped { child, reason } => {
                 let state = ChildState::stopped(reason);
                 let profile = self.carried_child_profile(child.as_str());

@@ -108,6 +108,7 @@ pub(super) fn reduce_event(
         | RuntimeEvent::ChildSpawned { .. }
         | RuntimeEvent::ChildNeedsInput { .. }
         | RuntimeEvent::ChildCompleted { .. }
+        | RuntimeEvent::ChildLimitReached { .. }
         | RuntimeEvent::ChildStopped { .. }
         | RuntimeEvent::ChildFailed { .. }
         | RuntimeEvent::InteractionRequested { .. }
@@ -211,6 +212,15 @@ pub(super) fn update_capsule(
                     child,
                     ChildLifecycleState::Completed,
                     Some(Fingerprint::of(result.as_bytes())),
+                    envelope.seq,
+                );
+            }
+            RuntimeEvent::ChildLimitReached { child, limit } => {
+                update_child(
+                    &mut capsule.exact_state.children,
+                    child,
+                    ChildLifecycleState::LimitReached,
+                    Some(Fingerprint::of(limit.as_str())),
                     envelope.seq,
                 );
             }

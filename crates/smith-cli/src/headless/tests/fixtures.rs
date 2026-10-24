@@ -1121,6 +1121,7 @@ fn durable_child() {
             max_turns: None,
             tokens_used: 42,
             incompatibility: None,
+            stopped_at_limit: None,
         }],
         ..LifecycleOutput::default()
     };

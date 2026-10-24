@@ -198,29 +198,43 @@ async fn resume_marks_unresolved_ephemeral_work_interrupted_without_restarting_i
     };
     let running = ChildId::new("child-running-before-crash");
     let completed = ChildId::new("child-completed-before-crash");
+    let limit_stopped = ChildId::new("child-limit-stopped-before-crash");
     let needs_input = ChildId::new("child-needs-input-before-crash");
     let stopped = ChildId::new("child-stopped-before-crash");
     let failed = ChildId::new("child-failed-before-crash");
     {
-        let mut append = |payload| {
+        let mut append = |payload: RuntimeEvent| {
             let seq = next_seq;
             next_seq = next_seq.saturating_add(1);
-            records.push(JournalLine::new(JournalRecord::Event {
-                event: EventEnvelope::new(
-                    seq,
-                    EventId::new(format!("evt-before-crash-{seq}")),
-                    session_id.clone(),
-                    None,
-                    Timestamp(50),
-                    payload,
-                ),
-            }));
+            // Every event an older build could write keeps that build's
+            // event schema (16), so the journal of a session started before
+            // the upgrade must still resume. Only the limit event is new.
+            let older_schema = !matches!(payload, RuntimeEvent::ChildLimitReached { .. });
+            let mut event = EventEnvelope::new(
+                seq,
+                EventId::new(format!("evt-before-crash-{seq}")),
+                session_id.clone(),
+                None,
+                Timestamp(50),
+                payload,
+            );
+            if older_schema {
+                event.schema_version = 16;
+            }
+            records.push(JournalLine::new(JournalRecord::Event { event }));
         };
         append(spawned(&running));
         append(spawned(&completed));
         append(RuntimeEvent::ChildCompleted {
             child: completed.clone(),
             result: "available for follow-up".to_owned(),
+        });
+        // A task that stopped at a limit leaves its child available for a
+        // follow-up, exactly like a completed one.
+        append(spawned(&limit_stopped));
+        append(RuntimeEvent::ChildLimitReached {
+            child: limit_stopped.clone(),
+            limit: agent_runtime_core::event::LimitKind::Output,
         });
         append(spawned(&needs_input));
         append(RuntimeEvent::ChildNeedsInput {
@@ -275,7 +289,12 @@ async fn resume_marks_unresolved_ephemeral_work_interrupted_without_restarting_i
         .expect("an explicit interruption marker");
     assert_eq!(
         interruption.children,
-        [completed.clone(), needs_input.clone(), running.clone()]
+        [
+            completed.clone(),
+            limit_stopped.clone(),
+            needs_input.clone(),
+            running.clone()
+        ]
     );
     assert_eq!(
         interruption.monitors.as_slice(),
@@ -308,7 +327,10 @@ async fn resume_marks_unresolved_ephemeral_work_interrupted_without_restarting_i
         })
         .collect::<Vec<_>>();
     assert_eq!(markers.len(), 1);
-    assert_eq!(markers[0].children, [completed, needs_input, running]);
+    assert_eq!(
+        markers[0].children,
+        [completed, limit_stopped, needs_input, running]
+    );
     assert_eq!(markers[0].monitors, [running_monitor]);
 
     // The marker participates in the next scan, so the same prior work is not

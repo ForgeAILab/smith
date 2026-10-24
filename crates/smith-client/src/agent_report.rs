@@ -235,6 +235,8 @@ pub struct AgentSnapshot {
     pub incompatibility: Option<String>,
     /// Last child result; absent when no result is available.
     pub last_result: Option<String>,
+    /// Wire name of the limit that stopped the latest task, if one did.
+    pub stopped_at_limit: Option<String>,
 }
 
 impl From<&ChildStatus> for AgentSnapshot {
@@ -246,6 +248,8 @@ impl From<&ChildStatus> for AgentSnapshot {
                 .unwrap_or_else(|| "directory unknown".to_owned()),
             incompatibility: status.incompatibility.clone(),
             last_result: status.last_result.clone(),
+            stopped_at_limit: smith_runtime::delegation::child_status_limit(status)
+                .map(str::to_owned),
         }
     }
 }
@@ -265,6 +269,7 @@ impl AgentSnapshot {
             max_turns: self.summary.max_turns,
             tokens_used: self.summary.tokens_used,
             incompatibility: self.incompatibility,
+            stopped_at_limit: self.stopped_at_limit,
         }
     }
 }
@@ -292,6 +297,9 @@ pub struct HeadlessAgentOutput {
     /// Exact-resume incompatibility, if present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub incompatibility: Option<String>,
+    /// Wire name of the limit that stopped the latest task, such as `output`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_at_limit: Option<String>,
 }
 
 /// Validation and execution outcomes for `/agent resume`.
@@ -432,6 +440,7 @@ mod tests {
             workspace: "read only".to_owned(),
             incompatibility: None,
             last_result: Some("**4 entries** in `src/lib.rs`.".to_owned()),
+            stopped_at_limit: None,
         }
     }
 
@@ -641,6 +650,7 @@ mod tests {
                 workspace: "read only".to_owned(),
                 incompatibility: None,
                 last_result: None,
+                stopped_at_limit: None,
             };
             assert_eq!(
                 serde_json::to_string(&snapshot.into_headless_output()).expect("machine output"),

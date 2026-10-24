@@ -170,6 +170,7 @@ pub(super) fn start_delegation_lifecycle_tasks(
                 }
                 RuntimeEvent::ChildNeedsInput { child, .. }
                 | RuntimeEvent::ChildCompleted { child, .. }
+                | RuntimeEvent::ChildLimitReached { child, .. }
                 | RuntimeEvent::ChildStopped { child, .. }
                 | RuntimeEvent::ChildFailed { child, .. } => {
                     // A delayed event from the previous task must not cancel
@@ -409,6 +410,9 @@ fn terminal_outcome_key(outcome: &ChildTaskOutcome) -> TerminalOutcomeKey {
     match outcome {
         ChildTaskOutcome::Completed { child, result } => {
             TerminalOutcomeKey::new(child.as_str(), result.turn.as_str())
+        }
+        ChildTaskOutcome::LimitReached { child, turn, .. } => {
+            TerminalOutcomeKey::new(child.as_str(), turn.as_str())
         }
         ChildTaskOutcome::NeedsInput { child, request } => {
             TerminalOutcomeKey::new(child.as_str(), request.id().as_str())

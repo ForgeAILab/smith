@@ -114,6 +114,11 @@ pub enum TimelineChildEvent {
     NeedsInput,
     /// The child completed its task.
     Completed,
+    /// The child's task stopped at a limit before a final answer.
+    LimitReached {
+        /// The limit's wire name, such as `output`.
+        limit: String,
+    },
     /// The child was stopped.
     Stopped {
         /// Existing debug-formatted stopping reason.
@@ -136,6 +141,7 @@ impl TimelineChildEvent {
             },
             Self::NeedsInput => "needs input".to_owned(),
             Self::Completed => "task completed".to_owned(),
+            Self::LimitReached { limit } => format!("task stopped at limit ({limit})"),
             Self::Stopped { reason } => format!("stopped ({reason})"),
             Self::Failed => "failed".to_owned(),
         }

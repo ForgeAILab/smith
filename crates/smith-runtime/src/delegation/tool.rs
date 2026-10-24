@@ -188,7 +188,7 @@ pub(super) fn status_json(status: &ChildStatus) -> Value {
         ChildState::Failed => "failed".to_owned(),
         ChildState::Expired => "expired".to_owned(),
     };
-    json!({
+    let mut value = json!({
         "child_id": status.child.as_str(),
         "child_session_id": status.session.as_str(),
         "durability": match status.durability {
@@ -214,7 +214,13 @@ pub(super) fn status_json(status: &ChildStatus) -> Value {
         } else {
             None
         },
-    })
+    });
+    // An idle child with no result may have stopped at a limit; say which,
+    // so the model does not read it as an empty answer.
+    if let (Some(limit), Value::Object(object)) = (child_status_limit(status), &mut value) {
+        object.insert("stopped_at_limit".to_owned(), json!(limit));
+    }
+    value
 }
 
 /// What a started task's result tells the model to do next. A model that is
@@ -279,6 +285,31 @@ fn task_outcome_json(outcome: &ChildTaskOutcome) -> Value {
                 // reply, so this result and that delivery cite one id.
                 "reply_artifact": result.reply.as_ref().map(|reply| reply.id.as_str()),
             },
+        }),
+        ChildTaskOutcome::LimitReached {
+            child,
+            limit,
+            artifacts,
+            ..
+        } => json!({
+            "child_id": child.as_str(),
+            "state": "idle",
+            "stopped_at_limit": limit.as_str(),
+            // Whatever the child said before the limit is a preamble or a
+            // step, never the task's answer.
+            "result": Value::Null,
+            "artifacts": artifacts,
+            "note": format!(
+                "The child's task stopped at its {} before it gave a final answer. Nothing it \
+                 said in that task is a result. The child is still available: send a follow_up \
+                 to continue the work{}, or read its transcript to see what it did.",
+                child_limit_label(*limit),
+                if *limit == LimitKind::Output {
+                    " in smaller steps"
+                } else {
+                    ""
+                },
+            ),
         }),
         ChildTaskOutcome::NeedsInput { child, .. } => json!({
             "child_id": child.as_str(),
@@ -623,12 +654,16 @@ impl Tool for AgentTool {
                     self.wait_timers.arm(child.as_str(), timeout)
                 };
                 // The status carries the completed result text; when it is
-                // the child's latest outcome, the model now has it.
+                // the child's latest outcome, the model now has it. A
+                // needs-input or limit outcome adds what the status lacks.
                 if status.state != ChildState::Running
                     && let Ok(Some(outcome)) = coordinator.task_outcome(&child)
                 {
                     acknowledge_delivered(coordinator, ctx, &outcome);
-                    if matches!(outcome, ChildTaskOutcome::NeedsInput { .. }) {
+                    if matches!(
+                        outcome,
+                        ChildTaskOutcome::NeedsInput { .. } | ChildTaskOutcome::LimitReached { .. }
+                    ) {
                         let mut value = wait_status_json(&status, None, clamped);
                         value.as_object_mut().expect("status object").extend(
                             task_outcome_json(&outcome)

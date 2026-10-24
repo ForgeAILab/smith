@@ -576,6 +576,10 @@ pub enum SmithEventKind {
         child: ChildId,
         result: String,
     },
+    ChildLimitReached {
+        child: ChildId,
+        limit: LimitKind,
+    },
     ChildStopped {
         child: ChildId,
         reason: CancelReason,
@@ -1092,6 +1096,10 @@ mod tests {
             ChildCompleted {
                 child: ChildId::new("child"),
                 result: "done".into(),
+            },
+            ChildLimitReached {
+                child: ChildId::new("child"),
+                limit: LimitKind::Output,
             },
             ChildStopped {
                 child: ChildId::new("child"),

@@ -52,7 +52,7 @@ use agent_runtime_core::delegation::{
     ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
 };
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
-use agent_runtime_core::event::RuntimeEvent;
+use agent_runtime_core::event::{LimitKind, RuntimeEvent};
 use agent_runtime_core::grant::{
     GrantConstraints, SecurityCheck, SecurityCheckId, SecurityCheckMode, SecurityCheckOutcome,
     SecurityCheckRevision,
@@ -88,6 +88,29 @@ pub use self::delegation_parking::{
 
 /// The model-facing delegation tool's name — Smith product policy.
 pub const AGENT_TOOL_NAME: &str = "agent";
+
+/// How a limit that stopped a child's task is named to models and users.
+pub fn child_limit_label(limit: LimitKind) -> &'static str {
+    match limit {
+        LimitKind::ProviderAttempts => "provider attempt limit",
+        LimitKind::ToolSteps => "tool-step limit",
+        LimitKind::Time => "time limit",
+        LimitKind::Output => "output limit",
+    }
+}
+
+/// The wire name of the limit that stopped a child's latest task, such as
+/// `output`, when its status records one.
+pub fn child_status_limit(status: &ChildStatus) -> Option<&str> {
+    let error = status
+        .last_error
+        .as_ref()
+        .filter(|error| error.kind == ErrorKind::Limit)?;
+    match error.metadata.get("limit")? {
+        agent_runtime_core::metadata::MetaValue::Text(limit) => Some(limit),
+        _ => None,
+    }
+}
 
 /// Reviewed workspace wording exposed to clients through the runtime boundary.
 pub use smith_tools::display::agent_workspace_display;

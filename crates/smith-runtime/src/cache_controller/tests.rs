@@ -660,3 +660,38 @@ async fn manual_compaction_bypasses_only_a_gate_runtime_has_not_consumed() {
         "a refused request persists no attempt marker"
     );
 }
+
+#[test]
+fn a_limit_stopped_child_task_projects_as_its_limit_not_a_completion() {
+    let state = Arc::new(Mutex::new(ControllerState::default()));
+    let capsule = ResumeCapsuleSlot::new(SessionId::new("session"), Timestamp::ZERO);
+    let changes = ChangeRecorder::new(None);
+    let child = agent_runtime_core::ids::ChildId::new("child-1");
+    let spawned = envelope(
+        1,
+        RuntimeEvent::ChildSpawned {
+            child: child.clone(),
+            workspace: agent_runtime_core::delegation::WorkspacePolicy::ReadOnlyView,
+            max_turns: 2,
+            max_tokens: None,
+            deadline_ms: None,
+        },
+    );
+    let stopped = envelope(
+        2,
+        RuntimeEvent::ChildLimitReached {
+            child: child.clone(),
+            limit: agent_runtime_core::event::LimitKind::Output,
+        },
+    );
+    assert!(reduce_event(&state, Some(&capsule), &changes, &spawned));
+    assert!(reduce_event(&state, Some(&capsule), &changes, &stopped));
+
+    let projection = capsule.snapshot().exact_state.children[&child].clone();
+    assert_eq!(projection.state, ChildLifecycleState::LimitReached);
+    let outcome = projection
+        .terminal_outcome
+        .expect("the stopped task is the child's latest outcome");
+    assert_eq!(outcome.state, ChildLifecycleState::LimitReached);
+    assert_eq!(outcome.result_digest, Some(Fingerprint::of("output")));
+}

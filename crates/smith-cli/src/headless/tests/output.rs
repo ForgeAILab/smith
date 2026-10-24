@@ -263,6 +263,7 @@ fn machine_lifecycle_projects_durable_child_continuation_without_content() {
             max_turns: None,
             tokens_used: 42,
             incompatibility: None,
+            stopped_at_limit: None,
         }],
         ..LifecycleOutput::default()
     };

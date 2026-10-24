@@ -19,6 +19,7 @@ fn live_findings_agent_snapshot(
         workspace: "read only".to_owned(),
         incompatibility: None,
         last_result: result.map(str::to_owned),
+        stopped_at_limit: None,
     }
 }
 

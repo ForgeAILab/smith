@@ -10,6 +10,9 @@ pub enum ChildLifecycleState {
     Running,
     /// Child committed success.
     Completed,
+    /// Child's task stopped at a limit before a final answer; the child
+    /// still accepts follow-ups.
+    LimitReached,
     /// Child committed an interaction request awaiting parent follow-up.
     NeedsInput,
     /// Child committed failure.
