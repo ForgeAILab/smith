@@ -257,6 +257,14 @@ async fn prepare_inner(request: &RuntimeRequest) -> Result<PreparedFallbacks, Fa
         });
         let backoff = Arc::new(crate::provider_backoff::ProviderBackoff::new(lazy));
         let mut builder = RuntimeBuilder::new(prepared.model.clone())
+            // The candidate plans images at its own provider's rates, as the
+            // primary and child routes do.
+            .request_sizer(Arc::new(
+                crate::image_sizing::SmithRequestSizer::for_provider_and_model(
+                    &prepared.provider_kind,
+                    prepared.model.as_str(),
+                ),
+            ))
             .provider(backoff.clone())
             .provider_name(prepared.provider_name.clone())
             .model_profile(prepared.profile.profile.clone())

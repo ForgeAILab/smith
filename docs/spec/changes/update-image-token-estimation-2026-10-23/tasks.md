@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-23T09:44:00Z
-updated_at: 2026-10-24T10:48:03Z
-completed_at:
+updated_at: 2026-10-24T12:38:26Z
+completed_at: 2026-10-24T12:38:26Z
 ---
 
 ## 1. Implementation
@@ -16,10 +16,11 @@ completed_at:
 - [x] 1.3 Wire `SmithRequestSizer` into root runtime construction
   (`crates/smith-runtime/src/factory/construction.rs`) and child runtime
   construction (`crates/smith-runtime/src/delegation.rs`).
-- [ ] 1.4 Size model-fallback routes with `SmithRequestSizer` too
+- [x] 1.4 Size model-fallback routes with `SmithRequestSizer` too
   (`crates/smith-runtime/src/factory/fallback.rs`) once
   `add-profile-model-fallback-2026-10-23` lands; its branch leaves them on the
-  default sizer so the two changes merge independently.
+  default sizer so the two changes merge independently. Covered by
+  `composition::fallback::a_fallback_route_sizes_images_at_its_own_provider_rate`.
 
 - [x] 1.5 Correct the OpenAI tiers (per-model patch multipliers, `gpt-4o-mini`
   and `o1`/`o3` tile rates) and the Gemini 3/4 flat per-image maximum from the

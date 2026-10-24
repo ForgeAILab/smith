@@ -55,9 +55,11 @@ Only images that remain inline in the outgoing request are still
   Remote (non-`data:`) image URLs or `data:` URLs whose header dimensions cannot
   be decoded are estimated at `2,500` tokens (`UNKNOWN_IMAGE_TOKENS`).
 - **D4 Root and child parity, without fingerprinting the sizer.**
-  Both `factory/construction.rs` (root `RuntimeBuilder`) and `delegation.rs`
-  (`SmithChildFactory::child_builder`) install `SmithRequestSizer` for their
-  resolved `(provider_kind, model)` pair. The child policy fingerprint does
+  `factory/construction.rs` (root `RuntimeBuilder`), `delegation.rs`
+  (`SmithChildFactory::child_builder`), and `factory/fallback.rs` (each model
+  fallback route) install `SmithRequestSizer` for their resolved
+  `(provider_kind, model)` pair, so a turn that falls back plans images at the
+  candidate's own rates. The child policy fingerprint does
   **not** include the sizer revision (owner decision, 2026-10-24): the
   fingerprint decides whether an interrupted child may resume, and the sizer
   revision moves whenever an estimate formula changes. Including it would make

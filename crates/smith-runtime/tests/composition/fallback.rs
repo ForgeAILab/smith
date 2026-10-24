@@ -1,4 +1,5 @@
 use super::*;
+use agent_runtime_core::content::ContentPart;
 use agent_runtime_core::event::{ModelFallbackReason, TurnFinish};
 use agent_runtime_core::provider::{
     ProviderCallContext, ProviderError, ProviderRequest, ProviderStream,
@@ -263,4 +264,84 @@ async fn a_fallback_on_another_pooled_provider_starts_on_its_remembered_account(
         fresh.iter().all(|name| name == "BACKUP_FIRST") && !fresh.is_empty(),
         "with nothing remembered the pool starts on its first account: {fresh:?}"
     );
+}
+
+/// A 1920x1080 PNG header, enough for sizing to read its dimensions.
+fn screenshot_data_url() -> String {
+    use base64::Engine as _;
+    let mut header = Vec::from(&b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"[..]);
+    header.extend_from_slice(&1920u32.to_be_bytes());
+    header.extend_from_slice(&1080u32.to_be_bytes());
+    header.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(header)
+    )
+}
+
+/// The input tokens the fallback route planned for one turn whose primary
+/// never responds.
+async fn fallback_planned_input_tokens(parts: Vec<ContentPart>) -> u32 {
+    let config = FALLBACK_CONFIG.replace(
+        "[models.\"backup/secondary\"]\n",
+        "[models.\"backup/secondary\"]\ninput_modalities = [\"text\", \"image\"]\n",
+    );
+    let fixture = Fixture::new(&config);
+    let observer = RecordingObserver::shared();
+    let mut req = request(&fixture, HostSurface::Headless);
+    req.provider = Some(Arc::new(NeverRespond));
+    req.fallback_providers.insert(
+        ("backup".into(), "secondary".into()),
+        Arc::new(FakeProvider::text_reply("seen")),
+    );
+    req.observers.push(observer.clone());
+    let runtime = factory::build_request(req).await.unwrap();
+    let session = runtime
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .unwrap();
+    session.run(UserInput { parts }).await.unwrap();
+    let events = observer.payloads();
+    let switched = events
+        .iter()
+        .position(|event| matches!(event, RuntimeEvent::ModelFallback { .. }))
+        .expect("the turn moved to the fallback");
+    events[switched..]
+        .iter()
+        .find_map(|event| match event {
+            RuntimeEvent::ContextPlanned { input_tokens, .. } => Some(*input_tokens),
+            _ => None,
+        })
+        .expect("the fallback route planned its request")
+}
+
+#[tokio::test]
+async fn a_fallback_route_sizes_images_at_its_own_provider_rate() {
+    use agent_runtime::context::RequestSizer;
+    use agent_runtime_core::content::Message;
+
+    let image = ContentPart::Image {
+        url: screenshot_data_url(),
+        detail: None,
+    };
+    let text_only = fallback_planned_input_tokens(vec![ContentPart::text("look")]).await;
+    let with_image =
+        fallback_planned_input_tokens(vec![ContentPart::text("look"), image.clone()]).await;
+
+    let image_cost = |sizer: &dyn RequestSizer| {
+        let mut message = Message::user("look");
+        let text = sizer.size_message(&message);
+        message.content.push(image.clone());
+        sizer.size_message(&message) - text
+    };
+    let smith = image_cost(
+        &smith_runtime::image_sizing::SmithRequestSizer::for_provider_and_model(
+            "fake",
+            "secondary",
+        ),
+    );
+    let default = image_cost(&agent_runtime::context::CharRatioSizer::default());
+    assert_ne!(smith, default, "the test must tell the two sizers apart");
+    assert_eq!(with_image - text_only, smith);
 }
