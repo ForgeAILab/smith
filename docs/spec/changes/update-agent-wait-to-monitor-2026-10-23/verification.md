@@ -1,7 +1,7 @@
 # Verification
 
-The wait implementation and its client fixtures are complete. Task 3.1 remains
-open because the shared checkout contains other changes that fail the full gate.
+The wait implementation and its client fixtures are complete. Task 3.1 passed
+on the 2026-10-24 integration branch (see the last section).
 No runtime dependency revision or package version was changed for this proposal.
 
 ## Passing checks
@@ -76,3 +76,11 @@ minimal build, test run, and artifact-specific smoke check are recorded above.
   `metadata_adoption_waits_for_open_picker_and_active_turn_then_keeps_session_and_draft`
   is a known full-gate flake that passed 3 of 3 alone and in three whole-binary
   runs.
+
+## Integration gate (2026-10-24)
+
+Branch `integrate/unmerged-2026-10-24`: origin/main `0ce2ccb9` plus the Jev
+proposal, both wait follow-ups, and skill invocation. `gate.sh … locked`
+passed every step: formatting, stable and Rust 1.88 Clippy, fixtures (no
+changes), 3,274 tests with 0 failures, the `--no-default-features` build and
+tests, minimal smoke, and cargo-deny.

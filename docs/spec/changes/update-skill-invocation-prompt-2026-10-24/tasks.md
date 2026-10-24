@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-24T10:14:29Z
-updated_at: 2026-10-24T10:14:29Z
-completed_at:
+updated_at: 2026-10-24T11:24:21Z
+completed_at: 2026-10-24T11:24:21Z
 ---
 
 ## 1. Implementation
@@ -22,4 +22,5 @@ completed_at:
 
 - [x] 2.1 CLI skill-command tests, TUI file-command tests, and runtime
   composition skill tests cover bare, task, and re-invocation paths.
-- [ ] 2.2 Full workspace gate and CI on the integration branch.
+- [x] 2.2 Full workspace gate (3,274 passed, 0 failed) and CI on
+  `integrate/unmerged-2026-10-24`.

@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-23T09:39:03Z
-updated_at: 2026-10-23T21:27:31Z
-completed_at:
+updated_at: 2026-10-24T10:30:20Z
+completed_at: 2026-10-24T10:30:20Z
 ---
 
 ## 1. Implementation
@@ -52,14 +52,15 @@ completed_at:
 
 ## 3. Verification
 
-- [ ] 3.1 Full gate (`--no-fail-fast`, clippy, `--no-default-features` steps).
+- [x] 3.1 Full gate (`--no-fail-fast`, clippy, `--no-default-features` steps).
 - [x] 3.2 Live TUI check: spawn a child, call `wait`, confirm the parent parks
   immediately and wakes on completion or at the deadline.
 - [x] 3.3 Update `docs/` delegation guidance pages that describe `wait`.
 
 Full-gate evidence and the failures in the other concurrent changes are recorded
-in [verification.md](verification.md). Task 3.1 remains open until the shared
-checkout passes that gate.
+in [verification.md](verification.md). Task 3.1 passed on the 2026-10-24
+integration branch, which carries this change without the other concurrent
+work.
 
 ## 4. Guidance follow-up (`session-1878584b`)
 
