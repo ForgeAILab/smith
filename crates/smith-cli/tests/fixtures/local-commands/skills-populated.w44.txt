@@ -97,10 +97,11 @@ nds, slash commands, setup, models, profiles
 , sessions, extensions, automation, and trou
 bleshooting.
   smith.guide.profiles-and-advisor · active
-· Create and inherit Smith profiles, switch
-profiles and postures, configure an advisor,
- and control delegation and capability limit
-s.
+· Create and inherit Smith profiles, configu
+re ordered model fallback and first-response
+ timeouts, switch postures, configure an adv
+isor, and control delegation and capability
+limits.
   smith.guide.sessions · active · List, resu
 me, or start Smith sessions; undo, redo, or
 revert a turn's file changes; set multi-turn

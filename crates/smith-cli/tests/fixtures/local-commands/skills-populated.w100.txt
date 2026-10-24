@@ -47,8 +47,9 @@ d modules; install, trust, list, and diagnose extensions.
 ng and reasoning, choose effort and context windows, and verify model capabilities and limits.
   smith.guide.overview · active · Find the right Smith task guide; discover CLI subcommands, slash c
 ommands, setup, models, profiles, sessions, extensions, automation, and troubleshooting.
-  smith.guide.profiles-and-advisor · active · Create and inherit Smith profiles, switch profiles and
- postures, configure an advisor, and control delegation and capability limits.
+  smith.guide.profiles-and-advisor · active · Create and inherit Smith profiles, configure ordered m
+odel fallback and first-response timeouts, switch postures, configure an advisor, and control delega
+tion and capability limits.
   smith.guide.sessions · active · List, resume, or start Smith sessions; undo, redo, or revert a tur
 n's file changes; set multi-turn goals; inspect and follow up child agents; read status and history.
   smith.guide.setup · active · Set up Smith with a provider and model, connect credentials through u
