@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "smith-wasm-module-hello"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "smith-module-sdk",
 ]

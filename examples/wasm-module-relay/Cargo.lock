@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "smith-wasm-module-relay"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "serde_json",
  "smith-module-sdk",
