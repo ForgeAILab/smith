@@ -117,8 +117,8 @@ session picks the skill up at the next idle boundary without restarting.
 
 Detected skills appear in slash completion, `Ctrl+P`, and `/help` with their
 descriptions and source layers. In the interactive TUI, use `/<skill-name>`
-to activate a skill for the current session without starting a model turn.
-Add task text to activate it and immediately run that task:
+to load a skill and immediately start an agent turn with its instruction text
+as the prompt body. Optional task text is appended after a blank line:
 
 ```text
 /rust-review
@@ -126,10 +126,12 @@ Add task text to activate it and immediately run that task:
 ```
 
 These examples assume a detected skill named `rust-review`. Tab completes a
-name; Enter invokes it. A skill-only invocation leaves the composer ready for
-your next prompt. Instructions remain active under the normal session
-activation and resume rules, and selecting an active skill again adds no
-duplicate instructions.
+name; Enter invokes it, including when no task text follows the name.
+Instructions remain active under the normal session activation and resume
+rules. Selecting an active skill again starts another turn with its body
+without duplicating the session's active instruction fragment. Composer
+references in task text retain their normal behavior; references written in
+the skill's own instructions remain literal.
 
 Built-in and file commands keep their existing names. If a skill collides with
 one, invoke it explicitly with `/skills use <name> [task]`; its completion row

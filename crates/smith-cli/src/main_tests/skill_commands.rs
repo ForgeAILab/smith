@@ -5,6 +5,7 @@ use agent_runtime::provider::fake::FakeProvider;
 use agent_runtime_core::approval::AllowAll;
 use crossterm::event::Event;
 use futures_util::StreamExt;
+use sha2::{Digest, Sha256};
 use smith_runtime::skills::SmithSkillSources;
 
 use crate::tui_driver::{
@@ -13,8 +14,18 @@ use crate::tui_driver::{
 };
 
 #[tokio::test]
-async fn skill_shortcuts_activate_without_spend_then_dispatch_through_the_production_loop() {
-    for task_in_command in [false, true] {
+async fn skill_shortcuts_submit_the_body_through_the_production_loop() {
+    const BODY: &str = "MANUAL_SKILL_CONTEXT_MARKER\nKeep @file:guide.md and @@literal unchanged.";
+    for (command, task_in_command, already_active) in [
+        ("/inspect", false, false),
+        ("/inspect", true, false),
+        ("/skills use inspect", false, false),
+        ("/skills use inspect", true, false),
+        ("/inspect", false, true),
+        ("/inspect", true, true),
+        ("/skills use inspect", false, true),
+        ("/skills use inspect", true, true),
+    ] {
         let home = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project.path().join(".smith")).unwrap();
@@ -36,11 +47,14 @@ async fn skill_shortcuts_activate_without_spend_then_dispatch_through_the_produc
             local_inventory_with_catalog(&resolution, AVAILABLE_ADAPTER_KINDS, Some(&catalog))
                 .unwrap();
         let provider = Arc::new(FakeProvider::text_reply("checked"));
+        let skill_path = home.path().join("SKILL.md");
+        std::fs::write(&skill_path, BODY).unwrap();
         let (sources, skills) = crate::skills::SkillContext::compose(
-            SmithSkillSources::new().with_user(Skill::inline(
+            SmithSkillSources::new().with_user(Skill::from_verified_file(
                 "inspect",
                 "Review changed code",
-                "MANUAL_SKILL_CONTEXT_MARKER",
+                &skill_path,
+                Sha256::digest(BODY.as_bytes()).into(),
             )),
             &home.path().join(".smith"),
             project.path(),
@@ -91,11 +105,12 @@ async fn skill_shortcuts_activate_without_spend_then_dispatch_through_the_produc
             prepare_interactive_app(&host, project.path(), &resources, &presentation, None)
                 .await
                 .app;
-        app.composer.replace(if task_in_command {
-            "/inspect examine @file:notes.txt"
+        let typed = if task_in_command {
+            format!("{command} examine @file:notes.txt")
         } else {
-            "/inspect"
-        });
+            command.to_owned()
+        };
+        app.composer.replace(&typed);
         let mut keys = Box::pin(
             futures_util::stream::iter([Ok(Event::Key(KeyEvent::new(
                 KeyCode::Enter,
@@ -103,15 +118,19 @@ async fn skill_shortcuts_activate_without_spend_then_dispatch_through_the_produc
             )))])
             .chain(futures_util::stream::pending()),
         );
-        let (exit, mut app) = Box::pin(run_scripted_tui(
-            &host,
-            project.path(),
-            &resources,
-            app,
-            &mut keys,
-            false,
-        ))
+        let (exit, mut app) = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            Box::pin(run_scripted_tui(
+                &host,
+                project.path(),
+                &resources,
+                app,
+                &mut keys,
+                false,
+            )),
+        )
         .await
+        .expect("skill selection should exit for activation")
         .unwrap();
         let InteractiveExit::ActivateSkill {
             selected,
@@ -122,7 +141,13 @@ async fn skill_shortcuts_activate_without_spend_then_dispatch_through_the_produc
         };
         assert!(provider.requests().is_empty());
         assert!(host.session().history().is_empty());
-        assert_eq!(submission.is_some(), task_in_command);
+        assert_eq!(submission.display_text(), typed);
+        let expected = if task_in_command {
+            format!("{BODY}\n\nexamine @file:notes.txt")
+        } else {
+            BODY.to_owned()
+        };
+        assert_eq!(submission.committed_text(), expected);
         Box::pin(host.shutdown()).await.unwrap();
 
         let host = Box::pin(smith_runtime::host::start(
@@ -142,15 +167,15 @@ async fn skill_shortcuts_activate_without_spend_then_dispatch_through_the_produc
                 host.session(),
             ));
         app.set_command_catalog(resources.commands.catalog());
-        let initial = if let Some(submission) = submission {
-            app.schedule_prepared(submission);
-            Vec::new()
-        } else {
-            app.composer.replace("/inspect Hello.");
+        let initial = if already_active {
+            app.composer.replace(&typed);
             vec![Ok(Event::Key(KeyEvent::new(
                 KeyCode::Enter,
                 KeyModifiers::NONE,
             )))]
+        } else {
+            app.schedule_prepared(submission);
+            Vec::new()
         };
         let waiting = provider.clone();
         let quit = futures_util::stream::once(async move {
@@ -168,25 +193,38 @@ async fn skill_shortcuts_activate_without_spend_then_dispatch_through_the_produc
                 KeyModifiers::CONTROL,
             )))]),
         ));
-        let (exit, _) = Box::pin(run_scripted_tui(
-            &host,
-            project.path(),
-            &resources,
-            app,
-            &mut keys,
-            false,
-        ))
+        let (exit, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            Box::pin(run_scripted_tui(
+                &host,
+                project.path(),
+                &resources,
+                app,
+                &mut keys,
+                false,
+            )),
+        )
         .await
+        .expect("skill invocation should dispatch a provider request")
         .unwrap();
         assert!(matches!(exit, InteractiveExit::Quit(..)));
         let requests = provider.requests();
         assert_eq!(requests.len(), 1);
         let wire = serde_json::to_string(&requests[0].messages).unwrap();
         assert!(wire.contains("MANUAL_SKILL_CONTEXT_MARKER"), "{wire}");
+        assert!(
+            wire.contains("Keep @file:guide.md and @@literal unchanged."),
+            "{wire}"
+        );
+        assert!(
+            requests[0].messages.iter().any(|message| {
+                message.role == agent_runtime_core::content::Role::User
+                    && message.joined_text().contains(&expected)
+            }),
+            "skill body must be submitted as user input: {wire}"
+        );
         if task_in_command {
             assert!(wire.contains("NOTE_PAYLOAD_MARKER"), "{wire}");
-        } else {
-            assert!(wire.contains("Hello."));
         }
         assert!(!wire.contains("/inspect "));
         Box::pin(host.shutdown()).await.unwrap();

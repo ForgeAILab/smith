@@ -3661,21 +3661,34 @@ existing file commands MUST retain name precedence, and `/skills use <name>
 - **THEN** `/rust-review` is discoverable with that description and its source
 - **AND** Tab completes the name without loading instructions or executing it
 
-#### Scenario: Activate without starting a model turn
+#### Scenario: Invoke a skill without task text
 
 - **GIVEN** an idle provider-backed session with an authorized `rust-review` skill
 - **WHEN** the user submits `/rust-review`
 - **THEN** Smith activates that exact skill before acknowledging success
-- **AND** the composer is ready for the next prompt
-- **AND** no provider request is issued
+- **AND** immediately starts an ordinary user turn with the verified skill
+  instructions as its prompt body
+- **AND** the invocation does not require a second user prompt
 
 #### Scenario: Invoke with a task
 
 - **GIVEN** an idle provider-backed session with an authorized `rust-review` skill
 - **WHEN** the user submits `/rust-review inspect these changes`
 - **THEN** Smith activates the skill before the task's first provider request
-- **AND** `inspect these changes` uses the ordinary prepared submission path
+- **AND** the prompt contains the verified skill instructions followed by a
+  blank line and `inspect these changes` through the ordinary prepared
+  submission path
 - **AND** typed history retains the invocation and attachments remain intact
+- **AND** only task text is parsed for composer references; the authored skill
+  instructions are preserved verbatim
+
+#### Scenario: Invoke an already active skill
+
+- **GIVEN** an idle provider-backed session where `rust-review` is already active
+- **WHEN** the user submits `/rust-review` or `/skills use rust-review`
+- **THEN** Smith verifies the selected skill and starts another user turn with
+  its instruction body
+- **AND** no duplicate active instruction fragment is appended to the session
 
 #### Scenario: A skill name collides with a command
 

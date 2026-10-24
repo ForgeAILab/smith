@@ -35,9 +35,10 @@ async fn explicit_skill_activation_precedes_the_first_request_and_survives_resum
         .await
         .unwrap();
     let id = session.id().clone();
-    let selected = original
-        .prepare_skill_activation(&session, "inspection")
+    let (selected, instructions) = original
+        .prepare_skill_invocation(&session, "inspection")
         .unwrap();
+    assert_eq!(instructions, "EXPLICIT_SKILL_BODY_MARKER");
     assert_eq!(selected.layer, smith_runtime::skills::SmithSkillLayer::User);
     assert!(provider.requests().is_empty());
     session.shutdown().await.unwrap();
@@ -154,13 +155,13 @@ async fn explicit_skill_refusals_leave_the_current_session_usable() {
         .prepare_skill_activation(&session, "inspection")
         .unwrap();
     for name in ["unknown", "withheld", "large"] {
-        let error = smith.prepare_skill_activation(&session, name).unwrap_err();
+        let error = smith.prepare_skill_invocation(&session, name).unwrap_err();
         assert!(error.to_string().contains(name), "{error}");
     }
     std::fs::write(&path, "CHANGED_BODY_MARKER").unwrap();
     assert!(
         smith
-            .prepare_skill_activation(&session, "inspection")
+            .prepare_skill_invocation(&session, "inspection")
             .is_err()
     );
     assert!(provider.requests().is_empty());

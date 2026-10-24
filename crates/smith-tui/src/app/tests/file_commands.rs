@@ -42,6 +42,42 @@ fn skill_shortcuts_complete_without_activation_then_route_exact_task_text() {
 }
 
 #[test]
+fn skill_submissions_preserve_authored_instructions_and_parse_only_task_references() {
+    let mut app = app();
+    app.resources.files.push(ResourceEntry::new(
+        "file:src/lib.rs",
+        "src/lib.rs",
+        "workspace file",
+    ));
+    let body = "Read @file:guide.md; keep @@literal.\n";
+    for arguments in ["", " \t\n", "Inspect @file:src/lib.rs and @@literal"] {
+        let submission = app
+            .prepare_skill_submission("/inspect".into(), body, arguments)
+            .unwrap();
+        let expected = if arguments.trim().is_empty() {
+            body.to_owned()
+        } else {
+            format!("{body}\n\nInspect @file:src/lib.rs and @literal")
+        };
+        assert_eq!(submission.display_text(), "/inspect");
+        assert_eq!(submission.committed_text(), expected);
+        assert_eq!(
+            submission.input_without_files(),
+            agent_runtime_core::content::UserInput::text(expected)
+        );
+        if arguments.trim().is_empty() {
+            assert!(submission.files().is_empty());
+        } else {
+            assert_eq!(submission.files(), &["src/lib.rs"]);
+        }
+    }
+    assert!(
+        app.prepare_skill_submission("/inspect".into(), body, "@file:missing.rs")
+            .is_err()
+    );
+}
+
+#[test]
 fn unavailable_skill_shortcuts_preserve_the_draft() {
     let mut app = skill_app();
     let mut skills = app.command_catalog.skills().to_vec();

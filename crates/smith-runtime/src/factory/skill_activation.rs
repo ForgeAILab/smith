@@ -12,6 +12,16 @@ impl SmithRuntime {
         session: &agent_runtime::runtime::SessionHandle,
         name: &str,
     ) -> Result<RequestedSkill, RuntimeError> {
+        self.prepare_skill_invocation(session, name)
+            .map(|(selected, _)| selected)
+    }
+
+    /// Returns the admitted skill pin and verified instructions for a user turn.
+    pub fn prepare_skill_invocation(
+        &self,
+        session: &agent_runtime::runtime::SessionHandle,
+        name: &str,
+    ) -> Result<(RequestedSkill, String), RuntimeError> {
         let refuse = |reason: String| RuntimeError::config(format!("skill `{name}`: {reason}"));
         if self.policy.harness.is_some() {
             return Err(refuse("direct activation is unavailable on installed CLI backends; use their skill MCP bridge".into()));
@@ -32,6 +42,7 @@ impl SmithRuntime {
             ContextBudget::from_limits(&self.profile.profile.limits, &self.policy.context_policy);
         let instruction_limit = context_policy::skill_instruction_budget(budget.capability_budget);
         let mut tokens = 0u32;
+        let mut instructions = None;
         for ability in self.skill_catalog.abilities() {
             let descriptor = ability.descriptor();
             if ability.name() == name
@@ -62,6 +73,7 @@ impl SmithRuntime {
                         "instructions exceed the {instruction_limit}-token activation budget"
                     )));
                 }
+                instructions = Some(body);
             }
         }
         if tokens > instruction_limit {
@@ -69,6 +81,8 @@ impl SmithRuntime {
                 "active skill instructions need {tokens} tokens; activation budget is {instruction_limit}"
             )));
         }
-        Ok(selected)
+        let instructions = instructions
+            .ok_or_else(|| refuse("the declaration did not supply skill instructions".into()))?;
+        Ok((selected, instructions))
     }
 }
