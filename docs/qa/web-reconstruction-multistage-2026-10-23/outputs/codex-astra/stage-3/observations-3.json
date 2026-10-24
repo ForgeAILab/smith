@@ -1,0 +1,14 @@
+{
+  "page_title":"Every booking, in view.",
+  "recognition_marker":"BOOKINGS C6E2A8",
+  "sidebar_labels":["WAYFINDER","Alder House","Overview","Bookings","Spaces","Members","Reports","Settings","Alex Morgan"],
+  "metrics":[{"label":"Total bookings","value":"48","change":"+12% this month"},{"label":"Rooms booked","value":"12","change":"+8% this month"},{"label":"Pending approval","value":"6","change":"+50% this month"}],
+  "table_headers":["Member","Space","Date & time","Status"],
+  "table_rows":[["Jamie Chen","Studio 02","Oct 24, 09:00","Confirmed"],["Olivia Reed","Meeting room A","Oct 24, 11:30","Pending"],["Noah Williams","Desk 14","Oct 24, 14:00","Confirmed"],["Maya Patel","Meeting room B","Oct 25, 10:00","Confirmed"],["Lucas Brown","Studio 01","Oct 25, 13:00","Pending"],["Emma Wilson","Desk 08","Oct 26, 09:30","Confirmed"]],
+  "tabs":["All bookings","Confirmed","Pending"],
+  "search_placeholder":"Search bookings",
+  "calendar_text":{"heading":"This week","month":"October 2026","days":["Mon 19","Tue 20","Wed 21","Thu 22","Fri 23","Sat 24","Sun 25"],"selected":"Fri 23","next_heading":"Next up","member":"Jamie Chen","space":"Studio 02","time":"Tomorrow at 09:00","cta":"View calendar"},
+  "other_text":["Plan the week. Keep everyone in sync.","Oct 23, 2026","All spaces","Showing 1–6 of 48 bookings","1","2","3","4","5"],
+  "dominant_colors":{"forest":"#0c3225","cream":"#faf9f5","white":"#ffffff","lime":"#d9fc94","ink":"#09131b","muted":"#667079","border":"#d6dadd"},
+  "major_regions":[{"name":"sidebar","rect":[0,0,0.174,1]},{"name":"header","rect":[0.199,0.019,0.787,0.133]},{"name":"metrics","rect":[0.199,0.176,0.786,0.144]},{"name":"bookings_panel","rect":[0.199,0.339,0.555,0.604]},{"name":"filters","rect":[0.214,0.362,0.527,0.042]},{"name":"table","rect":[0.214,0.437,0.525,0.416]},{"name":"pagination","rect":[0.214,0.879,0.527,0.042]},{"name":"calendar_panel","rect":[0.764,0.339,0.222,0.604]},{"name":"next_booking","rect":[0.777,0.614,0.195,0.128]},{"name":"account","rect":[0.013,0.895,0.147,0.071]}]
+}

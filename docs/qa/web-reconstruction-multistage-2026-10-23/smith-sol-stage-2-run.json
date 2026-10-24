@@ -1,0 +1,73 @@
+{
+  "case": "smith-sol",
+  "stage": 2,
+  "model": "gpt-6.1-sol",
+  "harness": "smith",
+  "command": [
+    "/private/tmp/smith-cache-prefix-versioned",
+    "--project",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol",
+    "--profile",
+    "web-benchmark",
+    "--effort",
+    "medium",
+    "--approval",
+    "allow-all",
+    "--output-format",
+    "stream-json",
+    "--resume",
+    "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+    "--image",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol/revision.png",
+    "-p",
+    "-"
+  ],
+  "project": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol",
+  "resumed_session": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+  "started_at_epoch": 1792793699.829983,
+  "status": "timeout",
+  "prompt_sha256": "47129b1d511c2eaf0ae178b4c5c0002ba2ddba5ed263cbca4de90eb89fc71560",
+  "images": [
+    {
+      "name": "revision.png",
+      "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee"
+    }
+  ],
+  "exit_code": -9,
+  "elapsed_seconds": 601.4,
+  "session_id": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+  "usage": {
+    "input_cached": 76544,
+    "input_uncached": 578975,
+    "output": 4914,
+    "reasoning": 1659,
+    "provider_attempts": 16,
+    "provider_attempts_with_reported_usage": 16
+  },
+  "cached_input_percent": 11.68,
+  "generated_files": [
+    {
+      "path": "index.html",
+      "sha256": "e7154123153cfd377402839301df7c4d99d854ded2923db46b7bb92f2ca1c1e8"
+    },
+    {
+      "path": "observations-2.json",
+      "sha256": "119b38e5eebac4a37e775c9720bac0f067eb97560117943fd8725b51959ecb15"
+    },
+    {
+      "path": "observations-1.json",
+      "sha256": "2eb50c247cd8e44f7b2480fe5b5799973b6ad9fca1e4c56f80d1f2cd5f6c2cfa"
+    },
+    {
+      "path": "DESIGN.md",
+      "sha256": "7f7efb3291c78e15a20bcce034e0de2192c84129388ab941c6a9d4c2814474e9"
+    }
+  ],
+  "terminal_usage_projection": {
+    "input_cached": 0,
+    "input_uncached": 0,
+    "output": 0,
+    "provider_attempts": null
+  },
+  "usage_scope": "Provider-reported usage; sums archived timeout and recovery events where applicable. Unreported timeout usage is unknown."
+}

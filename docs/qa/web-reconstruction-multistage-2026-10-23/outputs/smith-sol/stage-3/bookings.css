@@ -1,0 +1,98 @@
+/* Bookings-specific rules; the Overview dashboard retains the shared shell. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.booking-page .metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:17px}
+.booking-page .metric{padding:19px 24px}
+.booking-page .metric-detail{gap:10px}
+.booking-page .primary{background:var(--lime);color:#09271b}
+.booking-page .toolbar-actions{gap:24px}
+.booking-page .date{padding:0 16px}
+.booking-page .title-line{gap:12px}
+.booking-layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:15px;margin-top:19px;align-items:stretch}
+.list-panel{min-width:0;min-height:619px;padding:23px 21px 22px;display:flex;flex-direction:column}
+.list-toolbar{display:flex;align-items:center;gap:11px;min-height:44px}
+.booking-tabs{display:flex;flex-shrink:0;align-items:stretch;height:44px;border:1px solid #ccd3dd;border-radius:9px;overflow:hidden;padding:2px;width:313px}
+.booking-tabs button{font-size:14px;padding:0 14px;white-space:nowrap;flex:1;border-right:1px solid #eef0f2}
+.booking-tabs button:last-child{border-right:0}
+.booking-tabs button.selected{background:var(--lime);border-radius:7px;color:#071a0d;font-weight:600}
+.booking-search{position:relative;margin-left:auto;width:229px;height:44px;display:block;flex-shrink:1;min-width:150px}
+.booking-search .icon{position:absolute;left:13px;top:12px;width:20px;height:20px;pointer-events:none}
+.booking-search input{height:44px;border-color:#c4ccd7;border-radius:9px;padding:0 10px 0 42px;font-size:14px;background:transparent;min-width:0}
+.booking-search input::placeholder{color:#465265;opacity:1}
+.space-filter{position:relative;display:block;width:144px;flex-shrink:0}
+.space-filter select{appearance:none;font-size:14px;border-color:#c4ccd7;border-radius:9px;height:44px;padding:0 30px 0 16px;background:transparent}
+.space-filter .icon{position:absolute;right:13px;top:15px;width:14px;height:14px;pointer-events:none}
+.booking-page .booking-table{margin-top:28px;font-size:15px;table-layout:fixed}
+.booking-table .member-column{width:27.5%}.booking-table .space-column{width:23.5%}.booking-table .date-column{width:24%}.booking-table .status-column{width:19%}.booking-table .action-column{width:6%}
+.booking-page .booking-table th{width:auto;height:40px;font-size:14px;padding:0 3px}
+.booking-page .booking-table td{height:65px;padding:7px 4px;border-top:1px solid #e0e4e8}
+.booking-table tbody tr:last-child td{border-bottom:1px solid #e0e4e8}
+.booking-table .member{gap:18px}
+.booking-table .member .avatar{width:44px;height:44px;font-size:15px}
+.avatar.purple{background:#e5caff}.avatar.yellow{background:#fcf0b1}.avatar.mint{background:#b8f0d6}
+.booking-table .status{min-width:104px;font-size:14px;line-height:17px;padding:7px 14px;background:#d2f4c6}
+.booking-table .status.pending{min-width:94px;background:#ffd0c0}
+.row-action{display:flex;align-items:center;justify-content:center;width:32px;height:40px;margin-left:auto;border-radius:7px}
+.row-action .icon{width:20px;height:20px;stroke-width:1.3}
+.row-action:hover{background:#f1f5ee}
+.list-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:auto;padding-top:26px;min-height:70px}
+.list-footer p{font-size:16px;color:#536075;margin:0;line-height:22px}
+.pagination{display:flex;align-items:center;gap:6px}
+.pagination button{min-width:30px;height:43px;border-radius:8px;font-size:16px;padding:0 8px}
+.pagination .selected{background:var(--lime);min-width:34px}
+.pagination .page-arrow{width:40px;border:1px solid #d2d9e2;display:flex;align-items:center;justify-content:center;padding:0}
+.pagination .icon{width:18px;height:18px}
+.point-left{transform:rotate(90deg)}.point-right{transform:rotate(-90deg)}
+.week-panel{min-width:0;min-height:619px;padding:21px 19px;display:flex;flex-direction:column}
+.week-panel h2{font-size:24px;letter-spacing:-.7px}
+.month-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:19px;height:32px;font-size:16px}
+.month-heading>div{display:flex;gap:15px}
+.month-heading button{padding:6px 2px;border-radius:5px;display:flex;align-items:center;justify-content:center}
+.month-heading .icon{width:20px;height:20px}
+.week-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px;margin-top:8px;height:85px}
+.day{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:6px;padding:15px 1px 9px;border-radius:10px;min-width:0}
+.day span{font-size:12px;line-height:15px;color:#4d5969}.day strong{font-size:16px;line-height:18px;font-weight:400}
+.day i{width:7px;height:7px;border-radius:50%;background:transparent;margin-top:2px}
+.day.selected{background:var(--lime)}.day.selected strong{font-weight:700}.day.selected span{color:#10291b}.day.selected i{background:var(--forest)}
+.next-section{margin-top:21px;padding-top:27px;border-top:1px solid #e0e4e8}
+.next-section h3{font-size:20px;letter-spacing:-.5px;margin:0 0 14px;line-height:23px}
+.next-booking{width:100%;height:131px;border:1px solid #d5dce5;border-radius:9px;display:flex;align-items:flex-start;text-align:left;padding:15px 14px;gap:17px}
+.next-booking>.avatar{width:49px;height:49px;font-size:17px;background:#d0f3c5}
+.next-copy{display:flex;flex-direction:column;gap:6px;padding-top:7px;min-width:0}
+.next-copy>strong{font-size:16px;line-height:20px}.next-copy>span{font-size:16px;color:#536075;line-height:19px}
+.next-copy .next-date{display:flex;align-items:center;gap:8px;font-size:14px;white-space:nowrap;margin-top:9px;line-height:20px}
+.next-date .icon{width:19px;height:19px;color:#12212f}
+.next-booking>.icon{width:20px;height:20px;margin-left:auto;margin-top:39px;flex-shrink:0}
+.calendar-action{display:flex;align-items:center;justify-content:center;gap:12px;background:var(--lime);font-weight:600;border-radius:9px;height:56px;width:100%;margin-top:auto;color:#0a2111}
+.calendar-action .icon{width:25px;height:25px}
+.empty-state{text-align:center;color:#536075;margin:35px 0}
+.booking-details{display:grid;grid-template-columns:95px 1fr;gap:14px;margin:20px 0 28px}.booking-details dt{color:#536075}.booking-details dd{margin:0;overflow-wrap:anywhere}
+.month-weekdays,.month-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;text-align:center}
+.month-weekdays{margin:20px 0 8px;color:#536075;font-size:12px}
+.month-days button{height:38px;border-radius:7px}.month-days button.selected{background:var(--lime);font-weight:700}
+@media(max-width:1350px) and (min-width:901px){
+ .booking-layout{grid-template-columns:minmax(0,1fr) 300px}
+ .list-toolbar{flex-wrap:wrap}.booking-tabs{width:100%}.booking-search{margin-left:0;flex:1;width:auto}.space-filter{width:144px}
+ .booking-table .member{gap:8px}.booking-table .member .avatar{width:34px;height:34px}.booking-page .booking-table{font-size:12px}
+ .booking-table .status{min-width:0;font-size:12px;padding:7px 9px}.booking-table .status.pending{min-width:0}
+ .list-footer{flex-wrap:wrap}.next-booking{gap:9px;padding:15px 10px}.next-booking>.avatar{width:39px;height:39px}.next-copy .next-date{font-size:12px;gap:5px}
+}
+@media(max-width:900px){
+ .booking-page .metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.booking-page .metric{padding:18px 15px}
+ .booking-layout{grid-template-columns:1fr;margin-top:18px}.list-panel{min-height:0}.week-panel{min-height:570px}
+ .list-toolbar{flex-wrap:wrap}.booking-tabs{width:100%;max-width:350px}.booking-search{min-width:160px;flex:1;margin-left:0}.space-filter{width:144px}
+ .list-footer{margin-top:0;flex-wrap:wrap}.week-panel{max-width:100%}.next-booking{max-width:420px}.week-days{max-width:420px}.calendar-action{margin-top:40px}
+}
+@media(max-width:600px){
+ .booking-page .metrics{grid-template-columns:1fr}.booking-page .metric{padding:18px 23px}
+ .booking-page .toolbar-actions{gap:12px;flex-wrap:wrap}.booking-page h1{font-size:35px}.booking-page .title-line{flex-wrap:wrap;gap:8px}
+ .list-panel{padding:18px 10px}.list-toolbar{gap:10px}.booking-tabs{max-width:none;width:100%;height:43px}.booking-tabs button{padding:0 7px;font-size:13px}
+ .booking-search{min-width:0;width:auto}.space-filter{width:126px}.space-filter select{padding-left:10px;font-size:12px}.booking-search input{font-size:12px;padding-left:32px}.booking-search .icon{left:9px;width:17px}
+ .booking-page .booking-table{margin-top:22px;font-size:11px}.booking-page .booking-table th{font-size:11px;white-space:normal;padding:0 2px}
+ .booking-page .booking-table td{padding:8px 2px;white-space:normal;overflow-wrap:anywhere;height:80px}
+ .booking-table .member-column{width:26%}.booking-table .space-column{width:22%}.booking-table .date-column{width:23%}.booking-table .status-column{width:23%}.booking-table .action-column{width:6%}
+ .booking-table .member{flex-direction:column;align-items:flex-start;gap:5px}.booking-table .member .avatar{width:30px;height:30px;font-size:11px}
+ .booking-table .status,.booking-table .status.pending{min-width:0;max-width:100%;font-size:10px;padding:6px 4px;line-height:13px}
+ .row-action{width:18px;margin:0;height:32px}.row-action .icon{width:16px}
+ .list-footer{gap:16px;padding-top:22px}.list-footer p{font-size:13px}.pagination{gap:4px;width:100%;justify-content:flex-end}.pagination button{height:38px;min-width:27px}.pagination .page-arrow{width:34px}
+ .week-panel{padding:21px 18px;min-height:570px}.next-copy .next-date{font-size:13px}.next-booking{gap:13px;padding:15px 12px}
+}

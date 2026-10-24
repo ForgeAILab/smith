@@ -1,0 +1,371 @@
+{
+  "browser_version": "155.0.8059.85",
+  "selection_checks": [
+    {
+      "checkpoint": "0",
+      "arm": "smith-sol",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "0",
+      "arm": "smith-sol",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "0",
+      "arm": "smith-sol",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "0",
+      "arm": "smith-astra",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "0",
+      "arm": "smith-astra",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "0",
+      "arm": "smith-astra",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "0",
+      "arm": "codex-sol",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "0",
+      "arm": "codex-sol",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "0",
+      "arm": "codex-sol",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "0",
+      "arm": "codex-astra",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "0",
+      "arm": "codex-astra",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "0",
+      "arm": "codex-astra",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "smith-sol",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "smith-sol",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "smith-sol",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "smith-astra",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "smith-astra",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "smith-astra",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "codex-sol",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "codex-sol",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "codex-sol",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "codex-astra",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "codex-astra",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "1",
+      "arm": "codex-astra",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "smith-sol",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "smith-sol",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "smith-sol",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "smith-astra",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "smith-astra",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "smith-astra",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "codex-sol",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "codex-sol",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "codex-sol",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "codex-astra",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "codex-astra",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "2",
+      "arm": "codex-astra",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "smith-sol",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "smith-sol",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "smith-sol",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "smith-astra",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "smith-astra",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "smith-astra",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "codex-sol",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "codex-sol",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "codex-sol",
+      "viewport": "375",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "codex-astra",
+      "viewport": "desktop",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "codex-astra",
+      "viewport": "768",
+      "images_loaded": true
+    },
+    {
+      "checkpoint": "3",
+      "arm": "codex-astra",
+      "viewport": "375",
+      "images_loaded": true
+    }
+  ],
+  "selection_count": 48,
+  "overlay_opacity": "0.8",
+  "reference_result_modes": true,
+  "keyboard_slider": true,
+  "disclosures": true,
+  "visible_link_checks": [
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/outputs/codex-astra/stage-3/index.html",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/screenshots/codex-astra-stage-3-index-desktop.png",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/contact-stage-3-index.png",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/references/part-1.png",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/references/part-2.png",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/references/part-3.png",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/prompt-1.txt",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/prompt-2.txt",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/prompt-3.txt",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/prompt-recovery.txt",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/prompt-recovery-3.txt",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/storage-correction.json",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/summary.json",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/web-reconstruction-multistage-2026-10-23/image-history-audit.json",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:53111/cache-prefix-investigation-2026-10-23/REPORT.md",
+      "status": 200
+    }
+  ],
+  "responsive": [
+    {
+      "width": 768,
+      "horizontal_overflow": false
+    },
+    {
+      "width": 375,
+      "horizontal_overflow": false
+    }
+  ],
+  "javascript_errors": []
+}

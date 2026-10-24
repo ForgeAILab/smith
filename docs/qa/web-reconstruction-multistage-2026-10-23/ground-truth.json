@@ -1,0 +1,447 @@
+{
+  "source": "Manual transcription of generated image content; held out from benchmark sessions.",
+  "original": {
+    "viewport": {
+      "width": 1536,
+      "height": 1024
+    },
+    "source": "Manual transcription and region measurements from the generated reference.png; not supplied to benchmark agents.",
+    "recognition_marker": "BOARD 7F2A9C",
+    "text_anchors": [
+      "WAYFINDER",
+      "Alder House",
+      "Overview",
+      "Bookings",
+      "Spaces",
+      "Members",
+      "Reports",
+      "Settings",
+      "Alex Morgan",
+      "Workspace",
+      "October 23, 2026",
+      "New booking",
+      "Your spaces, in sync.",
+      "A little room for everything you are building.",
+      "BOARD 7F2A9C",
+      "Monthly revenue",
+      "$24,580",
+      "+12.8%",
+      "Occupancy",
+      "84%",
+      "+6.2%",
+      "Active members",
+      "128",
+      "+14",
+      "Available desks",
+      "18",
+      "Across 4 spaces",
+      "Booking activity",
+      "Week",
+      "Month",
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat",
+      "Sun",
+      "42 bookings",
+      "Space utilization",
+      "24 of 28 spaces active",
+      "Desks",
+      "Studios",
+      "Meeting rooms",
+      "Upcoming bookings",
+      "View all",
+      "Member",
+      "Space",
+      "Date",
+      "Status",
+      "Jamie Chen",
+      "Studio 02",
+      "Oct 24, 09:00",
+      "Confirmed",
+      "Olivia Reed",
+      "Meeting room A",
+      "Oct 24, 11:30",
+      "Pending",
+      "Noah Williams",
+      "Desk 14",
+      "Oct 24, 14:00",
+      "Make room for ideas.",
+      "Your next great project starts here.",
+      "Explore spaces",
+      "Last updated just now"
+    ],
+    "regions": [
+      {
+        "name": "sidebar",
+        "anchor": "WAYFINDER",
+        "bbox": [
+          0,
+          0,
+          267,
+          1024
+        ]
+      },
+      {
+        "name": "revenue card",
+        "anchor": "Monthly revenue",
+        "bbox": [
+          306,
+          180,
+          290,
+          147
+        ]
+      },
+      {
+        "name": "occupancy card",
+        "anchor": "Occupancy",
+        "bbox": [
+          615,
+          180,
+          288,
+          147
+        ]
+      },
+      {
+        "name": "members card",
+        "anchor": "Active members",
+        "bbox": [
+          920,
+          180,
+          287,
+          147
+        ]
+      },
+      {
+        "name": "desks card",
+        "anchor": "Available desks",
+        "bbox": [
+          1224,
+          180,
+          289,
+          147
+        ]
+      },
+      {
+        "name": "activity chart",
+        "anchor": "Booking activity",
+        "bbox": [
+          305,
+          348,
+          807,
+          329
+        ]
+      },
+      {
+        "name": "utilization card",
+        "anchor": "Space utilization",
+        "bbox": [
+          1125,
+          348,
+          389,
+          329
+        ]
+      },
+      {
+        "name": "bookings table",
+        "anchor": "Upcoming bookings",
+        "bbox": [
+          305,
+          691,
+          730,
+          273
+        ]
+      },
+      {
+        "name": "announcement",
+        "anchor": "Make room for ideas.",
+        "bbox": [
+          1048,
+          690,
+          466,
+          277
+        ]
+      }
+    ],
+    "reference": "original.png",
+    "critical_values": [
+      "$24,580",
+      "84%",
+      "128",
+      "18",
+      "BOARD 7F2A9C"
+    ]
+  },
+  "revision": {
+    "viewport": {
+      "width": 1536,
+      "height": 1024
+    },
+    "source": "Manual transcription and region measurements from the generated reference.png; not supplied to benchmark agents.",
+    "recognition_marker": "BOARD 9D3E6B",
+    "text_anchors": [
+      "WAYFINDER",
+      "Alder House",
+      "Overview",
+      "Bookings",
+      "Spaces",
+      "Members",
+      "Reports",
+      "Settings",
+      "Alex Morgan",
+      "Workspace",
+      "October 23, 2026",
+      "New booking",
+      "Good things are taking shape.",
+      "A little room for everything you are building.",
+      "BOARD 9D3E6B",
+      "Revenue",
+      "$31,420",
+      "+18.4%",
+      "Occupancy",
+      "76%",
+      "-8.0%",
+      "Active members",
+      "146",
+      "+18",
+      "Available desks",
+      "24",
+      "Across 4 spaces",
+      "Booking activity",
+      "Week",
+      "Month",
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat",
+      "Sun",
+      "42 bookings",
+      "Space utilization",
+      "21 of 28 spaces active",
+      "Desks",
+      "Studios",
+      "Meeting rooms",
+      "Upcoming bookings",
+      "View all",
+      "Member",
+      "Space",
+      "Date",
+      "Status",
+      "Jamie Chen",
+      "Studio 02",
+      "Oct 24, 09:00",
+      "Confirmed",
+      "Olivia Reed",
+      "Meeting room A",
+      "Oct 24, 11:30",
+      "Pending",
+      "Noah Williams",
+      "Desk 14",
+      "Oct 24, 14:00",
+      "Room to grow.",
+      "Your next great project starts here.",
+      "Find your next space",
+      "Last updated just now"
+    ],
+    "regions": [
+      {
+        "name": "sidebar",
+        "anchor": "WAYFINDER",
+        "bbox": [
+          0,
+          0,
+          267,
+          1024
+        ]
+      },
+      {
+        "name": "revenue card",
+        "anchor": "Monthly revenue",
+        "bbox": [
+          306,
+          180,
+          290,
+          147
+        ]
+      },
+      {
+        "name": "occupancy card",
+        "anchor": "Occupancy",
+        "bbox": [
+          615,
+          180,
+          288,
+          147
+        ]
+      },
+      {
+        "name": "members card",
+        "anchor": "Active members",
+        "bbox": [
+          920,
+          180,
+          287,
+          147
+        ]
+      },
+      {
+        "name": "desks card",
+        "anchor": "Available desks",
+        "bbox": [
+          1224,
+          180,
+          289,
+          147
+        ]
+      },
+      {
+        "name": "activity chart",
+        "anchor": "Booking activity",
+        "bbox": [
+          305,
+          348,
+          807,
+          329
+        ]
+      },
+      {
+        "name": "utilization card",
+        "anchor": "Space utilization",
+        "bbox": [
+          1125,
+          348,
+          389,
+          329
+        ]
+      },
+      {
+        "name": "bookings table",
+        "anchor": "Upcoming bookings",
+        "bbox": [
+          305,
+          691,
+          730,
+          273
+        ]
+      },
+      {
+        "name": "announcement",
+        "anchor": "Make room for ideas.",
+        "bbox": [
+          1048,
+          690,
+          466,
+          277
+        ]
+      }
+    ],
+    "reference": "revision.png",
+    "critical_values": [
+      "$31,420",
+      "76%",
+      "146",
+      "24",
+      "21 of 28 spaces active",
+      "Room to grow.",
+      "Find your next space"
+    ],
+    "superseded_text": [
+      "BOARD 7F2A9C",
+      "$24,580",
+      "84%",
+      "Your spaces, in sync.",
+      "Make room for ideas.",
+      "Explore spaces"
+    ]
+  },
+  "bookings": {
+    "reference": "bookings.png",
+    "recognition_marker": "BOOKINGS C6E2A8",
+    "critical_values": [
+      "48",
+      "12",
+      "6",
+      "Jamie Chen",
+      "Maya Patel",
+      "Lucas Brown",
+      "Emma Wilson"
+    ],
+    "text_anchors": [
+      "WAYFINDER",
+      "Alder House",
+      "Overview",
+      "Bookings",
+      "Spaces",
+      "Members",
+      "Reports",
+      "Settings",
+      "Alex Morgan",
+      "Workspace",
+      "Oct 23, 2026",
+      "New booking",
+      "Every booking, in view.",
+      "Plan the week. Keep everyone in sync.",
+      "BOOKINGS C6E2A8",
+      "Total bookings",
+      "48",
+      "+12%",
+      "Rooms booked",
+      "12",
+      "+8%",
+      "Pending approval",
+      "6",
+      "+50%",
+      "All bookings",
+      "Confirmed",
+      "Pending",
+      "Search bookings",
+      "All spaces",
+      "Member",
+      "Space",
+      "Date & time",
+      "Status",
+      "Jamie Chen",
+      "Studio 02",
+      "Oct 24, 09:00",
+      "Olivia Reed",
+      "Meeting room A",
+      "Oct 24, 11:30",
+      "Noah Williams",
+      "Desk 14",
+      "Oct 24, 14:00",
+      "Maya Patel",
+      "Meeting room B",
+      "Oct 25, 10:00",
+      "Lucas Brown",
+      "Studio 01",
+      "Oct 25, 13:00",
+      "Emma Wilson",
+      "Desk 08",
+      "Oct 26, 09:30",
+      "Showing 1\u20136 of 48 bookings",
+      "This week",
+      "October 2026",
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat",
+      "Sun",
+      "19",
+      "20",
+      "21",
+      "22",
+      "23",
+      "24",
+      "25",
+      "Next up",
+      "Tomorrow at 09:00",
+      "View calendar"
+    ]
+  }
+}

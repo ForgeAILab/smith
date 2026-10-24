@@ -1,0 +1,69 @@
+{
+  "case": "smith-sol",
+  "stage": 1,
+  "model": "gpt-6.1-sol",
+  "harness": "smith",
+  "command": [
+    "/private/tmp/smith-cache-prefix-versioned",
+    "--project",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol",
+    "--profile",
+    "web-benchmark",
+    "--effort",
+    "medium",
+    "--approval",
+    "allow-all",
+    "--output-format",
+    "stream-json",
+    "--image",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol/part-1.png",
+    "--image",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol/part-2.png",
+    "--image",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol/part-3.png",
+    "-p",
+    "-"
+  ],
+  "project": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol",
+  "resumed_session": null,
+  "started_at_epoch": 1792792589.267311,
+  "status": "timeout",
+  "prompt_sha256": "5d4f0056e91e89adba9c26a6319eb301053eab6a20226eedae98f46171731f95",
+  "images": [
+    {
+      "name": "part-1.png",
+      "sha256": "6f9d37215219315c3748eda8e93b061db2e4194f39be691c73c0be7f04c87f89"
+    },
+    {
+      "name": "part-2.png",
+      "sha256": "57aae4961271a5c3287e2965a88169f1079d96618ebfb51a5a4c19de61119aba"
+    },
+    {
+      "name": "part-3.png",
+      "sha256": "7eaf959ae5eec8dc72d77bbd978ed051fd5dbc51c4c8e25b2a48c0d5409bdc2f"
+    }
+  ],
+  "exit_code": -9,
+  "elapsed_seconds": 600.02,
+  "session_id": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+  "usage": {
+    "input_cached": 35456,
+    "input_uncached": 72537,
+    "output": 10748
+  },
+  "cached_input_percent": null,
+  "generated_files": [
+    {
+      "path": "index.html",
+      "sha256": "7f5ac98ba8854d5b72fc650cb1f80310af924f5013eab2cfef576fad6c35be72"
+    },
+    {
+      "path": "observations-1.json",
+      "sha256": "2eb50c247cd8e44f7b2480fe5b5799973b6ad9fca1e4c56f80d1f2cd5f6c2cfa"
+    },
+    {
+      "path": "DESIGN.md",
+      "sha256": "8f33c0f633f839125aa8e8070df32f847b688f78742b4d41ef98cb65e22dacf4"
+    }
+  ]
+}

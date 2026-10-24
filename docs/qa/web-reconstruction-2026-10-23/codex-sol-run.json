@@ -1,0 +1,41 @@
+{
+  "case": "codex-sol",
+  "harness": "codex",
+  "model": "gpt-6.1-sol",
+  "status": "completed",
+  "started_at_epoch": 1792788777.106655,
+  "command": [
+    "/Users/mai1015/.nvm/versions/node/v24.22.1/bin/codex",
+    "exec",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--ephemeral",
+    "--skip-git-repo-check",
+    "--cd",
+    "/private/tmp/smith-web-reconstruction-0rkz_0_t/codex-sol",
+    "--sandbox",
+    "workspace-write",
+    "-c",
+    "approval_policy=\"never\"",
+    "-c",
+    "model_reasoning_effort=\"medium\"",
+    "--model",
+    "gpt-6.1-sol",
+    "--image",
+    "/private/tmp/smith-web-reconstruction-0rkz_0_t/codex-sol/reference.png",
+    "--json",
+    "-"
+  ],
+  "project": "/private/tmp/smith-web-reconstruction-0rkz_0_t/codex-sol",
+  "image_sha256": "12c1ad4956cf811a994e330f977768b24319063bc7ef41191f8d2723637ed7f6",
+  "prompt_sha256": "7b6eafa839964f030425699fbf355f561c58ff5b2d895867ce4a14f407bd4fb5",
+  "exit_code": 0,
+  "elapsed_seconds": 407.06,
+  "index_html_exists": true,
+  "observations_exists": true,
+  "generated_files": [
+    "index.html",
+    "observations.json",
+    "DESIGN.md"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "case": "smith-astra",
+  "stage": 2,
+  "model": "gpt-6-astra",
+  "harness": "smith",
+  "command": [
+    "/private/tmp/smith-cache-prefix-versioned",
+    "--project",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-astra",
+    "--profile",
+    "web-benchmark",
+    "--effort",
+    "medium",
+    "--approval",
+    "allow-all",
+    "--output-format",
+    "stream-json",
+    "--resume",
+    "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6",
+    "--image",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-astra/revision.png",
+    "-p",
+    "-"
+  ],
+  "project": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-astra",
+  "resumed_session": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6",
+  "started_at_epoch": 1792792934.211424,
+  "status": "completed",
+  "prompt_sha256": "47129b1d511c2eaf0ae178b4c5c0002ba2ddba5ed263cbca4de90eb89fc71560",
+  "images": [
+    {
+      "name": "revision.png",
+      "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee"
+    }
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 268.92,
+  "session_id": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6",
+  "usage": {
+    "input_cached": 59776,
+    "input_uncached": 241415,
+    "output": 3097,
+    "reasoning": 874,
+    "provider_attempts": 11,
+    "provider_attempts_with_reported_usage": 11
+  },
+  "cached_input_percent": 19.85,
+  "generated_files": [
+    {
+      "path": "index.html",
+      "sha256": "89027925232667d2207dea70340ffa450bd3afe00f453e435e1c6ace926cae4c"
+    },
+    {
+      "path": "observations-2.json",
+      "sha256": "9aeb91f618506a8b859c3942a4dd86d05469799e6901956fede9e89e9da47fa8"
+    },
+    {
+      "path": "observations-1.json",
+      "sha256": "bc4ae0c5a2f11fb585de61cfc26001bf1fff8532d14b923e55afab19c3a2eb20"
+    },
+    {
+      "path": "DESIGN.md",
+      "sha256": "482c347488475124130c79de0b91757b42a1f2bb8ddeed9e9085bbebaf162761"
+    }
+  ],
+  "terminal_usage_projection": {
+    "input_cached": 59776,
+    "input_uncached": 241415,
+    "output": 3097,
+    "provider_attempts": 11
+  },
+  "usage_scope": "Provider-reported usage; sums archived timeout and recovery events where applicable. Unreported timeout usage is unknown."
+}

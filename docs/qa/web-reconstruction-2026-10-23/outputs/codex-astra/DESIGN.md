@@ -1,0 +1,16 @@
+# Wayfinder reconstruction contract
+
+## Tokens and typography
+The 1536 × 1024 reference uses a warm ivory page (#fcfaf6), deep forest green sidebar and utilization panel (#0b3225), near-black navy text (#0a151e), muted slate secondary text (#69717a), fine cool gray borders (#d7dce0), and lime highlights (#d9fc96 to #caff62). Cards are nearly white, with 9–11px corners and 1px borders. Use system Arial/Helvetica sans-serif, with a Georgia serif for the promotion headline. Main heading is approximately 50px bold with tight tracking; subtitle 24px; card headings 24px bold; metric values 42px bold; ordinary text 14–16px.
+
+## Geometry and layout
+A 267px full-height left sidebar has 20px horizontal padding. Its brand starts near (29,31); location selector sits at y106 and navigation at y178 with roughly 64px row pitch. The profile is anchored below a separator at y916. Main content starts x306 with 22px right margin. Toolbar occupies y19–63. Heading begins y66 and metrics span y180–327 in four equally sized columns with 18px gaps. Chart row begins y347, ends y677, and has an approximately 2.08:1 column ratio with 14px gap. Lower row begins y691, with table width 729px and promotion width 467px separated by 14px. Last-updated text sits below the table.
+
+## Reusable primitives
+Outlined panels, compact icon buttons, forest primary buttons, lime active navigation and segmented controls, pill-shaped status badges, pastel circular initial avatars, and consistent thin-stroke inline SVG icons. All text is DOM text; charts and architectural illustration use local inline SVG geometry. The weekly chart is a smooth dark green line with translucent pale green fill, four dotted horizontal ticks, seven weekday labels, and a Friday dot with tooltip. The utilization ring has a muted green track and lime 84% arc, centered percentage and detail, with three legend dots.
+
+## Initial content and states
+Show Overview selected, Alder House location, October 23, 2026 date, Week selected, and Friday tooltip. Preserve exact metrics and three initial table rows from observations.json. Navigation updates selected state and breadcrumb. Week/Month changes selection and chart data. New booking opens a native modal dialog with labeled member, space, date/time and status fields; submission adds a semantic table row. Location selection, notification button, profile, view-all and explore-spaces controls provide visible responses. Keyboard focus uses a clearly visible outline. Escape closes the modal and focus returns to its trigger.
+
+## Responsive behavior and accessibility
+At narrower desktop sizes allow main columns to shrink without fixed content widths. Below 1100px stack chart panels and lower panels; use two metric columns. At mobile width convert sidebar to a compact brand and horizontally scrollable navigation within its own region, hide desktop profile, and stack metric cards, avoiding document overflow. Charts scale with their viewBox; table uses a labeled horizontal scrolling container where needed. At 375px the page has 16px gutters. Use semantic navigation, main, sections, headings, table, native buttons and dialog. Label icon-only controls; expose active navigation and chart period state; provide chart accessible descriptions and reduced-motion support.

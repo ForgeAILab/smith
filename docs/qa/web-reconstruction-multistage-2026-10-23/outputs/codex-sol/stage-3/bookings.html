@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Manage workspace bookings, search members and spaces, and plan the week.">
+<title>Wayfinder — Bookings</title>
+<link rel="stylesheet" href="shared.css">
+<link rel="stylesheet" href="bookings.css">
+</head>
+<body class="booking-page">
+<svg class="svg-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+<symbol id="calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 2v6M17 2v6M3 10h18"/></symbol>
+<symbol id="down" viewBox="0 0 24 24"><path d="m5 9 7 7 7-7"/></symbol>
+<symbol id="bars" viewBox="0 0 24 24"><path d="M5 21v-8M11 21V8M17 21V3"/></symbol>
+<symbol id="spaces" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx=".7"/><rect x="14" y="3" width="7" height="7" rx=".7"/><rect x="3" y="14" width="7" height="7" rx=".7"/><rect x="14" y="14" width="7" height="7" rx=".7"/></symbol>
+<symbol id="members" viewBox="0 0 24 24"><circle cx="9" cy="6.5" r="3.5"/><path d="M2 20v-2c0-3 2.8-4.5 7-4.5s7 1.5 7 4.5v2M17 3.5c3.5 0 5 5.5 1 7M19 14c3 .5 3 3 3 6M5 20h8"/></symbol>
+<symbol id="settings" viewBox="0 0 24 24"><path d="m9 3 1-1h4l1 3 3 1 2-.5 2 3-2 2v3l2 2-2 3-3-.5-2 1-1 3h-4l-1-3-3-1-2 .5-2-3 2-2v-3l-2-2 2-3 3 .5 2-1z" transform="translate(0 1) scale(.95)"/><circle cx="12" cy="12" r="3.3"/></symbol>
+<symbol id="bell" viewBox="0 0 24 24"><path d="M4 18h16l-2-3V9a6 6 0 0 0-12 0v6l-2 3ZM10 22h4M12 1v2"/></symbol>
+<symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+<symbol id="trend" viewBox="0 0 24 24"><path d="M5 18 18 5M7 5h11v11"/></symbol>
+<symbol id="search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="7"/><path d="m16 16 5 5"/></symbol><symbol id="left" viewBox="0 0 24 24"><path d="m15 5-6 7 6 7"/></symbol><symbol id="right" viewBox="0 0 24 24"><path d="m9 5 6 7-6 7"/></symbol><symbol id="more" viewBox="0 0 24 24"><circle cx="12" cy="5" r=".6"/><circle cx="12" cy="12" r=".6"/><circle cx="12" cy="19" r=".6"/></symbol></defs></svg>
+<aside class="sidebar" aria-label="Workspace navigation">
+<div class="brand"><svg class="brand-mark" viewBox="0 0 41 44" aria-hidden="true"><g fill="#d7ff65"><path d="m22 0 3 16-6 4zM41 22l-16 3-4-6zM19 44l-3-16 6-4zM0 23l16-3 4 6z"/><path d="m10 12 9 5-3 2zm20-1-4 9-2-3zm1 21-10-5 4-2zM9 33l5-10 3 4z" fill="#9cbc54"/></g></svg><span>Wayfinder</span></div>
+<button class="building" popovertarget="building-popover">Alder House<svg class="icon chevron" aria-hidden="true"><use href="#down"/></svg></button>
+<nav aria-label="Main navigation">
+<a class="nav-item" data-page="Overview" href="index.html"><svg class="icon" aria-hidden="true"><use href="#bars"/></svg>Overview</a>
+<a class="nav-item active" data-page="Bookings" aria-current="page" href="bookings.html"><svg class="icon" aria-hidden="true"><use href="#calendar"/></svg>Bookings</a>
+<button class="nav-item" data-page="Spaces"><svg class="icon" aria-hidden="true"><use href="#spaces"/></svg>Spaces</button>
+<button class="nav-item" data-page="Members"><svg class="icon" aria-hidden="true"><use href="#members"/></svg>Members</button>
+<button class="nav-item" data-page="Reports"><svg class="icon" aria-hidden="true"><use href="#bars"/></svg>Reports</button>
+<button class="nav-item" data-page="Settings"><svg class="icon" aria-hidden="true"><use href="#settings"/></svg>Settings</button>
+</nav>
+<div class="account-wrap"><button class="account" popovertarget="account-popover"><span class="avatar">AM</span><span>Alex Morgan</span><svg class="icon chevron" aria-hidden="true"><use href="#down"/></svg></button></div>
+</aside>
+<main class="main">
+<div class="topbar"><div class="breadcrumb"><span>Workspace</span><span>/</span><span id="current-page">Bookings</span></div><div class="top-actions">
+<button class="date-button" popovertarget="date-popover"><svg class="icon" aria-hidden="true"><use href="#calendar"/></svg><span id="selected-date">Oct 23, 2026</span><svg class="icon chevron" aria-hidden="true"><use href="#down"/></svg></button>
+<button class="notifications" aria-label="Notifications" popovertarget="notifications-popover"><svg class="icon" aria-hidden="true"><use href="#bell"/></svg><span class="notification-dot"></span></button>
+<button class="primary" id="new-booking"><svg class="icon" aria-hidden="true"><use href="#plus"/></svg>New booking</button>
+</div></div>
+<header><div class="heading-line"><h1>Every booking, in view.</h1><span class="board">BOOKINGS C6E2A8</span></div><p class="subtitle">Plan the week. Keep everyone in sync.</p></header>
+<section class="metrics booking-metrics" aria-label="Booking metrics"><article class="panel metric"><h2>Total bookings</h2><p class="metric-value" id="total-count">48</p><div class="metric-detail"><svg class="icon" aria-hidden="true"><use href="#trend"/></svg><span class="change">+12%</span><span>this month</span></div></article><article class="panel metric"><h2>Rooms booked</h2><p class="metric-value" id="room-count">12</p><div class="metric-detail"><svg class="icon" aria-hidden="true"><use href="#trend"/></svg><span class="change">+8%</span><span>this month</span></div></article><article class="panel metric"><h2>Pending approval</h2><p class="metric-value" id="pending-count">6</p><div class="metric-detail"><svg class="icon" aria-hidden="true"><use href="#trend"/></svg><span class="change">+50%</span><span>this month</span></div></article></section>
+<div class="booking-layout">
+<section class="panel booking-list" aria-label="Bookings">
+<div class="booking-toolbar">
+<div class="booking-tabs" role="group" aria-label="Booking status filter"><button data-status="all" aria-pressed="true">All bookings</button><button data-status="Confirmed" aria-pressed="false">Confirmed</button><button data-status="Pending" aria-pressed="false">Pending</button></div>
+<label class="booking-search"><svg class="icon" aria-hidden="true"><use href="#search"/></svg><input type="search" id="booking-search" placeholder="Search bookings" aria-label="Search bookings"></label>
+<div class="space-select"><select id="space-filter" aria-label="Filter by space"><option value="all">All spaces</option><option>Studio 02</option><option>Meeting room A</option><option>Desk 14</option><option>Meeting room B</option><option>Studio 01</option><option>Desk 08</option></select><svg class="icon chevron" aria-hidden="true"><use href="#down"/></svg></div>
+</div>
+<table class="booking-table" aria-label="Workspace bookings"><thead><tr><th scope="col">Member</th><th scope="col">Space</th><th scope="col">Date &amp; time</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody id="booking-rows">
+<tr data-member="Jamie Chen" data-space="Studio 02" data-status="Confirmed"><td><div class="member-cell"><span class="avatar avatar-0">JC</span><span>Jamie Chen</span></div></td><td>Studio 02</td><td>Oct 24, 09:00</td><td><span class="status">Confirmed</span></td><td><button class="row-action" aria-label="Booking details for Jamie Chen"><svg class="icon" aria-hidden="true"><use href="#more"/></svg></button></td></tr>
+<tr data-member="Olivia Reed" data-space="Meeting room A" data-status="Pending"><td><div class="member-cell"><span class="avatar avatar-1">OR</span><span>Olivia Reed</span></div></td><td>Meeting room A</td><td>Oct 24, 11:30</td><td><span class="status pending">Pending</span></td><td><button class="row-action" aria-label="Booking details for Olivia Reed"><svg class="icon" aria-hidden="true"><use href="#more"/></svg></button></td></tr>
+<tr data-member="Noah Williams" data-space="Desk 14" data-status="Confirmed"><td><div class="member-cell"><span class="avatar avatar-2">NW</span><span>Noah Williams</span></div></td><td>Desk 14</td><td>Oct 24, 14:00</td><td><span class="status">Confirmed</span></td><td><button class="row-action" aria-label="Booking details for Noah Williams"><svg class="icon" aria-hidden="true"><use href="#more"/></svg></button></td></tr>
+<tr data-member="Maya Patel" data-space="Meeting room B" data-status="Confirmed"><td><div class="member-cell"><span class="avatar avatar-3">MP</span><span>Maya Patel</span></div></td><td>Meeting room B</td><td>Oct 25, 10:00</td><td><span class="status">Confirmed</span></td><td><button class="row-action" aria-label="Booking details for Maya Patel"><svg class="icon" aria-hidden="true"><use href="#more"/></svg></button></td></tr>
+<tr data-member="Lucas Brown" data-space="Studio 01" data-status="Pending"><td><div class="member-cell"><span class="avatar avatar-4">LB</span><span>Lucas Brown</span></div></td><td>Studio 01</td><td>Oct 25, 13:00</td><td><span class="status pending">Pending</span></td><td><button class="row-action" aria-label="Booking details for Lucas Brown"><svg class="icon" aria-hidden="true"><use href="#more"/></svg></button></td></tr>
+<tr data-member="Emma Wilson" data-space="Desk 08" data-status="Confirmed"><td><div class="member-cell"><span class="avatar avatar-5">EW</span><span>Emma Wilson</span></div></td><td>Desk 08</td><td>Oct 26, 09:30</td><td><span class="status">Confirmed</span></td><td><button class="row-action" aria-label="Booking details for Emma Wilson"><svg class="icon" aria-hidden="true"><use href="#more"/></svg></button></td></tr>
+</tbody></table><p class="empty-message" id="empty-message" hidden>No bookings match your filters.</p>
+<div class="booking-list-footer"><p id="booking-summary" aria-live="polite">Showing 1–6 of 48 bookings</p><nav class="pagination" aria-label="Booking pages"><button class="page-arrow" data-step="-1" aria-label="Previous page"><svg class="icon" aria-hidden="true"><use href="#left"/></svg></button><button data-number="1" aria-current="page">1</button><button data-number="2">2</button><button data-number="3">3</button><button data-number="4">4</button><button data-number="5">5</button><button class="page-arrow" data-step="1" aria-label="Next page"><svg class="icon" aria-hidden="true"><use href="#right"/></svg></button></nav></div>
+</section>
+<aside class="panel week-panel" aria-labelledby="week-title"><h2 id="week-title">This week</h2><div class="month-navigation"><span id="week-month">October 2026</span><div><button id="previous-week" aria-label="Previous week"><svg class="icon" aria-hidden="true"><use href="#left"/></svg></button><button id="next-week" aria-label="Next week"><svg class="icon" aria-hidden="true"><use href="#right"/></svg></button></div></div><div class="week-days" id="week-days"><button class="week-day" aria-pressed="false" aria-label="Mon, October 19, 2026"><span>Mon</span><strong>19</strong><i aria-hidden="true"></i></button><button class="week-day" aria-pressed="false" aria-label="Tue, October 20, 2026"><span>Tue</span><strong>20</strong><i aria-hidden="true"></i></button><button class="week-day" aria-pressed="false" aria-label="Wed, October 21, 2026"><span>Wed</span><strong>21</strong><i aria-hidden="true"></i></button><button class="week-day" aria-pressed="false" aria-label="Thu, October 22, 2026"><span>Thu</span><strong>22</strong><i aria-hidden="true"></i></button><button class="week-day selected" aria-pressed="true" aria-label="Fri, October 23, 2026"><span>Fri</span><strong>23</strong><i aria-hidden="true"></i></button><button class="week-day" aria-pressed="false" aria-label="Sat, October 24, 2026"><span>Sat</span><strong>24</strong><i aria-hidden="true"></i></button><button class="week-day" aria-pressed="false" aria-label="Sun, October 25, 2026"><span>Sun</span><strong>25</strong><i aria-hidden="true"></i></button></div><div class="next-section"><h3>Next up</h3><button class="next-booking" id="next-booking"><span class="avatar">JC</span><span class="next-info"><strong>Jamie Chen</strong><span>Studio 02</span><span class="next-time"><svg class="icon" aria-hidden="true"><use href="#calendar"/></svg>Tomorrow at 09:00</span></span><svg class="icon next-chevron" aria-hidden="true"><use href="#right"/></svg></button></div><button class="calendar-button" id="view-calendar"><svg class="icon" aria-hidden="true"><use href="#calendar"/></svg>View calendar</button></aside>
+</div><p class="sr-only" id="update-status" aria-live="polite"></p>
+</main>
+
+<div class="popover" id="building-popover" popover><h2>Alder House</h2><p>Your active workspace · 4 spaces</p></div>
+<div class="popover" id="date-popover" popover><label for="overview-date">Overview date</label><input type="date" id="overview-date" value="2026-10-23"></div>
+<div class="popover" id="notifications-popover" popover><h2>Notifications</h2><p>You have 3 upcoming bookings on October 24.</p></div>
+<div class="popover" id="account-popover" popover><h2>Alex Morgan</h2><p>Workspace administrator<br>Alder House</p></div>
+<dialog id="booking-dialog" aria-labelledby="booking-title"><div class="dialog-title"><h2 id="booking-title">New booking</h2><button class="close-dialog" type="button" aria-label="Close booking form">×</button></div><form id="booking-form"><label>Member name<input name="member" autocomplete="name" required placeholder="Full name" maxlength="60"></label><label>Space<select name="space"><option>Studio 02</option><option>Meeting room A</option><option>Desk 14</option><option>Studio 01</option><option>Meeting room B</option><option>Desk 08</option></select></label><label>Date and time<input name="date" type="datetime-local" value="2026-10-24T09:00" required></label><label>Status<select name="status"><option>Confirmed</option><option>Pending</option></select></label><div class="dialog-actions"><button class="secondary" type="button" id="cancel-booking">Cancel</button><button class="primary" type="submit">Create booking</button></div></form></dialog>
+<dialog id="detail-dialog" aria-labelledby="detail-title"><div class="dialog-title"><h2 id="detail-title">Booking details</h2><button class="close-dialog" data-close="detail-dialog" aria-label="Close booking details">×</button></div><dl id="detail-content"></dl><div class="dialog-actions"><button class="secondary" data-close="detail-dialog">Close</button></div></dialog>
+<dialog id="calendar-dialog" aria-labelledby="calendar-title"><div class="dialog-title"><h2 id="calendar-title">October 2026</h2><button class="close-dialog" data-close="calendar-dialog" aria-label="Close calendar">×</button></div><div class="month-navigation"><button id="previous-month" class="secondary" aria-label="Previous month">Previous</button><button id="next-month" class="secondary" aria-label="Next month">Next</button></div><div class="month-calendar" id="month-calendar"></div></dialog>
+<script src="bookings.js"></script>
+</body></html>

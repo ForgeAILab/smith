@@ -1,0 +1,69 @@
+{
+  "case": "codex-sol",
+  "stage": 2,
+  "model": "gpt-6.1-sol",
+  "harness": "codex",
+  "command": [
+    "/Users/mai1015/.nvm/versions/node/v24.22.1/bin/codex",
+    "exec",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--skip-git-repo-check",
+    "--cd",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-sol",
+    "--sandbox",
+    "workspace-write",
+    "-c",
+    "approval_policy=\"never\"",
+    "-c",
+    "model_reasoning_effort=\"medium\"",
+    "resume",
+    "01a16ac3-f46d-7800-bea6-278189bd85d1",
+    "--model",
+    "gpt-6.1-sol",
+    "--image",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-sol/revision.png",
+    "--json",
+    "-"
+  ],
+  "project": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-sol",
+  "resumed_session": "01a16ac3-f46d-7800-bea6-278189bd85d1",
+  "started_at_epoch": 1792792918.355129,
+  "status": "completed",
+  "prompt_sha256": "47129b1d511c2eaf0ae178b4c5c0002ba2ddba5ed263cbca4de90eb89fc71560",
+  "images": [
+    {
+      "name": "revision.png",
+      "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee"
+    }
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 125.17,
+  "session_id": "01a16ac3-f46d-7800-bea6-278189bd85d1",
+  "usage": {
+    "input_cached": 706560,
+    "input_uncached": 83201,
+    "output": 21993,
+    "command_calls": 4
+  },
+  "cached_input_percent": 89.47,
+  "generated_files": [
+    {
+      "path": "index.html",
+      "sha256": "dd12c641f827e6732ac9de8047aec0de00e5cf88d3f1f693928d5f3b53db1213"
+    },
+    {
+      "path": "observations-2.json",
+      "sha256": "7aaeeec0cc9a9d20c5840453e1b76c9b19d1f934a3a498b1d8a51eaf28eb30a4"
+    },
+    {
+      "path": "observations-1.json",
+      "sha256": "53245b13139b7d811f43e1e2bcc77d84fa05d3dd1abb2b84b9c35e6c3fc7d3bc"
+    },
+    {
+      "path": "DESIGN.md",
+      "sha256": "4af18f25cf9a27aa2ac54eba505b3f9bedaba49153acd8f6fc741c06da74ce3e"
+    }
+  ],
+  "usage_scope": "Provider-reported usage; sums archived timeout and recovery events where applicable. Unreported timeout usage is unknown."
+}

@@ -1,0 +1,31 @@
+{
+  "page_title": "Your spaces, in sync.",
+  "recognition_marker": "WAYFINDER · BOARD 7F2A9C",
+  "sidebar_labels": ["Alder House", "Overview", "Bookings", "Spaces", "Members", "Reports", "Settings", "Alex Morgan"],
+  "metrics": [
+    {"label":"Monthly revenue","value":"$24,580","detail":"+12.8% this month"},
+    {"label":"Occupancy","value":"84%","detail":"+6.2% this month"},
+    {"label":"Active members","value":"128","detail":"+14 this month"},
+    {"label":"Available desks","value":"18","detail":"Across 4 spaces"}
+  ],
+  "table_headers": ["Member", "Space", "Date", "Status"],
+  "table_rows": [
+    ["JC · Jamie Chen", "Studio 02", "Oct 24, 09:00", "Confirmed"],
+    ["OR · Olivia Reed", "Meeting room A", "Oct 24, 11:30", "Pending"],
+    ["NW · Noah Williams", "Desk 14", "Oct 24, 14:00", "Confirmed"]
+  ],
+  "chart_labels": {"activity_title":"Booking activity","periods":["Week","Month"],"x_axis":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"y_axis":["0","20","40","60"],"tooltip":"Fri · 42 bookings","approximate_values":[11,22,34,38,42,28,13],"utilization_title":"Space utilization","utilization_value":"84%","utilization_detail":"24 of 28 spaces active","legend":["Desks","Studios","Meeting rooms"]},
+  "other_text": ["Workspace / Overview", "October 23, 2026", "New booking", "A little room for everything you are building.", "Upcoming bookings", "View all", "Last updated just now", "Make room for ideas.", "Your next great project starts here.", "Explore spaces"],
+  "dominant_colors": {"sidebar":"#0c3326","background":"#faf9f5","panel":"#ffffff","ink":"#09131b","heading":"#0c3326","muted":"#666e77","border":"#d8dde0","lime":"#dbff96","ring":"#caff64","positive":"#087617","pending":"#ffd0c0"},
+  "major_regions": [
+    {"name":"sidebar","rect":[0,0,0.174,1]},
+    {"name":"header","rect":[0.199,0.018,0.787,0.135]},
+    {"name":"metric cards","rect":[0.199,0.176,0.787,0.144]},
+    {"name":"booking activity","rect":[0.199,0.347,0.525,0.321]},
+    {"name":"space utilization","rect":[0.733,0.348,0.253,0.321]},
+    {"name":"upcoming bookings","rect":[0.199,0.675,0.475,0.267]},
+    {"name":"promotional panel","rect":[0.682,0.674,0.304,0.271]},
+    {"name":"profile","rect":[0.013,0.879,0.147,0.101]},
+    {"name":"update note","rect":[0.199,0.954,0.2,0.023]}
+  ]
+}

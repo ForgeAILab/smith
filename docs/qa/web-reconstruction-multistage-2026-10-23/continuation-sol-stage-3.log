@@ -1,0 +1,2 @@
+{"case": "smith-sol", "stage": 3, "status": "started", "resume": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84"}
+{"case": "smith-sol", "stage": 3, "status": "timeout", "elapsed_seconds": 900.01, "session_id": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84", "cached_input_percent": null}

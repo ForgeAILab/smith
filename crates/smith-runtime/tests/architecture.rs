@@ -219,6 +219,7 @@ const PUBLIC_RUNTIME_MODULES: &[&str] = &[
     "factory",
     "harness",
     "host",
+    "image_sizing",
     "journal",
     "mcp",
     "memory",

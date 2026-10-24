@@ -1,0 +1,386 @@
+{
+  "label": "selected-large",
+  "profile": "security",
+  "rows": [
+    {
+      "turn": 1,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-d341e75d-8699-44fe-8d62-79b54243cf41",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": 256,
+      "uncached_tokens": 15450,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 8.36,
+      "quiet_before_seconds": 0,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 8179,
+        "invalidated_prefix_tokens": 717,
+        "state": "unsupported",
+        "observed_read_tokens": 256,
+        "confidence": "estimated",
+        "cache_read_percent": 2,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "xiaoge",
+          "model": "selected-large",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 3600000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "e46bae7960e5567a13332db3a6051c60",
+              "preserved_prefix_tokens": 8179,
+              "invalidated_prefix_tokens": 717,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 18
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-1",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    },
+    {
+      "turn": 2,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-d341e75d-8699-44fe-8d62-79b54243cf41",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": 8192,
+      "uncached_tokens": 7319,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 7.29,
+      "quiet_before_seconds": 0,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 8179,
+        "invalidated_prefix_tokens": 755,
+        "state": "unsupported",
+        "observed_read_tokens": 8192,
+        "confidence": "estimated",
+        "cache_read_percent": 53,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "xiaoge",
+          "model": "selected-large",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 3600000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "5072d905e286335912be0019b1ca8504",
+              "preserved_prefix_tokens": 8179,
+              "invalidated_prefix_tokens": 755,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 35
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-2",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    },
+    {
+      "turn": 3,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-d341e75d-8699-44fe-8d62-79b54243cf41",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": 15456,
+      "uncached_tokens": 89,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 5.96,
+      "quiet_before_seconds": 0,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 8902,
+        "invalidated_prefix_tokens": 70,
+        "state": "unsupported",
+        "observed_read_tokens": 15456,
+        "confidence": "estimated",
+        "cache_read_percent": 99,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "xiaoge",
+          "model": "selected-large",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 3600000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "0a61e78f0107b5ddbf7535e491e998bf",
+              "preserved_prefix_tokens": 8902,
+              "invalidated_prefix_tokens": 70,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 52
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-3",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    },
+    {
+      "turn": 4,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-d341e75d-8699-44fe-8d62-79b54243cf41",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": 15488,
+      "uncached_tokens": 91,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 4.7,
+      "quiet_before_seconds": 30,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 8940,
+        "invalidated_prefix_tokens": 70,
+        "state": "unsupported",
+        "observed_read_tokens": 15488,
+        "confidence": "estimated",
+        "cache_read_percent": 99,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "xiaoge",
+          "model": "selected-large",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 3600000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "69a19c364fec0dbcbaa89dc399465e19",
+              "preserved_prefix_tokens": 8940,
+              "invalidated_prefix_tokens": 70,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 69
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-4",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    }
+  ]
+}

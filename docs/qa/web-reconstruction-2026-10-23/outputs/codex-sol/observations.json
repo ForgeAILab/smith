@@ -1,0 +1,29 @@
+{
+  "page_title": "Your spaces, in sync.",
+  "recognition_marker": "BOARD 7F2A9C",
+  "sidebar_labels": ["WAYFINDER", "Alder House", "Overview", "Bookings", "Spaces", "Members", "Reports", "Settings", "Alex Morgan"],
+  "metrics": [
+    {"label":"Monthly revenue","value":"$24,580"},
+    {"label":"Occupancy","value":"84%"},
+    {"label":"Active members","value":"128"},
+    {"label":"Available desks","value":"18"}
+  ],
+  "table_headers": ["Member", "Space", "Date", "Status"],
+  "table_rows": [
+    ["Jamie Chen", "Studio 02", "Oct 24, 09:00", "Confirmed"],
+    ["Olivia Reed", "Meeting room A", "Oct 24, 11:30", "Pending"],
+    ["Noah Williams", "Desk 14", "Oct 24, 14:00", "Confirmed"]
+  ],
+  "chart_labels": ["Booking activity", "Week", "Month", "0", "20", "40", "60", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Fri · 42 bookings", "Space utilization", "84%", "24 of 28 spaces active", "Desks", "Studios", "Meeting rooms"],
+  "dominant_colors": {"sidebar":"#0c3325", "canvas":"#faf9f6", "panels":"#ffffff", "heading":"#0b3326", "text":"#0a151d", "muted":"#68717b", "lime":"#d8ff8e", "ring":"#c7fa64", "border":"#d7dce0"},
+  "major_regions": [
+    {"name":"sidebar", "x":0,"y":0,"width":0.174,"height":1},
+    {"name":"header", "x":0.199,"y":0.019,"width":0.787,"height":0.132},
+    {"name":"metrics", "x":0.199,"y":0.176,"width":0.786,"height":0.144},
+    {"name":"booking_activity", "x":0.199,"y":0.339,"width":0.525,"height":0.321},
+    {"name":"space_utilization", "x":0.733,"y":0.340,"width":0.253,"height":0.321},
+    {"name":"upcoming_bookings", "x":0.199,"y":0.675,"width":0.475,"height":0.267},
+    {"name":"promotion", "x":0.682,"y":0.675,"width":0.304,"height":0.269},
+    {"name":"update_status", "x":0.199,"y":0.958,"width":0.15,"height":0.018}
+  ]
+}

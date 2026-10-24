@@ -1,0 +1,29 @@
+{
+  "page_title": "Good things are taking shape.",
+  "recognition_marker": "BOARD 9D3E6B",
+  "metrics": [
+    {"label":"Revenue","value":"$31,420","trend":"+18.4% this month","direction":"up","color":"green"},
+    {"label":"Occupancy","value":"76%","trend":"-8.0% this month","direction":"down","color":"red"},
+    {"label":"Active members","value":"146","trend":"+18 this month","direction":"up","color":"green"},
+    {"label":"Available desks","value":"24","detail":"Across 4 spaces"}
+  ],
+  "utilization_text": {"heading":"Space utilization","value":"76%","detail":"21 of 28 spaces active","legend":["Desks","Studios","Meeting rooms"]},
+  "promo_heading":"Room to grow.",
+  "promo_cta":"Find your next space",
+  "table_rows":[
+    {"member":"Jamie Chen","initials":"JC","space":"Studio 02","date":"Oct 24, 09:00","status":"Confirmed"},
+    {"member":"Olivia Reed","initials":"OR","space":"Meeting room A","date":"Oct 24, 11:30","status":"Pending"},
+    {"member":"Noah Williams","initials":"NW","space":"Desk 14","date":"Oct 24, 14:00","status":"Confirmed"}
+  ],
+  "changes_from_previous":[
+    "Heading replaces Your spaces, in sync.; the longer heading ends near x996 and the board marker begins near x1007.",
+    "Board marker changes from BOARD 7F2A9C to BOARD 9D3E6B.",
+    "Monthly revenue becomes Revenue; $24,580 becomes $31,420; +12.8% becomes +18.4%.",
+    "Occupancy changes from 84% to 76%, with a red down-right arrow and -8.0% replacing the green upward +6.2% trend.",
+    "Active members changes from 128 to 146; +14 becomes +18. Available desks changes from 18 to 24.",
+    "Utilization changes from 84% / 24 of 28 spaces active to 76% / 21 of 28 spaces active. Lime arc now ends around the left-upper side, near 9:30, exposing a longer muted upper-left track.",
+    "Promotion heading becomes Room to on the first line and grow. on the second, with larger serif type; CTA becomes Find your next space. Supporting copy and architectural illustration remain.",
+    "Main sidebar and card columns remain anchored at x267, x306, x1126 (utilization), and x1048 (promotion). Metric cards remain y180–328; chart row y348–677; lower row approximately y691–967.",
+    "Account divider moves down from approximately y900 to y916; account avatar moves from y924 to y941. Footer update note moves from approximately y982 to y983; table rows and all chart labels and values remain unchanged."
+  ]
+}

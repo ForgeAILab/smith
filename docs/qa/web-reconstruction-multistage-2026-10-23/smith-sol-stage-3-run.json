@@ -1,0 +1,100 @@
+{
+  "case": "smith-sol",
+  "stage": 3,
+  "model": "gpt-6.1-sol",
+  "harness": "smith",
+  "command": [
+    "/private/tmp/smith-cache-prefix-versioned",
+    "--project",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol",
+    "--profile",
+    "web-benchmark",
+    "--effort",
+    "medium",
+    "--approval",
+    "allow-all",
+    "--output-format",
+    "stream-json",
+    "--resume",
+    "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+    "--image",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol/bookings.png",
+    "--image",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol/revision.png",
+    "-p",
+    "-"
+  ],
+  "project": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol",
+  "resumed_session": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+  "started_at_epoch": 1792794325.191534,
+  "status": "timeout",
+  "prompt_sha256": "10ea9d134b84c0d7e9dc1e931c59234a7518f416719ef32f415a818c69eac19c",
+  "images": [
+    {
+      "name": "bookings.png",
+      "sha256": "e32be86a3ddad4443d2ba2e121cb2103f10d54028d88ad62829a72312730d891"
+    },
+    {
+      "name": "revision.png",
+      "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee"
+    }
+  ],
+  "session_storage": "/private/tmp/smith-web-local-sessions-hkqb_k_j",
+  "exit_code": -9,
+  "elapsed_seconds": 900.01,
+  "session_id": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+  "usage": {
+    "input_cached": 82048,
+    "input_uncached": 809218,
+    "output": 17049,
+    "reasoning": 2742,
+    "provider_attempts": 16,
+    "provider_attempts_with_reported_usage": 15
+  },
+  "cached_input_percent": 9.21,
+  "generated_files": [
+    {
+      "path": "bookings.js",
+      "sha256": "fd0df89af5e83b015bb6ba58203dad1209b65f41d5debc29920b23f69104573e"
+    },
+    {
+      "path": "index.html",
+      "sha256": "1d7466bfdc0521bca264b73280bd057b0280dfa536789f54a5becb6f9614283e"
+    },
+    {
+      "path": "observations-3.json",
+      "sha256": "c0a1bbc048eba0fcdd5123ddc98cead8198fffa1c30910819111971d2e0a1eba"
+    },
+    {
+      "path": "shared.css",
+      "sha256": "4328fa86bcf8531c9ba1640e151353b290e9078a4eaeb711ff6b91fdcb13ef08"
+    },
+    {
+      "path": "observations-2.json",
+      "sha256": "119b38e5eebac4a37e775c9720bac0f067eb97560117943fd8725b51959ecb15"
+    },
+    {
+      "path": "observations-1.json",
+      "sha256": "2eb50c247cd8e44f7b2480fe5b5799973b6ad9fca1e4c56f80d1f2cd5f6c2cfa"
+    },
+    {
+      "path": "bookings.html",
+      "sha256": "8db73b25f2d0457fd932280ec0b90504e7bece2488e49ae3e42b443747b71643"
+    },
+    {
+      "path": "DESIGN.md",
+      "sha256": "f20ae948483e89ebc6bc8427f85098ac113f81d8233345c5df5d365b89be2a31"
+    },
+    {
+      "path": "bookings.css",
+      "sha256": "c30d48e6f91128783fe8303ed09f2b7cb4fba367bb2ab2c1cae465035cb77bfe"
+    }
+  ],
+  "terminal_usage_projection": {
+    "input_cached": 0,
+    "input_uncached": 0,
+    "output": 0,
+    "provider_attempts": null
+  },
+  "usage_scope": "Provider-reported usage; sums archived timeout and recovery events where applicable. Unreported timeout usage is unknown."
+}

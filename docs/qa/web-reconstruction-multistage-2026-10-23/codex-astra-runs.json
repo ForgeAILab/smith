@@ -1,0 +1,229 @@
+[
+  {
+    "case": "codex-astra",
+    "stage": 1,
+    "model": "gpt-6-astra",
+    "harness": "codex",
+    "command": [
+      "/Users/mai1015/.nvm/versions/node/v24.22.1/bin/codex",
+      "exec",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--skip-git-repo-check",
+      "--cd",
+      "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra",
+      "--sandbox",
+      "workspace-write",
+      "-c",
+      "approval_policy=\"never\"",
+      "-c",
+      "model_reasoning_effort=\"medium\"",
+      "--model",
+      "gpt-6-astra",
+      "--image",
+      "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra/part-1.png",
+      "--image",
+      "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra/part-2.png",
+      "--image",
+      "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra/part-3.png",
+      "--json",
+      "-"
+    ],
+    "project": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra",
+    "resumed_session": null,
+    "started_at_epoch": 1792792589.2819421,
+    "status": "completed",
+    "prompt_sha256": "5d4f0056e91e89adba9c26a6319eb301053eab6a20226eedae98f46171731f95",
+    "images": [
+      {
+        "name": "part-1.png",
+        "sha256": "6f9d37215219315c3748eda8e93b061db2e4194f39be691c73c0be7f04c87f89"
+      },
+      {
+        "name": "part-2.png",
+        "sha256": "57aae4961271a5c3287e2965a88169f1079d96618ebfb51a5a4c19de61119aba"
+      },
+      {
+        "name": "part-3.png",
+        "sha256": "7eaf959ae5eec8dc72d77bbd978ed051fd5dbc51c4c8e25b2a48c0d5409bdc2f"
+      }
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 215.13,
+    "session_id": "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+    "usage": {
+      "input_cached": 222464,
+      "input_uncached": 31539,
+      "output": 10823,
+      "command_calls": 7
+    },
+    "cached_input_percent": 87.58,
+    "generated_files": [
+      {
+        "path": "index.html",
+        "sha256": "9b863ede022998ddd04015d2d282065681fe7dc864a5915ffc8c824e2d7e3657"
+      },
+      {
+        "path": "observations-1.json",
+        "sha256": "7d7a530f56726f2e0cebe85dccdef8c808c83e89562b6f33ee4c2f32af3f7efe"
+      },
+      {
+        "path": "DESIGN.md",
+        "sha256": "49a0d5b8849c17c15947fa22887f3548dda10fed466a558baae5b9776c3a9804"
+      }
+    ],
+    "usage_scope": "Provider-reported usage; sums archived timeout and recovery events where applicable. Unreported timeout usage is unknown."
+  },
+  {
+    "case": "codex-astra",
+    "stage": 2,
+    "model": "gpt-6-astra",
+    "harness": "codex",
+    "command": [
+      "/Users/mai1015/.nvm/versions/node/v24.22.1/bin/codex",
+      "exec",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--skip-git-repo-check",
+      "--cd",
+      "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra",
+      "--sandbox",
+      "workspace-write",
+      "-c",
+      "approval_policy=\"never\"",
+      "-c",
+      "model_reasoning_effort=\"medium\"",
+      "resume",
+      "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+      "--model",
+      "gpt-6-astra",
+      "--image",
+      "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra/revision.png",
+      "--json",
+      "-"
+    ],
+    "project": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra",
+    "resumed_session": "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+    "started_at_epoch": 1792792804.421542,
+    "status": "completed",
+    "prompt_sha256": "47129b1d511c2eaf0ae178b4c5c0002ba2ddba5ed263cbca4de90eb89fc71560",
+    "images": [
+      {
+        "name": "revision.png",
+        "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee"
+      }
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 81.63,
+    "session_id": "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+    "usage": {
+      "input_cached": 464000,
+      "input_uncached": 42131,
+      "output": 13614,
+      "command_calls": 4
+    },
+    "cached_input_percent": 91.68,
+    "generated_files": [
+      {
+        "path": "index.html",
+        "sha256": "3d6a032f6028a5685675ca2ad42cd3aed18ad79ac11fc4af6583bf9b2ce9e931"
+      },
+      {
+        "path": "observations-2.json",
+        "sha256": "467eea620e138a25f4620b24a8190d690cc80e0df266b015ce0ceb2345927f99"
+      },
+      {
+        "path": "observations-1.json",
+        "sha256": "7d7a530f56726f2e0cebe85dccdef8c808c83e89562b6f33ee4c2f32af3f7efe"
+      },
+      {
+        "path": "DESIGN.md",
+        "sha256": "32a4c7703250383c0935280fbe0d29385ac1f809dcf7cde8178f6f8228986b70"
+      }
+    ],
+    "usage_scope": "Provider-reported usage; sums archived timeout and recovery events where applicable. Unreported timeout usage is unknown."
+  },
+  {
+    "case": "codex-astra",
+    "stage": 3,
+    "model": "gpt-6-astra",
+    "harness": "codex",
+    "command": [
+      "/Users/mai1015/.nvm/versions/node/v24.22.1/bin/codex",
+      "exec",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--skip-git-repo-check",
+      "--cd",
+      "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra",
+      "--sandbox",
+      "workspace-write",
+      "-c",
+      "approval_policy=\"never\"",
+      "-c",
+      "model_reasoning_effort=\"medium\"",
+      "resume",
+      "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+      "--model",
+      "gpt-6-astra",
+      "--image",
+      "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra/bookings.png",
+      "--image",
+      "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra/revision.png",
+      "--json",
+      "-"
+    ],
+    "project": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra",
+    "resumed_session": "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+    "started_at_epoch": 1792792886.059463,
+    "status": "completed",
+    "prompt_sha256": "10ea9d134b84c0d7e9dc1e931c59234a7518f416719ef32f415a818c69eac19c",
+    "images": [
+      {
+        "name": "bookings.png",
+        "sha256": "e32be86a3ddad4443d2ba2e121cb2103f10d54028d88ad62829a72312730d891"
+      },
+      {
+        "name": "revision.png",
+        "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee"
+      }
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 154.98,
+    "session_id": "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+    "usage": {
+      "input_cached": 837504,
+      "input_uncached": 47376,
+      "output": 21871,
+      "command_calls": 4
+    },
+    "cached_input_percent": 94.65,
+    "generated_files": [
+      {
+        "path": "index.html",
+        "sha256": "bdfea3f1812d6c9acf9105603a9935dd37846c91d287fd0d1966e3cebcfb651e"
+      },
+      {
+        "path": "observations-3.json",
+        "sha256": "ea18660453656ceeff9ed003ce21afb28beb58dcad50f157b810aecca84a88f6"
+      },
+      {
+        "path": "observations-2.json",
+        "sha256": "467eea620e138a25f4620b24a8190d690cc80e0df266b015ce0ceb2345927f99"
+      },
+      {
+        "path": "observations-1.json",
+        "sha256": "7d7a530f56726f2e0cebe85dccdef8c808c83e89562b6f33ee4c2f32af3f7efe"
+      },
+      {
+        "path": "bookings.html",
+        "sha256": "b2ebafb8b9c9845288a98af745b3ab374bc159a7c1f93c39b796911f8bbc944b"
+      },
+      {
+        "path": "DESIGN.md",
+        "sha256": "cc348875d6886d2ac8e2f6b2b5a46ca3530bcd2e27b20124afecd8c78df7ba9a"
+      }
+    ],
+    "usage_scope": "Provider-reported usage; sums archived timeout and recovery events where applicable. Unreported timeout usage is unknown."
+  }
+]

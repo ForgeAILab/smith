@@ -1,0 +1,8 @@
+{"case": "codex-sol", "phase": "started", "model": "gpt-6.1-sol"}
+{"case": "smith-astra", "phase": "started", "model": "gpt-6-astra"}
+{"case": "codex-sol", "status": "completed", "elapsed_seconds": 407.06, "index_html_exists": true, "observations_exists": true}
+{"case": "smith-astra", "status": "completed", "elapsed_seconds": 438.33, "index_html_exists": true, "observations_exists": true}
+{"case": "smith-sol", "phase": "started", "model": "gpt-6.1-sol"}
+{"case": "codex-astra", "phase": "started", "model": "gpt-6-astra"}
+{"case": "codex-astra", "status": "completed", "elapsed_seconds": 252.28, "index_html_exists": true, "observations_exists": true}
+{"case": "smith-sol", "status": "completed", "elapsed_seconds": 362.58, "index_html_exists": true, "observations_exists": true}

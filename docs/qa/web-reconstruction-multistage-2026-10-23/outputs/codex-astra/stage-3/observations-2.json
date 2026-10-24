@@ -1,0 +1,30 @@
+{
+  "page_title": "Good things are taking shape.",
+  "recognition_marker": "BOARD 9D3E6B",
+  "metrics": [
+    {"label":"Revenue","value":"$31,420","change":"+18.4% this month","direction":"up"},
+    {"label":"Occupancy","value":"76%","change":"-8.0% this month","direction":"down"},
+    {"label":"Active members","value":"146","change":"+18 this month","direction":"up"},
+    {"label":"Available desks","value":"24","detail":"Across 4 spaces"}
+  ],
+  "utilization_text": {"heading":"Space utilization","value":"76%","detail":"21 of 28 spaces active"},
+  "promo_heading": "Room to grow.",
+  "promo_cta": "Find your next space",
+  "table_rows": [
+    ["Jamie Chen","Studio 02","Oct 24, 09:00","Confirmed"],
+    ["Olivia Reed","Meeting room A","Oct 24, 11:30","Pending"],
+    ["Noah Williams","Desk 14","Oct 24, 14:00","Confirmed"]
+  ],
+  "changes_from_previous": [
+    "Heading changes from Your spaces, in sync. to Good things are taking shape.; the longer heading moves the board marker to approximately x1007, y80.",
+    "Recognition marker changes from BOARD 7F2A9C to BOARD 9D3E6B.",
+    "Monthly revenue becomes Revenue; $24,580 becomes $31,420; +12.8% becomes +18.4%.",
+    "Occupancy changes from 84% to 76%; the green upward +6.2% change becomes a red downward -8.0% change.",
+    "Active members changes from 128 to 146; +14 becomes +18.",
+    "Available desks changes from 18 to 24.",
+    "Utilization changes from 84% and 24 of 28 spaces active to 76% and 21 of 28 spaces active. The lime arc is shorter and ends at approximately the left side of the ring, near y492.",
+    "Promotion heading becomes Room to / grow. in larger serif lettering; Explore spaces becomes Find your next space. Supporting text and architectural illustration remain.",
+    "Account divider is at y916 and avatar at y941, about 16px lower than the previous slices.",
+    "Main geometry remains: sidebar width267, content x306, metrics y180, chart row y347–677, bookings y691–964, promotion x1048 y691–967. Table rows and booking activity chart content remain unchanged."
+  ]
+}

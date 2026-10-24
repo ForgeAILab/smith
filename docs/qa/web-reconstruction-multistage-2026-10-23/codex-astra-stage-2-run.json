@@ -1,0 +1,69 @@
+{
+  "case": "codex-astra",
+  "stage": 2,
+  "model": "gpt-6-astra",
+  "harness": "codex",
+  "command": [
+    "/Users/mai1015/.nvm/versions/node/v24.22.1/bin/codex",
+    "exec",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--skip-git-repo-check",
+    "--cd",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra",
+    "--sandbox",
+    "workspace-write",
+    "-c",
+    "approval_policy=\"never\"",
+    "-c",
+    "model_reasoning_effort=\"medium\"",
+    "resume",
+    "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+    "--model",
+    "gpt-6-astra",
+    "--image",
+    "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra/revision.png",
+    "--json",
+    "-"
+  ],
+  "project": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/codex-astra",
+  "resumed_session": "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+  "started_at_epoch": 1792792804.421542,
+  "status": "completed",
+  "prompt_sha256": "47129b1d511c2eaf0ae178b4c5c0002ba2ddba5ed263cbca4de90eb89fc71560",
+  "images": [
+    {
+      "name": "revision.png",
+      "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee"
+    }
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 81.63,
+  "session_id": "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+  "usage": {
+    "input_cached": 464000,
+    "input_uncached": 42131,
+    "output": 13614,
+    "command_calls": 4
+  },
+  "cached_input_percent": 91.68,
+  "generated_files": [
+    {
+      "path": "index.html",
+      "sha256": "3d6a032f6028a5685675ca2ad42cd3aed18ad79ac11fc4af6583bf9b2ce9e931"
+    },
+    {
+      "path": "observations-2.json",
+      "sha256": "467eea620e138a25f4620b24a8190d690cc80e0df266b015ce0ceb2345927f99"
+    },
+    {
+      "path": "observations-1.json",
+      "sha256": "7d7a530f56726f2e0cebe85dccdef8c808c83e89562b6f33ee4c2f32af3f7efe"
+    },
+    {
+      "path": "DESIGN.md",
+      "sha256": "32a4c7703250383c0935280fbe0d29385ac1f809dcf7cde8178f6f8228986b70"
+    }
+  ],
+  "usage_scope": "Provider-reported usage; sums archived timeout and recovery events where applicable. Unreported timeout usage is unknown."
+}

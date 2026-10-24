@@ -1,0 +1,23 @@
+{
+  "scratch": "/private/tmp/smith-web-reconstruction-0rkz_0_t",
+  "created_at_epoch": 1792788621.042103,
+  "smith_binary": "/Users/mai1015/.local/bin/smith",
+  "codex_binary": "/Users/mai1015/.nvm/versions/node/v24.22.1/bin/codex",
+  "cases": [
+    "smith-sol",
+    "smith-astra",
+    "codex-sol",
+    "codex-astra"
+  ],
+  "reasoning_effort": "medium",
+  "timeout_seconds": 600,
+  "benchmark_type": "one image, one implementation attempt per arm",
+  "image_sha256": "12c1ad4956cf811a994e330f977768b24319063bc7ef41191f8d2723637ed7f6",
+  "reference_dimensions": [
+    1536,
+    1024
+  ],
+  "codex_version": "0.163.0",
+  "smith_version": "0.7.13",
+  "execution": "Two balanced waves with two concurrent runs per wave; elapsed times are descriptive, not a controlled latency ranking."
+}

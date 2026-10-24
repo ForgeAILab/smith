@@ -1,0 +1,9 @@
+{
+  "user_config_unchanged": true,
+  "frozen_benchmark_binary_matches_recorded_hash": true,
+  "runtime_unit_tests_passed": 697,
+  "runtime_unit_tests_ignored": 2,
+  "runtime_clippy": "passed; see cache-prefix-investigation logs",
+  "source_patch_reverse_check": "passed",
+  "source_diff_whitespace": "passed"
+}

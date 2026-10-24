@@ -1,0 +1,386 @@
+{
+  "label": "gemini-4",
+  "profile": "research",
+  "rows": [
+    {
+      "turn": 1,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-4044178d-eb3a-43dd-a69c-fcba068b6752",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": null,
+      "uncached_tokens": 19673,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 6.15,
+      "quiet_before_seconds": 0,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 8113,
+        "invalidated_prefix_tokens": 570,
+        "state": "unsupported",
+        "observed_read_tokens": 0,
+        "confidence": "estimated",
+        "cache_read_percent": 0,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "google",
+          "model": "gemini-4-argon",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 300000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "c37c1c3ea7249113f8e4c41b28e6d8a1",
+              "preserved_prefix_tokens": 8113,
+              "invalidated_prefix_tokens": 570,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 17
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-1",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    },
+    {
+      "turn": 2,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-4044178d-eb3a-43dd-a69c-fcba068b6752",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": 17619,
+      "uncached_tokens": 2100,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 5.99,
+      "quiet_before_seconds": 0,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 8113,
+        "invalidated_prefix_tokens": 629,
+        "state": "unsupported",
+        "observed_read_tokens": 17619,
+        "confidence": "estimated",
+        "cache_read_percent": 89,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "google",
+          "model": "gemini-4-argon",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 300000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "6c53d3a75a476bb9c13de48826314c3e",
+              "preserved_prefix_tokens": 8113,
+              "invalidated_prefix_tokens": 629,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 34
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-2",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    },
+    {
+      "turn": 3,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-4044178d-eb3a-43dd-a69c-fcba068b6752",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": 17670,
+      "uncached_tokens": 2095,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 13.63,
+      "quiet_before_seconds": 0,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 8710,
+        "invalidated_prefix_tokens": 91,
+        "state": "unsupported",
+        "observed_read_tokens": 17670,
+        "confidence": "estimated",
+        "cache_read_percent": 89,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "google",
+          "model": "gemini-4-argon",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 300000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "fa7da6a7134155e596f05e63af8b82e3",
+              "preserved_prefix_tokens": 8710,
+              "invalidated_prefix_tokens": 91,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 51
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-3",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    },
+    {
+      "turn": 4,
+      "status": "ok",
+      "exit_code": 0,
+      "session_id": "session-4044178d-eb3a-43dd-a69c-fcba068b6752",
+      "output": "45C18F",
+      "code_correct": true,
+      "cached_tokens": 17716,
+      "uncached_tokens": 2095,
+      "canonical_image_url_hashes": [
+        "d00c8e589480130ed412f266ebfe764b482fa2477c1911bce39bb8e6d5ac5468"
+      ],
+      "elapsed_seconds": 6.0,
+      "quiet_before_seconds": 30,
+      "stderr": "",
+      "cache": {
+        "provider_cache_supported": false,
+        "preserved_prefix_tokens": 8769,
+        "invalidated_prefix_tokens": 91,
+        "state": "unsupported",
+        "observed_read_tokens": 17716,
+        "confidence": "estimated",
+        "cache_read_percent": 89,
+        "miss_count": 0,
+        "rebilled_tokens": 0,
+        "controller": {
+          "provider": "google",
+          "model": "gemini-4-argon",
+          "requested_maintenance": "off",
+          "effective_maintenance": "off",
+          "policy": {
+            "maintenance": "off",
+            "inactivity_limit_ms": 300000,
+            "max_hold_while_child_ms": 3600000,
+            "max_maintenance_calls": 1,
+            "max_maintenance_input_tokens": 0,
+            "max_maintenance_output_tokens": 256,
+            "maintenance_deadline_ms": 30000,
+            "keepalive_margin_ms": 120000,
+            "keepalive_jitter_percent": 10,
+            "handoff_checkpoint": true,
+            "idle_compaction": false
+          },
+          "synthetic_spend_authorized": false,
+          "provider_contract": {
+            "behavior": "implicit_prefix",
+            "retention": {
+              "read_refreshes": false,
+              "write_refreshes": false
+            },
+            "evidence": {
+              "stream": true,
+              "resource_operations": false,
+              "cache_scoped_errors": false
+            }
+          },
+          "lifecycle": {
+            "leases": [],
+            "structural": {
+              "cache_plan": "576432f3e2bc6f81ff848bec709fa1e4",
+              "preserved_prefix_tokens": 8769,
+              "invalidated_prefix_tokens": 91,
+              "provider_cache_supported": false,
+              "has_comparable_predecessor": false
+            },
+            "shutdown": true,
+            "last_event_sequence": 68
+          },
+          "decision": {
+            "disposition": "suppressed",
+            "reason": "provider_evidence_unavailable",
+            "planned_input_tokens": 0,
+            "max_output_tokens": 256,
+            "deadline_ms": 30000
+          },
+          "operation_in_flight": false,
+          "interval_attempted": false,
+          "interval_attempts": 0,
+          "idle_compaction": {
+            "interval_id": "root-turn:turn-4",
+            "attempted": false
+          },
+          "idle_compaction_usage": {
+            "input_uncached": 0,
+            "input_cached": 0,
+            "cache_write": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cost_is_estimate": false
+          },
+          "idle_compaction_provider": "zai",
+          "idle_compaction_model": "zai/glm-4.5-air:semantic-summary"
+        }
+      }
+    }
+  ]
+}

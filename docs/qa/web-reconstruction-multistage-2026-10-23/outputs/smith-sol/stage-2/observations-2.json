@@ -1,0 +1,31 @@
+{
+  "page_title": "Good things are taking shape.",
+  "recognition_marker": "BOARD 9D3E6B",
+  "metrics": [
+    {"label": "Revenue", "value": "$31,420", "trend": "+18.4%", "detail": "this month", "direction": "up"},
+    {"label": "Occupancy", "value": "76%", "trend": "-8.0%", "detail": "this month", "direction": "down"},
+    {"label": "Active members", "value": "146", "trend": "+18", "detail": "this month", "direction": "up"},
+    {"label": "Available desks", "value": "24", "detail": "Across 4 spaces"}
+  ],
+  "utilization_text": {"heading": "Space utilization", "value": "76%", "detail": "21 of 28 spaces active", "legend": ["Desks", "Studios", "Meeting rooms"]},
+  "promo_heading": "Room to grow.",
+  "promo_cta": "Find your next space",
+  "table_rows": [
+    {"initials": "JC", "member": "Jamie Chen", "space": "Studio 02", "date": "Oct 24, 09:00", "status": "Confirmed"},
+    {"initials": "OR", "member": "Olivia Reed", "space": "Meeting room A", "date": "Oct 24, 11:30", "status": "Pending"},
+    {"initials": "NW", "member": "Noah Williams", "space": "Desk 14", "date": "Oct 24, 14:00", "status": "Confirmed"}
+  ],
+  "changes_from_previous": [
+    "Main heading changes from Your spaces, in sync. to Good things are taking shape.; it remains a single bold line at desktop, extending to approximately x=995.",
+    "Recognition badge changes from BOARD 7F2A9C to BOARD 9D3E6B and moves from approximately x=793 to x=1007 because of the longer heading; badge top remains around y=80.",
+    "Monthly revenue label becomes Revenue; $24,580 becomes $31,420; +12.8% becomes +18.4%.",
+    "Occupancy changes from 84% to 76%; the positive green +6.2% northeast arrow becomes a red -8.0% southeast arrow.",
+    "Active members changes from 128 to 146; monthly increase changes from +14 to +18.",
+    "Available desks changes from 18 to 24; Across 4 spaces is unchanged.",
+    "Utilization changes from 84% and 24 of 28 spaces active to 76% and 21 of 28 spaces active; the lime progress arc is shorter and ends at the upper left near the nine o'clock position.",
+    "Middle-row geometry remains consistent with the original images: activity card x=306, y=347, width=806, height=329; utilization card x=1126, y=348, width=388, height=329. Chart grid and line data retain their original positions, with grid y=439,501,563,624 and Friday tooltip Fri · 42 bookings. The earlier design notes incorrectly inferred the activity card top as y=355; this revision makes the correct y=347 alignment explicit.",
+    "The bottom row remains around y=691; the bookings card ends at y=964 and the promo panel at y=967. The revised middle-to-bottom gutter is approximately 14px.",
+    "Promotional heading changes from Make room for ideas. to Room to grow., split as Room to / grow.; the revised serif letters are larger, approximately 48px with a compact 42px line-height. CTA changes from Explore spaces to Find your next space.",
+    "Promo body Your next great project starts here., architectural artwork, all booking rows, sidebar, date, toolbar actions, subtitle and chart labels remain unchanged."
+  ]
+}

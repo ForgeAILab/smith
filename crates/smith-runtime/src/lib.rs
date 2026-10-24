@@ -35,6 +35,7 @@ pub(crate) mod gemini;
 pub mod harness;
 pub mod host;
 pub(crate) mod image_fitting;
+pub mod image_sizing;
 pub mod journal;
 pub mod mcp;
 pub mod memory;

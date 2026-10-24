@@ -1,0 +1,31 @@
+{
+  "page_title": "Your spaces, in sync.",
+  "recognition_marker": "BOARD 7F2A9C",
+  "sidebar_labels": ["WAYFINDER", "Alder House", "Overview", "Bookings", "Spaces", "Members", "Reports", "Settings", "Alex Morgan"],
+  "metrics": [
+    {"label": "Monthly revenue", "value": "$24,580", "change": "+12.8% this month"},
+    {"label": "Occupancy", "value": "84%", "change": "+6.2% this month"},
+    {"label": "Active members", "value": "128", "change": "+14 this month"},
+    {"label": "Available desks", "value": "18", "change": "Across 4 spaces"}
+  ],
+  "table_headers": ["Member", "Space", "Date", "Status"],
+  "table_rows": [
+    ["JC · Jamie Chen", "Studio 02", "Oct 24, 09:00", "Confirmed"],
+    ["OR · Olivia Reed", "Meeting room A", "Oct 24, 11:30", "Pending"],
+    ["NW · Noah Williams", "Desk 14", "Oct 24, 14:00", "Confirmed"]
+  ],
+  "chart_labels": ["Booking activity", "Week", "Month", "0", "20", "40", "60", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Fri · 42 bookings", "Space utilization", "84%", "24 of 28 spaces active", "Desks", "Studios", "Meeting rooms"],
+  "dominant_colors": {"sidebar_and_dark_card": "#0b3325", "page": "#faf9f6", "cards": "#ffffff", "lime": "#d8ff91", "ring": "#caff60", "text": "#0b1620", "muted": "#69717c", "border": "#d9dde0", "promotion": "#e2f9b8", "pending": "#ffd0c2"},
+  "major_regions": [
+    {"name": "sidebar", "rect": [0, 0, 0.174, 1]},
+    {"name": "header", "rect": [0.199, 0.018, 0.787, 0.133]},
+    {"name": "metrics", "rect": [0.199, 0.176, 0.787, 0.144]},
+    {"name": "booking_activity", "rect": [0.199, 0.339, 0.525, 0.322]},
+    {"name": "space_utilization", "rect": [0.733, 0.339, 0.253, 0.322]},
+    {"name": "upcoming_bookings", "rect": [0.199, 0.675, 0.475, 0.267]},
+    {"name": "promotion", "rect": [0.682, 0.675, 0.304, 0.27]},
+    {"name": "updated_note", "rect": [0.199, 0.958, 0.12, 0.018]}
+  ],
+  "other_visible_text": ["Workspace", "Overview", "October 23, 2026", "New booking", "A little room for everything you are building.", "Upcoming bookings", "View all", "Make room for ideas.", "Your next great project starts here.", "Explore spaces", "Last updated just now"],
+  "chart_observations": "Smooth dark-green line with a pale green area fill. Approximate daily values 11, 22, 34, 38, 42, 29, 13. Friday has a lime point and dark tooltip. Utilization is a thick lime ring with a muted green remainder."
+}

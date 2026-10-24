@@ -1,0 +1,74 @@
+[
+  {
+    "case": "smith-sol",
+    "stage": 1,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  },
+  {
+    "case": "smith-sol",
+    "stage": 2,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  },
+  {
+    "case": "smith-sol",
+    "stage": 3,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  },
+  {
+    "case": "smith-astra",
+    "stage": 1,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  },
+  {
+    "case": "smith-astra",
+    "stage": 2,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  },
+  {
+    "case": "smith-astra",
+    "stage": 3,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  },
+  {
+    "case": "codex-sol",
+    "stage": 1,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  },
+  {
+    "case": "codex-sol",
+    "stage": 2,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  },
+  {
+    "case": "codex-sol",
+    "stage": 3,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  },
+  {
+    "case": "codex-astra",
+    "stage": 1,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  },
+  {
+    "case": "codex-astra",
+    "stage": 2,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  },
+  {
+    "case": "codex-astra",
+    "stage": 3,
+    "copied_reference_files": [],
+    "embedded_reference_data": []
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "browser": "155.0.8059.85",
+  "four_reconstruction_images_load": [
+    "smith-sol",
+    "codex-sol",
+    "smith-astra",
+    "codex-astra"
+  ],
+  "comparison_modes_passed": true,
+  "keyboard_slider_passed": true,
+  "method_disclosure_opens": true,
+  "local_links_checked": 20,
+  "broken_links": [],
+  "mobile_horizontal_overflow": false,
+  "javascript_errors": []
+}

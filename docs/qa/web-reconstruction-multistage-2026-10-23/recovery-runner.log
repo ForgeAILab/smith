@@ -1,0 +1,4 @@
+{"case": "smith-sol", "stage": 1, "status": "started", "resume": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84"}
+{"case": "smith-sol", "stage": 1, "status": "completed", "elapsed_seconds": 1038.96, "session_id": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84", "cached_input_percent": 21.26}
+{"case": "smith-sol", "stage": 2, "status": "started", "resume": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84"}
+{"case": "smith-sol", "stage": 2, "status": "timeout", "elapsed_seconds": 601.4, "session_id": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84", "cached_input_percent": null}

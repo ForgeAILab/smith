@@ -1,0 +1,22 @@
+{
+  "page_title": "Your spaces, in sync.",
+  "recognition_marker": "BOARD 7F2A9C",
+  "sidebar_labels": ["WAYFINDER", "Alder House", "Overview", "Bookings", "Spaces", "Members", "Reports", "Settings", "Alex Morgan"],
+  "metrics": [{"label":"Monthly revenue","value":"$24,580","detail":"+12.8% this month"},{"label":"Occupancy","value":"84%","detail":"+6.2% this month"},{"label":"Active members","value":"128","detail":"+14 this month"},{"label":"Available desks","value":"18","detail":"Across 4 spaces"}],
+  "table_headers": ["Member", "Space", "Date", "Status"],
+  "table_rows": [["JC · Jamie Chen","Studio 02","Oct 24, 09:00","Confirmed"],["OR · Olivia Reed","Meeting room A","Oct 24, 11:30","Pending"],["NW · Noah Williams","Desk 14","Oct 24, 14:00","Confirmed"]],
+  "chart_labels": ["Booking activity","Week","Month","0","20","40","60","Mon","Tue","Wed","Thu","Fri","Sat","Sun","Fri · 42 bookings","Space utilization","84%","24 of 28 spaces active","Desks","Studios","Meeting rooms"],
+  "other_visible_text": ["Workspace / Overview","A little room for everything you are building.","October 23, 2026","New booking","Upcoming bookings","View all","Make room for ideas.","Your next great project starts here.","Explore spaces","Last updated just now"],
+  "dominant_colors": {"background":"#faf9f5","sidebar":"#0b3326","text":"#0a141b","heading":"#0a3327","muted":"#697078","border":"#d8dcde","lime":"#d8ff91","ring":"#c8ff60","promo":"#e2f8b7"},
+  "major_regions": [
+    {"name":"sidebar","rect":[0,0,0.174,1]},
+    {"name":"header","rect":[0.199,0.019,0.787,0.131]},
+    {"name":"metrics","rect":[0.199,0.175,0.786,0.145]},
+    {"name":"booking_activity","rect":[0.199,0.339,0.525,0.321]},
+    {"name":"space_utilization","rect":[0.733,0.339,0.253,0.322]},
+    {"name":"upcoming_bookings","rect":[0.199,0.675,0.474,0.267]},
+    {"name":"ideas_promotion","rect":[0.682,0.674,0.304,0.271]},
+    {"name":"account","rect":[0.013,0.879,0.147,0.092]},
+    {"name":"update_note","rect":[0.199,0.973,0.15,0.017]}
+  ]
+}

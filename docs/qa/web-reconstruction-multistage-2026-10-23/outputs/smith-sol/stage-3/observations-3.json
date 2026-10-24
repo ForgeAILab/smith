@@ -1,0 +1,40 @@
+{
+  "page_title": "Every booking, in view.",
+  "recognition_marker": "BOOKINGS C6E2A8",
+  "sidebar_labels": ["Alder House", "Overview", "Bookings", "Spaces", "Members", "Reports", "Settings", "Alex Morgan"],
+  "metrics": [
+    {"label": "Total bookings", "value": "48", "detail": "+12% this month"},
+    {"label": "Rooms booked", "value": "12", "detail": "+8% this month"},
+    {"label": "Pending approval", "value": "6", "detail": "+50% this month"}
+  ],
+  "table_headers": ["Member", "Space", "Date & time", "Status", null],
+  "table_rows": [
+    ["JC", "Jamie Chen", "Studio 02", "Oct 24, 09:00", "Confirmed"],
+    ["OR", "Olivia Reed", "Meeting room A", "Oct 24, 11:30", "Pending"],
+    ["NW", "Noah Williams", "Desk 14", "Oct 24, 14:00", "Confirmed"],
+    ["MP", "Maya Patel", "Meeting room B", "Oct 25, 10:00", "Confirmed"],
+    ["LB", "Lucas Brown", "Studio 01", "Oct 25, 13:00", "Pending"],
+    ["EW", "Emma Wilson", "Desk 08", "Oct 26, 09:30", "Confirmed"]
+  ],
+  "tabs": ["All bookings", "Confirmed", "Pending"],
+  "search_placeholder": "Search bookings",
+  "calendar_text": {"heading": "This week", "month": "October 2026", "days": ["Mon 19", "Tue 20", "Wed 21", "Thu 22", "Fri 23", "Sat 24", "Sun 25"], "selected_day": "Fri 23", "next_heading": "Next up", "member": "Jamie Chen", "initials": "JC", "space": "Studio 02", "time": "Tomorrow at 09:00", "cta": "View calendar"},
+  "dominant_colors": {"canvas": "#faf9f5", "sidebar": "#0c3326", "heading": "#0c3326", "text": "#09131b", "muted": "#666e77", "panels": "#ffffff", "border": "#d8dde0", "selected": "#dbff96", "positive": "#087617", "confirmed": "#d0f3c3", "pending": "#ffd0c0", "avatar_purple": "#e5caff", "avatar_yellow": "#fcf0b1", "avatar_mint": "#b8f0d6"},
+  "major_regions": [
+    {"name": "sidebar", "rect": [0, 0, 0.1738, 1]},
+    {"name": "toolbar", "rect": [0.1992, 0.0186, 0.7871, 0.0439]},
+    {"name": "heading and subtitle", "rect": [0.1992, 0.0674, 0.4486, 0.0801]},
+    {"name": "metric cards", "rect": [0.1992, 0.1758, 0.7865, 0.1445]},
+    {"name": "booking list panel", "rect": [0.1992, 0.3389, 0.5553, 0.6045]},
+    {"name": "filters and search", "rect": [0.2135, 0.3623, 0.5273, 0.0430]},
+    {"name": "booking table", "rect": [0.2142, 0.4346, 0.5254, 0.4180]},
+    {"name": "pagination", "rect": [0.2135, 0.8789, 0.5273, 0.0430]},
+    {"name": "week and next booking panel", "rect": [0.7643, 0.3389, 0.2214, 0.6045]},
+    {"name": "week strip", "rect": [0.7773, 0.4082, 0.1947, 0.1221]},
+    {"name": "next booking card", "rect": [0.7773, 0.6143, 0.1947, 0.1270]},
+    {"name": "calendar action", "rect": [0.7773, 0.8672, 0.1947, 0.0547]},
+    {"name": "profile", "rect": [0.0130, 0.8936, 0.1471, 0.0732]}
+  ],
+  "other_visible_text": ["Workspace / Bookings", "Plan the week. Keep everyone in sync.", "Oct 23, 2026", "New booking", "All spaces", "Showing 1–6 of 48 bookings", "1", "2", "3", "4", "5"],
+  "geometry_notes": ["Shared sidebar width 267px; content x=306 to x=1515.", "Three metric cards at x=306,709,1114; y=180 to 327.", "Booking list x=306 to1159 and calendar x=1174 to1514, both y=347 to966.", "Booking filters at x=328 y=371; search x=754 width229; spaces x=994 width144.", "Six booking rows have approximately65px height and44px avatars; headers are14px and body text15–16px.", "Bookings is selected; New booking uses lime rather than the dashboard's forest button."]
+}

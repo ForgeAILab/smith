@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WAYFINDER · Three-stage image benchmark</title>
+<style>
+:root{color-scheme:light;--ink:#163d2d;--paper:#f5f6f0;--line:#ccd5ca;--accent:#d1fc81}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,sans-serif}main{max-width:1420px;margin:auto;padding:36px 28px 60px}h1{font-size:clamp(28px,4vw,48px);line-height:1.12;letter-spacing:-.035em;margin:8px 0 16px}h2{font-size:21px;margin:30px 0 12px}p{max-width:960px}a{color:inherit;text-underline-offset:3px}.kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase}button,select,input{font:inherit}button,select{background:white;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:9px 12px}button{cursor:pointer}button[aria-pressed=true]{background:var(--accent);border-color:var(--ink)}:focus-visible{outline:3px solid #609430;outline-offset:3px}.controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:20px 0 12px}.control{display:flex;gap:7px;align-items:center}.viewer{position:relative;background:white;border:1px solid var(--line);border-radius:8px;overflow:hidden;aspect-ratio:1.5}.viewer img{position:absolute;width:100%;height:100%;object-fit:contain}.viewer .actual{opacity:1}.viewer.mode-reference .actual{opacity:0}.viewer.mode-result .reference{visibility:hidden}.viewer.mode-overlay .actual{opacity:var(--opacity,.5)}.caption{display:flex;justify-content:space-between;gap:15px;font-size:13px;margin-top:7px;flex-wrap:wrap}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px}table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:14px}td,th{padding:13px 16px;border-bottom:1px solid var(--line);text-align:left}th{background:#e8eddf;font-size:12px;text-transform:uppercase;letter-spacing:.05em}tbody tr:last-child td{border-bottom:0}.selected{background:#e6f4cb}.good{color:#245c30}.bad{color:#97431d}.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:26px 0}.fact{background:white;border:1px solid var(--line);border-radius:8px;padding:16px}.fact strong{font-size:26px;display:block}.fact span{font-size:13px}details{padding:14px 0;border-bottom:1px solid var(--line)}summary{cursor:pointer;font-weight:600}.links{display:flex;gap:12px;flex-wrap:wrap}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:400px;overflow:auto}footer{margin-top:30px;font-size:13px}.screen-link{font-size:13px}#checks{padding-left:20px}input[type=range]{width:140px}@media(max-width:640px){main{padding:24px 14px}.facts{grid-template-columns:1fr}.control{width:100%}.control select{flex:1;min-width:0}.caption{font-size:11px}.viewer{border-radius:3px}}
+</style>
+<main>
+<div class="kicker">Smith × Codex · Sol × Astra · 23 October 2026</div>
+<h1>Three images. A revision.<br>A second page.</h1>
+<p>Each arm built the dashboard from three horizontal image parts, resumed the same session to apply a changed design, then resumed again to add Bookings. The final checkpoint checks that the revised dashboard survived. Every screenshot below is a real Chrome render of the model's frozen output.</p>
+<div class="facts"><div class="fact"><strong id="completed">—</strong><span>completed turns across four arms</span></div><div class="fact"><strong id="recognized">—</strong><span>image identifiers transcribed correctly</span></div><div class="fact"><strong id="retained">—</strong><span>arms retained the revised dashboard</span></div></div>
+<div class="controls">
+<label class="control">Checkpoint <select id="checkpoint"><option value="0">1 · Build from three parts</option><option value="1">2 · Apply the revision</option><option value="2">3 · Add Bookings</option><option value="3">3 · Dashboard after adding Bookings</option></select></label>
+<label class="control">Arm <select id="arm"></select></label>
+<label class="control">Viewport <select id="viewport"><option value="desktop">1536 × 1024</option><option value="768">768 × 1024</option><option value="375">375 × 1024</option></select></label>
+</div>
+<div class="controls"><button data-mode="result" aria-pressed="true">Result</button><button data-mode="reference" aria-pressed="false">Reference</button><button data-mode="overlay" aria-pressed="false">Overlay</button><label>Result opacity <input id="opacity" type="range" min="0" max="100" value="50"></label></div>
+<div class="viewer mode-result" id="viewer"><img class="reference" id="reference" alt="Reference screenshot"><img class="actual" id="actual" alt="Rendered model output"><p id="missing" hidden style="position:absolute;inset:20px;background:white;padding:20px"></p></div>
+<div class="caption"><span id="caption"></span><span class="links"><a id="open" target="_blank" rel="noopener">Open generated page ↗</a><a id="screenshot" target="_blank" rel="noopener">Full screenshot ↗</a><a id="contact" target="_blank" rel="noopener">All arms ↗</a></span></div>
+<h2>Checkpoint comparison</h2><div class="table-wrap"><table><thead><tr><th>Arm</th><th>Text anchors</th><th>Image identifier</th><th>Pixel SSIM</th><th>Cached input this turn</th><th>375px overflow</th><th>Elapsed</th></tr></thead><tbody id="scores"></tbody></table></div>
+<h2>What this run checked</h2><ul id="checks"></ul>
+<details><summary>Cache usage across the three turns</summary><div class="table-wrap"><table><thead><tr><th>Arm</th><th>Stage 1</th><th>Stage 2</th><th>Stage 3</th><th>Weighted total</th><th>Uncached tokens</th></tr></thead><tbody id="cache"></tbody></table></div><p>The Smith arms use the fixed ChatGPT serializer. Percentages are provider-reported cached input divided by cached plus uncached input. They are observations of these runs; workloads, provider warmth, tool schemas and history sizes differ.</p></details>
+<details><summary>Protocol and limits</summary><p>Medium reasoning effort, initial 600-second stage limits, four concurrent isolated projects. Each arm keeps one session and its files across the requested stages. Initial stage prompts and images match across arms. Both Smith arms received documented interruption recoveries; original logs, reported usage and extra elapsed time are retained. Smith/Sol's stages 2 and 3 wrote their files but reached their 600/900-second limits before a final answer. Stage 3 continued in the same session after copying session storage to the local volume. All produced pages passed the external browser checks. No evaluator feedback or repairs were supplied.</p><ul id="limits"></ul><p>References are generated test fixtures. Stage 1 receives only three crops, not the full source image. Stage 2 receives the updated dashboard. Stage 3 receives the new Bookings page and a reminder image of the updated dashboard. A marker and several changed values occur only in images.</p><div class="links"><a href="references/part-1.png">Part 1</a><a href="references/part-2.png">Part 2</a><a href="references/part-3.png">Part 3</a><a href="prompt-1.txt">Prompt 1</a><a href="prompt-2.txt">Prompt 2</a><a href="prompt-3.txt">Prompt 3</a><a href="prompt-recovery.txt">Recovery prompt</a><a href="prompt-recovery-3.txt">Page-add recovery</a><a href="storage-correction.json">Storage correction</a><a href="summary.json">Full results JSON</a><a href="image-history-audit.json">Image byte audit</a><a href="../cache-prefix-investigation-2026-10-23/REPORT.md">Cache fix evidence</a></div></details>
+<details><summary>Selected output details</summary><pre id="detail"></pre></details>
+<footer>SSIM measures rendered similarity, including spacing and typography. It does not by itself measure whether a model received or understood an image. The identifier, observation files, changed values and page preservation checks provide separate evidence.</footer>
+</main>
+<script>
+const data=__DATA__;
+const specs=[{stage:1,page:'index.html',ref:'original.png'},{stage:2,page:'index.html',ref:'revision.png'},{stage:3,page:'bookings.html',ref:'bookings.png'},{stage:3,page:'index.html',ref:'revision.png'}];
+const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct=x=>x==null?'—':x.toFixed(1)+'%';
+data.cases.forEach(c=>{$('arm').add(new Option(c.case,c.case));});
+$('completed').textContent=data.cases.reduce((n,c)=>n+c.completed_stages,0)+'/12';
+const recognition=data.evaluation.results.filter(r=>!(r.stage===3&&r.page==='index.html'));
+$('recognized').textContent=recognition.filter(r=>r.observation_marker_correct).length+'/'+recognition.length;
+$('retained').textContent=data.evaluation.dashboard_preservation.filter(r=>r.revision_retained).length+'/4';
+$('cache').innerHTML=data.cases.map(c=>'<tr><td>'+esc(c.case)+'</td>'+[1,2,3].map(stage=>'<td>'+pct(c.turns.find(t=>t.stage===stage)?.cached_input_percent)+'</td>').join('')+'<td>'+pct(c.cached_input_percent)+'</td><td>'+c.uncached_input.toLocaleString()+'</td></tr>').join('');
+$('limits').innerHTML=data.limitations.map(t=>'<li>'+esc(t)+'</li>').join('');
+function update(){
+const spec=specs[+$('checkpoint').value],arm=$('arm').value,width=$('viewport').value;
+const row=data.evaluation.results.find(r=>r.case===arm&&r.stage===spec.stage&&r.page===spec.page);
+const turn=data.runs.find(r=>r.case===arm&&r.stage===spec.stage);
+$('reference').src='references/'+spec.ref;
+const available=!!row?.screenshots;
+$('actual').hidden=!available;$('missing').hidden=available;
+if(available)$('actual').src=row.screenshots[width];
+else{$('actual').removeAttribute('src');$('missing').textContent='No completed page for this checkpoint. See retained timeout and recovery logs in the detailed results.';}
+$('actual').alt=arm+' stage '+spec.stage+' '+spec.page+' rendered at '+width+' width';
+document.querySelectorAll('[data-mode]').forEach(b=>b.disabled=width!=='desktop'&&b.dataset.mode!=='result');
+if(width!=='desktop'){document.querySelector('[data-mode="result"]').click();}
+$('viewer').style.aspectRatio=width==='desktop'?'1.5':(+width/1024).toString();
+$('viewer').style.maxWidth=width==='desktop'?'none':width+'px';
+$('viewer').style.marginInline='auto';
+$('reference').style.objectFit=width==='desktop'?'contain':'contain';
+$('open').hidden=!available;$('screenshot').hidden=!available;
+$('open').href=available?'outputs/'+arm+'/stage-'+spec.stage+'/'+spec.page:'#';
+$('screenshot').href=available?row.screenshots[width]:'#';$('contact').href='contact-stage-'+spec.stage+'-'+spec.page.replace('.html','')+'.png';
+$('caption').textContent=arm+' · stage '+spec.stage+' · '+spec.page+(available?' · '+row.text_anchors_matched+'/'+row.text_anchors_total+' text anchors · desktop SSIM '+row.pixel_metrics.ssim.toFixed(3)+(width==='desktop'?'':' · responsive output; no mobile reference'):' · no completed page');
+$('scores').innerHTML=data.cases.map(c=>{const s=data.evaluation.results.find(r=>r.case===c.case&&r.stage===spec.stage&&r.page===spec.page),t=c.turns.find(t=>t.stage===spec.stage),overflow=s?.responsive?.find(r=>r.width===375).horizontalOverflow;return '<tr class="'+(c.case===arm?'selected':'')+'"><td><button class="choose" data-case="'+esc(c.case)+'">'+esc(c.case)+'</button></td><td>'+(s?.pixel_metrics?s.text_anchors_matched+'/'+s.text_anchors_total:'No output')+'</td><td class="'+(s?.marker_visible?'good':'bad')+'">'+(s?.marker_visible?'Correct':'Missing')+'</td><td>'+(s?.pixel_metrics?.ssim.toFixed(3)||'—')+'</td><td>'+pct(t?.cached_input_percent)+'</td><td class="'+(overflow?'bad':'good')+'">'+(overflow==null?'—':overflow?'Yes':'No')+'</td><td>'+(t?.elapsed_seconds.toFixed(1)||'—')+'s</td></tr>';}).join('');
+document.querySelectorAll('.choose').forEach(b=>b.onclick=()=>{$('arm').value=b.dataset.case;update();});
+let checks=available?[['Image identifier transcribed in observations',row.observation_marker_correct],['Image identifier appears on page',row.marker_visible],['All critical image values visible',Object.values(row.critical_values_visible).every(Boolean)]]:[['Page completed',false]];
+if(available&&spec.page==='index.html'&&spec.stage>1)checks.push(['Superseded content absent',!row.superseded_text_visible?.length]);
+if(row.cross_page_navigation)checks.push(['Sidebar links reach the other page',row.cross_page_navigation.works]);
+Object.entries(row.interactions||row.booking_dialog||{}).filter(([k,v])=>typeof v==='boolean').forEach(([k,v])=>checks.push([k.replaceAll('_',' '),v]));
+Object.entries(row.filters||{}).filter(([k,v])=>typeof v==='boolean').forEach(([k,v])=>checks.push([k.replaceAll('_',' '),v]));
+$('checks').innerHTML=checks.map(([label,pass])=>'<li class="'+(pass?'good':'bad')+'">'+(pass?'✓ ':'× ')+esc(label)+'</li>').join('');
+$('detail').textContent=JSON.stringify({run:turn,evaluation:row},null,2);
+}
+['checkpoint','arm','viewport'].forEach(id=>$(id).addEventListener('change',update));
+document.querySelectorAll('[data-mode]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-pressed',b===button));$('viewer').className='viewer mode-'+button.dataset.mode;});
+$('opacity').oninput=()=>{$('viewer').style.setProperty('--opacity',$('opacity').value/100);};
+update();
+</script>
+</html>

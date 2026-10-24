@@ -1,0 +1,20 @@
+{
+  "page_title": "Your spaces, in sync.",
+  "recognition_marker": "BOARD 7F2A9C",
+  "sidebar_labels": ["Overview", "Bookings", "Spaces", "Members", "Reports", "Settings"],
+  "metrics": [{"label":"Monthly revenue","value":"$24,580"},{"label":"Occupancy","value":"84%"},{"label":"Active members","value":"128"},{"label":"Available desks","value":"18"}],
+  "table_headers": ["Member", "Space", "Date", "Status"],
+  "table_rows": [["Jamie Chen","Studio 02","Oct 24, 09:00","Confirmed"],["Olivia Reed","Meeting room A","Oct 24, 11:30","Pending"],["Noah Williams","Desk 14","Oct 24, 14:00","Confirmed"]],
+  "chart_labels": {"title":"Booking activity","periods":["Week","Month"],"x_axis":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"y_axis":["0","20","40","60"],"tooltip":"Fri · 42 bookings","utilization_title":"Space utilization","utilization_value":"84%","utilization_detail":"24 of 28 spaces active","legend":["Desks","Studios","Meeting rooms"]},
+  "dominant_colors": ["#0b3225","#fcfaf6","#d9fc96","#caff62","#0a151e","#69717a","#d7dce0"],
+  "major_regions": {
+    "sidebar":{"x":0,"y":0,"width":0.174,"height":1},
+    "top_toolbar":{"x":0.199,"y":0.018,"width":0.787,"height":0.045},
+    "heading":{"x":0.199,"y":0.064,"width":0.40,"height":0.09},
+    "metrics":{"x":0.199,"y":0.176,"width":0.787,"height":0.144},
+    "booking_chart":{"x":0.199,"y":0.339,"width":0.525,"height":0.321},
+    "utilization":{"x":0.733,"y":0.340,"width":0.253,"height":0.321},
+    "bookings_table":{"x":0.199,"y":0.675,"width":0.474,"height":0.266},
+    "promotion":{"x":0.682,"y":0.674,"width":0.304,"height":0.270}
+  }
+}

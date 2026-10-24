@@ -1,0 +1,37 @@
+{
+  "page_title": "Every booking, in view.",
+  "recognition_marker": "BOOKINGS C6E2A8",
+  "sidebar_labels": ["WAYFINDER", "Alder House", "Overview", "Bookings", "Spaces", "Members", "Reports", "Settings", "Alex Morgan"],
+  "metrics": [
+    {"label": "Total bookings", "value": "48", "change": "+12% this month"},
+    {"label": "Rooms booked", "value": "12", "change": "+8% this month"},
+    {"label": "Pending approval", "value": "6", "change": "+50% this month"}
+  ],
+  "table_headers": ["Member", "Space", "Date & time", "Status", null],
+  "table_rows": [
+    ["JC · Jamie Chen", "Studio 02", "Oct 24, 09:00", "Confirmed"],
+    ["OR · Olivia Reed", "Meeting room A", "Oct 24, 11:30", "Pending"],
+    ["NW · Noah Williams", "Desk 14", "Oct 24, 14:00", "Confirmed"],
+    ["MP · Maya Patel", "Meeting room B", "Oct 25, 10:00", "Confirmed"],
+    ["LB · Lucas Brown", "Studio 01", "Oct 25, 13:00", "Pending"],
+    ["EW · Emma Wilson", "Desk 08", "Oct 26, 09:30", "Confirmed"]
+  ],
+  "tabs": ["All bookings", "Confirmed", "Pending"],
+  "search_placeholder": "Search bookings",
+  "calendar_text": {"title": "This week", "month": "October 2026", "days": ["Mon 19", "Tue 20", "Wed 21", "Thu 22", "Fri 23", "Sat 24", "Sun 25"], "selected": "Fri 23", "section": "Next up", "member": "Jamie Chen", "space": "Studio 02", "time": "Tomorrow at 09:00", "cta": "View calendar"},
+  "other_visible_text": ["Workspace / Bookings", "Plan the week. Keep everyone in sync.", "Oct 23, 2026", "New booking", "All spaces", "Showing 1–6 of 48 bookings", "1", "2", "3", "4", "5"],
+  "dominant_colors": {"forest": "#0b3325", "canvas": "#faf9f6", "panel": "#ffffff", "lime": "#d9ff96", "ink": "#09131c", "muted": "#687079", "border": "#d7dce0", "confirmed": "#daf6ce", "pending": "#ffcfbf", "purple_avatar": "#e7caff", "yellow_avatar": "#fff0b3", "mint_avatar": "#b9efd7"},
+  "major_regions": [
+    {"name": "sidebar", "rect": [0, 0, 0.17383, 1]},
+    {"name": "top_controls", "rect": [0.19922, 0.01855, 0.78711, 0.04395]},
+    {"name": "heading", "rect": [0.19922, 0.06543, 0.44922, 0.08594]},
+    {"name": "metrics", "rect": [0.19922, 0.17578, 0.78711, 0.14453]},
+    {"name": "booking_list_panel", "rect": [0.19922, 0.33887, 0.55534, 0.60352]},
+    {"name": "filters", "rect": [0.21354, 0.3623, 0.52734, 0.04297]},
+    {"name": "booking_table", "rect": [0.21419, 0.4375, 0.52539, 0.41504]},
+    {"name": "pagination", "rect": [0.21354, 0.87891, 0.52734, 0.04199]},
+    {"name": "week_panel", "rect": [0.76432, 0.33887, 0.22135, 0.60352]},
+    {"name": "next_booking", "rect": [0.77734, 0.61426, 0.19466, 0.12793]},
+    {"name": "calendar_button", "rect": [0.77734, 0.86621, 0.19466, 0.05566]}
+  ]
+}

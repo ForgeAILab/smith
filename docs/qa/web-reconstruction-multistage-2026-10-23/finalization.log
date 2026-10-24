@@ -1,0 +1,1084 @@
+{"phase": "running", "command": ["/opt/homebrew/opt/python@3.15/bin/python3.15", "finalize_runs.py"]}
+[
+  {
+    "case": "smith-sol",
+    "stage": 1,
+    "status": "completed",
+    "cached_input_percent": 20.58,
+    "elapsed_seconds": 1038.96
+  },
+  {
+    "case": "smith-sol",
+    "stage": 2,
+    "status": "timeout",
+    "cached_input_percent": 11.68,
+    "elapsed_seconds": 601.4
+  },
+  {
+    "case": "smith-sol",
+    "stage": 3,
+    "status": "timeout",
+    "cached_input_percent": 9.21,
+    "elapsed_seconds": 900.01
+  },
+  {
+    "case": "smith-astra",
+    "stage": 1,
+    "status": "completed",
+    "cached_input_percent": 27.96,
+    "elapsed_seconds": 344.93
+  },
+  {
+    "case": "smith-astra",
+    "stage": 2,
+    "status": "completed",
+    "cached_input_percent": 19.85,
+    "elapsed_seconds": 268.92
+  },
+  {
+    "case": "smith-astra",
+    "stage": 3,
+    "status": "completed",
+    "cached_input_percent": 19.02,
+    "elapsed_seconds": 1317.9099999999999
+  },
+  {
+    "case": "codex-sol",
+    "stage": 1,
+    "status": "completed",
+    "cached_input_percent": 85.21,
+    "elapsed_seconds": 329.07
+  },
+  {
+    "case": "codex-sol",
+    "stage": 2,
+    "status": "completed",
+    "cached_input_percent": 89.47,
+    "elapsed_seconds": 125.17
+  },
+  {
+    "case": "codex-sol",
+    "stage": 3,
+    "status": "completed",
+    "cached_input_percent": 93.43,
+    "elapsed_seconds": 304.23
+  },
+  {
+    "case": "codex-astra",
+    "stage": 1,
+    "status": "completed",
+    "cached_input_percent": 87.58,
+    "elapsed_seconds": 215.13
+  },
+  {
+    "case": "codex-astra",
+    "stage": 2,
+    "status": "completed",
+    "cached_input_percent": 91.68,
+    "elapsed_seconds": 81.63
+  },
+  {
+    "case": "codex-astra",
+    "stage": 3,
+    "status": "completed",
+    "cached_input_percent": 94.65,
+    "elapsed_seconds": 154.98
+  }
+]
+{"phase": "running", "command": ["uv", "run", "--with", "pillow", "python", "audit_images.py"]}
+[
+  {
+    "case": "smith-sol",
+    "session_id": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+    "all_six_images_retained_in_order": true,
+    "all_persisted_image_bytes_match_source_files": true,
+    "scope": "Persisted canonical inputs; not an interception of every outgoing native request."
+  },
+  {
+    "case": "smith-astra",
+    "session_id": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6",
+    "all_six_images_retained_in_order": true,
+    "all_persisted_image_bytes_match_source_files": true,
+    "scope": "Persisted canonical inputs; not an interception of every outgoing native request."
+  },
+  {
+    "case": "codex-sol",
+    "session_id": "01a16ac3-f46d-7800-bea6-278189bd85d1",
+    "all_six_images_retained_in_order": true,
+    "all_persisted_image_bytes_match_source_files": true,
+    "scope": "Persisted canonical inputs; not an interception of every outgoing native request."
+  },
+  {
+    "case": "codex-astra",
+    "session_id": "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+    "all_six_images_retained_in_order": true,
+    "all_persisted_image_bytes_match_source_files": true,
+    "scope": "Persisted canonical inputs; not an interception of every outgoing native request."
+  }
+]
+{"phase": "running", "command": ["uv", "run", "--with", "playwright", "--with", "pillow", "--with", "numpy", "--with", "scikit-image", "python", "evaluate.py"]}
+{"case": "smith-sol", "stage": 1, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.82644, "blurred_ssim_radius_3": 0.91342}, "superseded_text_visible": []}
+{"case": "smith-sol", "stage": 2, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.83618, "blurred_ssim_radius_3": 0.93542}, "superseded_text_visible": []}
+{"case": "smith-sol", "stage": 3, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.83618, "blurred_ssim_radius_3": 0.93542}, "superseded_text_visible": [], "cross_page_navigation": {"works": true, "destination": "http://127.0.0.1:52026/outputs/smith-sol/stage-3/bookings.html"}}
+{"case": "smith-sol", "stage": 3, "page": "bookings.html", "status": "rendered", "text_anchors_matched": 71, "marker_visible": true, "pixel_metrics": {"ssim": 0.83597, "blurred_ssim_radius_3": 0.9454}, "superseded_text_visible": [], "cross_page_navigation": {"works": true, "destination": "http://127.0.0.1:52026/outputs/smith-sol/stage-3/index.html"}}
+{"case": "smith-astra", "stage": 1, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.82293, "blurred_ssim_radius_3": 0.93629}, "superseded_text_visible": []}
+{"case": "smith-astra", "stage": 2, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.84473, "blurred_ssim_radius_3": 0.94413}, "superseded_text_visible": []}
+{"case": "smith-astra", "stage": 3, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.84473, "blurred_ssim_radius_3": 0.94413}, "superseded_text_visible": [], "cross_page_navigation": {"works": true, "destination": "http://127.0.0.1:52026/outputs/smith-astra/stage-3/bookings.html"}}
+{"case": "smith-astra", "stage": 3, "page": "bookings.html", "status": "rendered", "text_anchors_matched": 71, "marker_visible": true, "pixel_metrics": {"ssim": 0.85043, "blurred_ssim_radius_3": 0.95098}, "superseded_text_visible": [], "cross_page_navigation": {"works": true, "destination": "http://127.0.0.1:52026/outputs/smith-astra/stage-3/index.html"}}
+{"case": "codex-sol", "stage": 1, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.83327, "blurred_ssim_radius_3": 0.91922}, "superseded_text_visible": []}
+{"case": "codex-sol", "stage": 2, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.84371, "blurred_ssim_radius_3": 0.9314}, "superseded_text_visible": []}
+{"case": "codex-sol", "stage": 3, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.84371, "blurred_ssim_radius_3": 0.9314}, "superseded_text_visible": [], "cross_page_navigation": {"works": true, "destination": "http://127.0.0.1:52026/outputs/codex-sol/stage-3/bookings.html"}}
+{"case": "codex-sol", "stage": 3, "page": "bookings.html", "status": "rendered", "text_anchors_matched": 71, "marker_visible": true, "pixel_metrics": {"ssim": 0.85001, "blurred_ssim_radius_3": 0.95187}, "superseded_text_visible": [], "cross_page_navigation": {"works": true, "destination": "http://127.0.0.1:52026/outputs/codex-sol/stage-3/index.html"}}
+{"case": "codex-astra", "stage": 1, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.83314, "blurred_ssim_radius_3": 0.93281}, "superseded_text_visible": []}
+{"case": "codex-astra", "stage": 2, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.83579, "blurred_ssim_radius_3": 0.93198}, "superseded_text_visible": []}
+{"case": "codex-astra", "stage": 3, "page": "index.html", "status": "rendered", "text_anchors_matched": 64, "marker_visible": true, "pixel_metrics": {"ssim": 0.83579, "blurred_ssim_radius_3": 0.93198}, "superseded_text_visible": [], "cross_page_navigation": {"works": true, "destination": "http://127.0.0.1:52026/outputs/codex-astra/stage-3/bookings.html"}}
+{"case": "codex-astra", "stage": 3, "page": "bookings.html", "status": "rendered", "text_anchors_matched": 71, "marker_visible": true, "pixel_metrics": {"ssim": 0.85142, "blurred_ssim_radius_3": 0.95549}, "superseded_text_visible": [], "cross_page_navigation": {"works": true, "destination": "http://127.0.0.1:52026/outputs/codex-astra/stage-3/index.html"}}
+{"phase": "running", "command": ["uv", "run", "--with", "pillow", "python", "build_report.py"]}
+[
+  {
+    "case": "smith-sol",
+    "completed_stages": 1,
+    "session_id": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+    "same_session_all_stages": true,
+    "cached_input": 284672,
+    "uncached_input": 1874685,
+    "cached_input_percent": 13.18,
+    "elapsed_seconds": 2540.37,
+    "turns": [
+      {
+        "stage": 1,
+        "status": "completed",
+        "elapsed_seconds": 1038.96,
+        "cached_input_percent": 20.58,
+        "usage": {
+          "input_cached": 126080,
+          "input_uncached": 486492,
+          "output": 14339,
+          "reasoning": 1133,
+          "provider_attempts": 30,
+          "provider_attempts_with_reported_usage": 29
+        },
+        "recovery_of_initial_timeout": {
+          "case": "smith-sol",
+          "stage": 1,
+          "model": "gpt-6.1-sol",
+          "harness": "smith",
+          "command": [
+            "/private/tmp/smith-cache-prefix-versioned",
+            "--project",
+            "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol",
+            "--profile",
+            "web-benchmark",
+            "--effort",
+            "medium",
+            "--approval",
+            "allow-all",
+            "--output-format",
+            "stream-json",
+            "--image",
+            "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol/part-1.png",
+            "--image",
+            "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol/part-2.png",
+            "--image",
+            "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol/part-3.png",
+            "-p",
+            "-"
+          ],
+          "project": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol",
+          "resumed_session": null,
+          "started_at_epoch": 1792792589.267311,
+          "status": "timeout",
+          "prompt_sha256": "5d4f0056e91e89adba9c26a6319eb301053eab6a20226eedae98f46171731f95",
+          "images": [
+            {
+              "name": "part-1.png",
+              "sha256": "6f9d37215219315c3748eda8e93b061db2e4194f39be691c73c0be7f04c87f89"
+            },
+            {
+              "name": "part-2.png",
+              "sha256": "57aae4961271a5c3287e2965a88169f1079d96618ebfb51a5a4c19de61119aba"
+            },
+            {
+              "name": "part-3.png",
+              "sha256": "7eaf959ae5eec8dc72d77bbd978ed051fd5dbc51c4c8e25b2a48c0d5409bdc2f"
+            }
+          ],
+          "exit_code": -9,
+          "elapsed_seconds": 600.02,
+          "session_id": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+          "usage": {
+            "input_cached": 35456,
+            "input_uncached": 72537,
+            "output": 10748
+          },
+          "cached_input_percent": null,
+          "generated_files": [
+            {
+              "path": "index.html",
+              "sha256": "7f5ac98ba8854d5b72fc650cb1f80310af924f5013eab2cfef576fad6c35be72"
+            },
+            {
+              "path": "observations-1.json",
+              "sha256": "2eb50c247cd8e44f7b2480fe5b5799973b6ad9fca1e4c56f80d1f2cd5f6c2cfa"
+            },
+            {
+              "path": "DESIGN.md",
+              "sha256": "8f33c0f633f839125aa8e8070df32f847b688f78742b4d41ef98cb65e22dacf4"
+            }
+          ]
+        }
+      },
+      {
+        "stage": 2,
+        "status": "timeout",
+        "elapsed_seconds": 601.4,
+        "cached_input_percent": 11.68,
+        "usage": {
+          "input_cached": 76544,
+          "input_uncached": 578975,
+          "output": 4914,
+          "reasoning": 1659,
+          "provider_attempts": 16,
+          "provider_attempts_with_reported_usage": 16
+        }
+      },
+      {
+        "stage": 3,
+        "status": "timeout",
+        "elapsed_seconds": 900.01,
+        "cached_input_percent": 9.21,
+        "usage": {
+          "input_cached": 82048,
+          "input_uncached": 809218,
+          "output": 17049,
+          "reasoning": 2742,
+          "provider_attempts": 16,
+          "provider_attempts_with_reported_usage": 15
+        }
+      }
+    ],
+    "screens": [
+      {
+        "stage": 1,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.82644,
+          "blurred_ssim_radius_3": 0.91342
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$24,580": true,
+          "84%": true,
+          "128": true,
+          "18": true,
+          "BOARD 7F2A9C": true
+        }
+      },
+      {
+        "stage": 2,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.83618,
+          "blurred_ssim_radius_3": 0.93542
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$31,420": true,
+          "76%": true,
+          "146": true,
+          "24": true,
+          "21 of 28 spaces active": true,
+          "Room to grow.": true,
+          "Find your next space": true
+        }
+      },
+      {
+        "stage": 3,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.83618,
+          "blurred_ssim_radius_3": 0.93542
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$31,420": true,
+          "76%": true,
+          "146": true,
+          "24": true,
+          "21 of 28 spaces active": true,
+          "Room to grow.": true,
+          "Find your next space": true
+        }
+      },
+      {
+        "stage": 3,
+        "page": "bookings.html",
+        "text_anchors_matched": 71,
+        "text_anchors_total": 71,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.83597,
+          "blurred_ssim_radius_3": 0.9454
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "48": true,
+          "12": true,
+          "6": true,
+          "Jamie Chen": true,
+          "Maya Patel": true,
+          "Lucas Brown": true,
+          "Emma Wilson": true
+        }
+      }
+    ],
+    "dashboard_preservation": {
+      "case": "smith-sol",
+      "revision_retained": true,
+      "stage2_vs_stage3": {
+        "ssim": 1.0,
+        "blurred_ssim_radius_3": 1.0
+      },
+      "stage2_vs_stage3_visible_text_equal": true
+    }
+  },
+  {
+    "case": "smith-astra",
+    "completed_stages": 3,
+    "session_id": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6",
+    "same_session_all_stages": true,
+    "cached_input": 314624,
+    "uncached_input": 1205252,
+    "cached_input_percent": 20.7,
+    "elapsed_seconds": 1931.76,
+    "turns": [
+      {
+        "stage": 1,
+        "status": "completed",
+        "elapsed_seconds": 344.93,
+        "cached_input_percent": 27.96,
+        "usage": {
+          "input_cached": 72192,
+          "input_uncached": 186018,
+          "output": 10973,
+          "reasoning": 262,
+          "provider_attempts": 16,
+          "provider_attempts_with_reported_usage": 16
+        }
+      },
+      {
+        "stage": 2,
+        "status": "completed",
+        "elapsed_seconds": 268.92,
+        "cached_input_percent": 19.85,
+        "usage": {
+          "input_cached": 59776,
+          "input_uncached": 241415,
+          "output": 3097,
+          "reasoning": 874,
+          "provider_attempts": 11,
+          "provider_attempts_with_reported_usage": 11
+        }
+      },
+      {
+        "stage": 3,
+        "status": "completed",
+        "elapsed_seconds": 1317.9099999999999,
+        "cached_input_percent": 19.02,
+        "usage": {
+          "input_cached": 182656,
+          "input_uncached": 777819,
+          "output": 13371,
+          "reasoning": 1882,
+          "provider_attempts": 23,
+          "provider_attempts_with_reported_usage": 22
+        },
+        "recovery_of_initial_timeout": {
+          "case": "smith-astra",
+          "stage": 3,
+          "model": "gpt-6-astra",
+          "harness": "smith",
+          "command": [
+            "/private/tmp/smith-cache-prefix-versioned",
+            "--project",
+            "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-astra",
+            "--profile",
+            "web-benchmark",
+            "--effort",
+            "medium",
+            "--approval",
+            "allow-all",
+            "--output-format",
+            "stream-json",
+            "--resume",
+            "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6",
+            "--image",
+            "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-astra/bookings.png",
+            "--image",
+            "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-astra/revision.png",
+            "-p",
+            "-"
+          ],
+          "project": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-astra",
+          "resumed_session": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6",
+          "started_at_epoch": 1792793203.130065,
+          "status": "timeout",
+          "prompt_sha256": "10ea9d134b84c0d7e9dc1e931c59234a7518f416719ef32f415a818c69eac19c",
+          "images": [
+            {
+              "name": "bookings.png",
+              "sha256": "e32be86a3ddad4443d2ba2e121cb2103f10d54028d88ad62829a72312730d891"
+            },
+            {
+              "name": "revision.png",
+              "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee"
+            }
+          ],
+          "exit_code": -9,
+          "elapsed_seconds": 600.02,
+          "session_id": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6",
+          "usage": {
+            "input_cached": 116224,
+            "input_uncached": 292424,
+            "output": 2533
+          },
+          "cached_input_percent": null,
+          "generated_files": [
+            {
+              "path": "index.html",
+              "sha256": "89027925232667d2207dea70340ffa450bd3afe00f453e435e1c6ace926cae4c"
+            },
+            {
+              "path": "observations-3.json",
+              "sha256": "781e9fcfa71ce91cb537afdb8445e7f096fd5384c223927bc248308debe4b048"
+            },
+            {
+              "path": "observations-2.json",
+              "sha256": "9aeb91f618506a8b859c3942a4dd86d05469799e6901956fede9e89e9da47fa8"
+            },
+            {
+              "path": "observations-1.json",
+              "sha256": "bc4ae0c5a2f11fb585de61cfc26001bf1fff8532d14b923e55afab19c3a2eb20"
+            },
+            {
+              "path": "DESIGN.md",
+              "sha256": "be2b1bb44bf4745eb103bc72b20a5bffc02c9e05db48967d252017c8b5656917"
+            }
+          ]
+        }
+      }
+    ],
+    "screens": [
+      {
+        "stage": 1,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.82293,
+          "blurred_ssim_radius_3": 0.93629
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$24,580": true,
+          "84%": true,
+          "128": true,
+          "18": true,
+          "BOARD 7F2A9C": true
+        }
+      },
+      {
+        "stage": 2,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.84473,
+          "blurred_ssim_radius_3": 0.94413
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$31,420": true,
+          "76%": true,
+          "146": true,
+          "24": true,
+          "21 of 28 spaces active": true,
+          "Room to grow.": true,
+          "Find your next space": true
+        }
+      },
+      {
+        "stage": 3,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.84473,
+          "blurred_ssim_radius_3": 0.94413
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$31,420": true,
+          "76%": true,
+          "146": true,
+          "24": true,
+          "21 of 28 spaces active": true,
+          "Room to grow.": true,
+          "Find your next space": true
+        }
+      },
+      {
+        "stage": 3,
+        "page": "bookings.html",
+        "text_anchors_matched": 71,
+        "text_anchors_total": 71,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.85043,
+          "blurred_ssim_radius_3": 0.95098
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "48": true,
+          "12": true,
+          "6": true,
+          "Jamie Chen": true,
+          "Maya Patel": true,
+          "Lucas Brown": true,
+          "Emma Wilson": true
+        }
+      }
+    ],
+    "dashboard_preservation": {
+      "case": "smith-astra",
+      "revision_retained": true,
+      "stage2_vs_stage3": {
+        "ssim": 1.0,
+        "blurred_ssim_radius_3": 1.0
+      },
+      "stage2_vs_stage3_visible_text_equal": true
+    }
+  },
+  {
+    "case": "codex-sol",
+    "completed_stages": 3,
+    "session_id": "01a16ac3-f46d-7800-bea6-278189bd85d1",
+    "same_session_all_stages": true,
+    "cached_input": 2573568,
+    "uncached_input": 245105,
+    "cached_input_percent": 91.3,
+    "elapsed_seconds": 758.47,
+    "turns": [
+      {
+        "stage": 1,
+        "status": "completed",
+        "elapsed_seconds": 329.07,
+        "cached_input_percent": 85.21,
+        "usage": {
+          "input_cached": 296064,
+          "input_uncached": 51392,
+          "output": 16578,
+          "command_calls": 9
+        }
+      },
+      {
+        "stage": 2,
+        "status": "completed",
+        "elapsed_seconds": 125.17,
+        "cached_input_percent": 89.47,
+        "usage": {
+          "input_cached": 706560,
+          "input_uncached": 83201,
+          "output": 21993,
+          "command_calls": 4
+        }
+      },
+      {
+        "stage": 3,
+        "status": "completed",
+        "elapsed_seconds": 304.23,
+        "cached_input_percent": 93.43,
+        "usage": {
+          "input_cached": 1570944,
+          "input_uncached": 110512,
+          "output": 37203,
+          "command_calls": 7
+        }
+      }
+    ],
+    "screens": [
+      {
+        "stage": 1,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.83327,
+          "blurred_ssim_radius_3": 0.91922
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$24,580": true,
+          "84%": true,
+          "128": true,
+          "18": true,
+          "BOARD 7F2A9C": true
+        }
+      },
+      {
+        "stage": 2,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.84371,
+          "blurred_ssim_radius_3": 0.9314
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$31,420": true,
+          "76%": true,
+          "146": true,
+          "24": true,
+          "21 of 28 spaces active": true,
+          "Room to grow.": true,
+          "Find your next space": true
+        }
+      },
+      {
+        "stage": 3,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.84371,
+          "blurred_ssim_radius_3": 0.9314
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$31,420": true,
+          "76%": true,
+          "146": true,
+          "24": true,
+          "21 of 28 spaces active": true,
+          "Room to grow.": true,
+          "Find your next space": true
+        }
+      },
+      {
+        "stage": 3,
+        "page": "bookings.html",
+        "text_anchors_matched": 71,
+        "text_anchors_total": 71,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.85001,
+          "blurred_ssim_radius_3": 0.95187
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "48": true,
+          "12": true,
+          "6": true,
+          "Jamie Chen": true,
+          "Maya Patel": true,
+          "Lucas Brown": true,
+          "Emma Wilson": true
+        }
+      }
+    ],
+    "dashboard_preservation": {
+      "case": "codex-sol",
+      "revision_retained": true,
+      "stage2_vs_stage3": {
+        "ssim": 1.0,
+        "blurred_ssim_radius_3": 1.0
+      },
+      "stage2_vs_stage3_visible_text_equal": true
+    }
+  },
+  {
+    "case": "codex-astra",
+    "completed_stages": 3,
+    "session_id": "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+    "same_session_all_stages": true,
+    "cached_input": 1523968,
+    "uncached_input": 121046,
+    "cached_input_percent": 92.64,
+    "elapsed_seconds": 451.74,
+    "turns": [
+      {
+        "stage": 1,
+        "status": "completed",
+        "elapsed_seconds": 215.13,
+        "cached_input_percent": 87.58,
+        "usage": {
+          "input_cached": 222464,
+          "input_uncached": 31539,
+          "output": 10823,
+          "command_calls": 7
+        }
+      },
+      {
+        "stage": 2,
+        "status": "completed",
+        "elapsed_seconds": 81.63,
+        "cached_input_percent": 91.68,
+        "usage": {
+          "input_cached": 464000,
+          "input_uncached": 42131,
+          "output": 13614,
+          "command_calls": 4
+        }
+      },
+      {
+        "stage": 3,
+        "status": "completed",
+        "elapsed_seconds": 154.98,
+        "cached_input_percent": 94.65,
+        "usage": {
+          "input_cached": 837504,
+          "input_uncached": 47376,
+          "output": 21871,
+          "command_calls": 4
+        }
+      }
+    ],
+    "screens": [
+      {
+        "stage": 1,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.83314,
+          "blurred_ssim_radius_3": 0.93281
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$24,580": true,
+          "84%": true,
+          "128": true,
+          "18": true,
+          "BOARD 7F2A9C": true
+        }
+      },
+      {
+        "stage": 2,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.83579,
+          "blurred_ssim_radius_3": 0.93198
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$31,420": true,
+          "76%": true,
+          "146": true,
+          "24": true,
+          "21 of 28 spaces active": true,
+          "Room to grow.": true,
+          "Find your next space": true
+        }
+      },
+      {
+        "stage": 3,
+        "page": "index.html",
+        "text_anchors_matched": 64,
+        "text_anchors_total": 64,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.83579,
+          "blurred_ssim_radius_3": 0.93198
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "$31,420": true,
+          "76%": true,
+          "146": true,
+          "24": true,
+          "21 of 28 spaces active": true,
+          "Room to grow.": true,
+          "Find your next space": true
+        }
+      },
+      {
+        "stage": 3,
+        "page": "bookings.html",
+        "text_anchors_matched": 71,
+        "text_anchors_total": 71,
+        "marker_visible": true,
+        "observation_marker_correct": true,
+        "pixel_metrics": {
+          "ssim": 0.85142,
+          "blurred_ssim_radius_3": 0.95549
+        },
+        "responsive": [
+          {
+            "width": 768,
+            "scrollWidth": 768,
+            "horizontalOverflow": false
+          },
+          {
+            "width": 375,
+            "scrollWidth": 375,
+            "horizontalOverflow": false
+          }
+        ],
+        "missing_text": [],
+        "superseded_text_visible": [],
+        "critical_values_visible": {
+          "48": true,
+          "12": true,
+          "6": true,
+          "Jamie Chen": true,
+          "Maya Patel": true,
+          "Lucas Brown": true,
+          "Emma Wilson": true
+        }
+      }
+    ],
+    "dashboard_preservation": {
+      "case": "codex-astra",
+      "revision_retained": true,
+      "stage2_vs_stage3": {
+        "ssim": 1.0,
+        "blurred_ssim_radius_3": 1.0
+      },
+      "stage2_vs_stage3_visible_text_equal": true
+    }
+  }
+]
+{"phase": "running", "command": ["uv", "run", "--with", "playwright", "python", "verify_viewer.py"]}
+Installed 4 packages in 14ms
+{"browser_version": "155.0.8059.85", "selection_count": 48, "overlay_opacity": "0.8", "reference_result_modes": true, "keyboard_slider": true, "disclosures": true, "responsive": [{"width": 768, "horizontal_overflow": false}, {"width": 375, "horizontal_overflow": false}], "javascript_errors": []}
+{"phase": "complete", "viewer": "/Volumes/Data/codes/ai/tui/docs/qa/web-reconstruction-multistage-2026-10-23/comparison.html"}

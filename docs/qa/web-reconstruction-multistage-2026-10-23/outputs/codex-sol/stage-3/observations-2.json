@@ -1,0 +1,31 @@
+{
+  "page_title": "Good things are taking shape.",
+  "recognition_marker": "BOARD 9D3E6B",
+  "metrics": [
+    {"label": "Revenue", "value": "$31,420", "change": "+18.4% this month", "direction": "up", "change_color": "green"},
+    {"label": "Occupancy", "value": "76%", "change": "-8.0% this month", "direction": "down", "change_color": "red"},
+    {"label": "Active members", "value": "146", "change": "+18 this month", "direction": "up", "change_color": "green"},
+    {"label": "Available desks", "value": "24", "detail": "Across 4 spaces"}
+  ],
+  "utilization_text": {"title": "Space utilization", "value": "76%", "detail": "21 of 28 spaces active"},
+  "promo_heading": "Room to grow.",
+  "promo_cta": "Find your next space",
+  "table_rows": [
+    ["JC · Jamie Chen", "Studio 02", "Oct 24, 09:00", "Confirmed"],
+    ["OR · Olivia Reed", "Meeting room A", "Oct 24, 11:30", "Pending"],
+    ["NW · Noah Williams", "Desk 14", "Oct 24, 14:00", "Confirmed"]
+  ],
+  "changes_from_previous": [
+    "Heading changes from Your spaces, in sync. to Good things are taking shape.; the marker moves right to approximately x=1006 because of the longer heading.",
+    "Recognition marker changes from BOARD 7F2A9C to BOARD 9D3E6B.",
+    "Monthly revenue becomes Revenue; $24,580 becomes $31,420 and +12.8% becomes +18.4%.",
+    "Occupancy changes from 84% to 76%; green upward +6.2% becomes red downward -8.0%.",
+    "Active members changes from 128 to 146 and +14 becomes +18.",
+    "Available desks changes from 18 to 24; Across 4 spaces remains unchanged.",
+    "Utilization changes from 84% and 24 of 28 spaces active to 76% and 21 of 28 spaces active. The lime arc ends farther down the upper-left quadrant, at approximately x=1227, y=492.",
+    "Promo heading changes from Make room / for ideas. to Room to / grow. and uses larger serif lettering (approximately 48px).",
+    "Promo CTA changes from Explore spaces to Find your next space; supporting text and doorway/plant illustration remain.",
+    "Sidebar account divider is at y=916 and account avatar at y=940, approximately 16px higher than in the original slices.",
+    "Major content geometry remains: 267px sidebar; main starts x=306; metrics y=180; charts y=348; bookings and promo y=691. Table content, chart data, Week selection, date, subtitle and navigation labels remain unchanged."
+  ]
+}

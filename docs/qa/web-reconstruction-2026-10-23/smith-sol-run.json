@@ -1,0 +1,36 @@
+{
+  "case": "smith-sol",
+  "harness": "smith",
+  "model": "gpt-6.1-sol",
+  "status": "completed",
+  "started_at_epoch": 1792789215.445556,
+  "command": [
+    "/Users/mai1015/.local/bin/smith",
+    "--project",
+    "/private/tmp/smith-web-reconstruction-0rkz_0_t/smith-sol",
+    "--profile",
+    "web-benchmark",
+    "--effort",
+    "medium",
+    "--approval",
+    "allow-all",
+    "--output-format",
+    "stream-json",
+    "--image",
+    "/private/tmp/smith-web-reconstruction-0rkz_0_t/smith-sol/reference.png",
+    "-p",
+    "-"
+  ],
+  "project": "/private/tmp/smith-web-reconstruction-0rkz_0_t/smith-sol",
+  "image_sha256": "12c1ad4956cf811a994e330f977768b24319063bc7ef41191f8d2723637ed7f6",
+  "prompt_sha256": "7b6eafa839964f030425699fbf355f561c58ff5b2d895867ce4a14f407bd4fb5",
+  "exit_code": 0,
+  "elapsed_seconds": 362.58,
+  "index_html_exists": true,
+  "observations_exists": true,
+  "generated_files": [
+    "index.html",
+    "observations.json",
+    "DESIGN.md"
+  ]
+}

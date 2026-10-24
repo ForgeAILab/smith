@@ -1,0 +1,20 @@
+{"case": "smith-sol", "stage": 1, "status": "started", "resume": null}
+{"case": "smith-astra", "stage": 1, "status": "started", "resume": null}
+{"case": "codex-sol", "stage": 1, "status": "started", "resume": null}
+{"case": "codex-astra", "stage": 1, "status": "started", "resume": null}
+{"case": "codex-astra", "stage": 1, "status": "completed", "elapsed_seconds": 215.13, "session_id": "01a16ac3-f46d-7791-a5c9-ca66ff644951", "cached_input_percent": 87.58}
+{"case": "codex-astra", "stage": 2, "status": "started", "resume": "01a16ac3-f46d-7791-a5c9-ca66ff644951"}
+{"case": "codex-astra", "stage": 2, "status": "completed", "elapsed_seconds": 81.63, "session_id": "01a16ac3-f46d-7791-a5c9-ca66ff644951", "cached_input_percent": 91.68}
+{"case": "codex-astra", "stage": 3, "status": "started", "resume": "01a16ac3-f46d-7791-a5c9-ca66ff644951"}
+{"case": "codex-sol", "stage": 1, "status": "completed", "elapsed_seconds": 329.07, "session_id": "01a16ac3-f46d-7800-bea6-278189bd85d1", "cached_input_percent": 85.21}
+{"case": "codex-sol", "stage": 2, "status": "started", "resume": "01a16ac3-f46d-7800-bea6-278189bd85d1"}
+{"case": "smith-astra", "stage": 1, "status": "completed", "elapsed_seconds": 344.93, "session_id": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6", "cached_input_percent": 27.96}
+{"case": "smith-astra", "stage": 2, "status": "started", "resume": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6"}
+{"case": "codex-astra", "stage": 3, "status": "completed", "elapsed_seconds": 154.98, "session_id": "01a16ac3-f46d-7791-a5c9-ca66ff644951", "cached_input_percent": 94.65}
+{"case": "codex-sol", "stage": 2, "status": "completed", "elapsed_seconds": 125.17, "session_id": "01a16ac3-f46d-7800-bea6-278189bd85d1", "cached_input_percent": 89.47}
+{"case": "codex-sol", "stage": 3, "status": "started", "resume": "01a16ac3-f46d-7800-bea6-278189bd85d1"}
+{"case": "smith-sol", "stage": 1, "status": "timeout", "elapsed_seconds": 600.02, "session_id": null, "cached_input_percent": null}
+{"case": "smith-astra", "stage": 2, "status": "completed", "elapsed_seconds": 268.92, "session_id": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6", "cached_input_percent": 19.85}
+{"case": "smith-astra", "stage": 3, "status": "started", "resume": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6"}
+{"case": "codex-sol", "stage": 3, "status": "completed", "elapsed_seconds": 304.23, "session_id": "01a16ac3-f46d-7800-bea6-278189bd85d1", "cached_input_percent": 93.43}
+{"case": "smith-astra", "stage": 3, "status": "timeout", "elapsed_seconds": 600.02, "session_id": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6", "cached_input_percent": null}

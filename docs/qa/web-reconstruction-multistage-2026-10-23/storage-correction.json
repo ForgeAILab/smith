@@ -1,0 +1,10 @@
+{
+  "case": "smith-sol",
+  "after_stage": 2,
+  "reason": "Initial stage-2 wall-clock limit; updated dashboard already written. Continue original stage-3 task without grader feedback.",
+  "session_id": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+  "project_path_unchanged": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/smith-sol",
+  "old_sessions_directory": "/Volumes/Data/tmp/smith-web-multistage-onv4at_s/sessions",
+  "new_sessions_directory": "/private/tmp/smith-web-local-sessions-hkqb_k_j",
+  "stage3_timeout_seconds": 900
+}

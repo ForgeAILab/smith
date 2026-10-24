@@ -1,0 +1,350 @@
+[
+  {
+    "case": "smith-sol",
+    "session_id": "session-df44ecd8-175b-4fb0-8dca-78dbe5dbef84",
+    "images": [
+      {
+        "message": 0,
+        "part": 1,
+        "sha256": "6f9d37215219315c3748eda8e93b061db2e4194f39be691c73c0be7f04c87f89",
+        "matches_reference": "part-1.png",
+        "dimensions": [
+          1536,
+          344
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 394324
+      },
+      {
+        "message": 0,
+        "part": 3,
+        "sha256": "57aae4961271a5c3287e2965a88169f1079d96618ebfb51a5a4c19de61119aba",
+        "matches_reference": "part-2.png",
+        "dimensions": [
+          1536,
+          344
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 385260
+      },
+      {
+        "message": 0,
+        "part": 5,
+        "sha256": "7eaf959ae5eec8dc72d77bbd978ed051fd5dbc51c4c8e25b2a48c0d5409bdc2f",
+        "matches_reference": "part-3.png",
+        "dimensions": [
+          1536,
+          336
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 388734
+      },
+      {
+        "message": 64,
+        "part": 1,
+        "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee",
+        "matches_reference": "revision.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1495222
+      },
+      {
+        "message": 100,
+        "part": 1,
+        "sha256": "e32be86a3ddad4443d2ba2e121cb2103f10d54028d88ad62829a72312730d891",
+        "matches_reference": "bookings.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1429187
+      },
+      {
+        "message": 100,
+        "part": 3,
+        "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee",
+        "matches_reference": "revision.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1495222
+      }
+    ],
+    "all_six_images_retained_in_order": true,
+    "all_persisted_image_bytes_match_source_files": true,
+    "scope": "Persisted canonical inputs; not an interception of every outgoing native request."
+  },
+  {
+    "case": "smith-astra",
+    "session_id": "session-9d2d4444-fb58-42a9-af50-9a6fe24574f6",
+    "images": [
+      {
+        "message": 0,
+        "part": 1,
+        "sha256": "6f9d37215219315c3748eda8e93b061db2e4194f39be691c73c0be7f04c87f89",
+        "matches_reference": "part-1.png",
+        "dimensions": [
+          1536,
+          344
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 394324
+      },
+      {
+        "message": 0,
+        "part": 3,
+        "sha256": "57aae4961271a5c3287e2965a88169f1079d96618ebfb51a5a4c19de61119aba",
+        "matches_reference": "part-2.png",
+        "dimensions": [
+          1536,
+          344
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 385260
+      },
+      {
+        "message": 0,
+        "part": 5,
+        "sha256": "7eaf959ae5eec8dc72d77bbd978ed051fd5dbc51c4c8e25b2a48c0d5409bdc2f",
+        "matches_reference": "part-3.png",
+        "dimensions": [
+          1536,
+          336
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 388734
+      },
+      {
+        "message": 32,
+        "part": 1,
+        "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee",
+        "matches_reference": "revision.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1495222
+      },
+      {
+        "message": 54,
+        "part": 1,
+        "sha256": "e32be86a3ddad4443d2ba2e121cb2103f10d54028d88ad62829a72312730d891",
+        "matches_reference": "bookings.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1429187
+      },
+      {
+        "message": 54,
+        "part": 3,
+        "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee",
+        "matches_reference": "revision.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1495222
+      }
+    ],
+    "all_six_images_retained_in_order": true,
+    "all_persisted_image_bytes_match_source_files": true,
+    "scope": "Persisted canonical inputs; not an interception of every outgoing native request."
+  },
+  {
+    "case": "codex-sol",
+    "session_id": "01a16ac3-f46d-7800-bea6-278189bd85d1",
+    "images": [
+      {
+        "line": 12,
+        "part": 1,
+        "sha256": "6f9d37215219315c3748eda8e93b061db2e4194f39be691c73c0be7f04c87f89",
+        "matches_reference": "part-1.png",
+        "dimensions": [
+          1536,
+          344
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 394324
+      },
+      {
+        "line": 12,
+        "part": 4,
+        "sha256": "57aae4961271a5c3287e2965a88169f1079d96618ebfb51a5a4c19de61119aba",
+        "matches_reference": "part-2.png",
+        "dimensions": [
+          1536,
+          344
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 385260
+      },
+      {
+        "line": 12,
+        "part": 7,
+        "sha256": "7eaf959ae5eec8dc72d77bbd978ed051fd5dbc51c4c8e25b2a48c0d5409bdc2f",
+        "matches_reference": "part-3.png",
+        "dimensions": [
+          1536,
+          336
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 388734
+      },
+      {
+        "line": 74,
+        "part": 1,
+        "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee",
+        "matches_reference": "revision.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1495222
+      },
+      {
+        "line": 117,
+        "part": 1,
+        "sha256": "e32be86a3ddad4443d2ba2e121cb2103f10d54028d88ad62829a72312730d891",
+        "matches_reference": "bookings.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1429187
+      },
+      {
+        "line": 117,
+        "part": 4,
+        "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee",
+        "matches_reference": "revision.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1495222
+      }
+    ],
+    "all_six_images_retained_in_order": true,
+    "all_persisted_image_bytes_match_source_files": true,
+    "scope": "Persisted canonical inputs; not an interception of every outgoing native request."
+  },
+  {
+    "case": "codex-astra",
+    "session_id": "01a16ac3-f46d-7791-a5c9-ca66ff644951",
+    "images": [
+      {
+        "line": 12,
+        "part": 1,
+        "sha256": "6f9d37215219315c3748eda8e93b061db2e4194f39be691c73c0be7f04c87f89",
+        "matches_reference": "part-1.png",
+        "dimensions": [
+          1536,
+          344
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 394324
+      },
+      {
+        "line": 12,
+        "part": 4,
+        "sha256": "57aae4961271a5c3287e2965a88169f1079d96618ebfb51a5a4c19de61119aba",
+        "matches_reference": "part-2.png",
+        "dimensions": [
+          1536,
+          344
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 385260
+      },
+      {
+        "line": 12,
+        "part": 7,
+        "sha256": "7eaf959ae5eec8dc72d77bbd978ed051fd5dbc51c4c8e25b2a48c0d5409bdc2f",
+        "matches_reference": "part-3.png",
+        "dimensions": [
+          1536,
+          336
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 388734
+      },
+      {
+        "line": 62,
+        "part": 1,
+        "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee",
+        "matches_reference": "revision.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1495222
+      },
+      {
+        "line": 97,
+        "part": 1,
+        "sha256": "e32be86a3ddad4443d2ba2e121cb2103f10d54028d88ad62829a72312730d891",
+        "matches_reference": "bookings.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1429187
+      },
+      {
+        "line": 97,
+        "part": 4,
+        "sha256": "e85b29ad395da55e17b64893ab66d3dbddc72bfc2798f6e07d3b387903337bee",
+        "matches_reference": "revision.png",
+        "dimensions": [
+          1536,
+          1024
+        ],
+        "format": "PNG",
+        "encoding": "data_uri",
+        "encoded_bytes": 1495222
+      }
+    ],
+    "all_six_images_retained_in_order": true,
+    "all_persisted_image_bytes_match_source_files": true,
+    "scope": "Persisted canonical inputs; not an interception of every outgoing native request."
+  }
+]
