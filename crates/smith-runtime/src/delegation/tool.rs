@@ -242,13 +242,12 @@ fn wait_status_json(
         );
         if status.state == ChildState::Running {
             object.remove("result");
-            object.insert(
-                "note".to_owned(),
-                Value::String(
-                    "This call returned immediately. Continue independent work or end your turn to park. You will wake automatically when the child completes or the armed deadline expires. No polling is needed; the timer fires only once."
-                        .to_owned(),
-                ),
-            );
+            let note = if monitor.is_some() {
+                "This call returned immediately. Continue independent work or end your turn to park. You will wake automatically when the child completes or the armed deadline expires. No polling is needed; the timer fires only once."
+            } else {
+                "This call returned immediately and no deadline is armed. Continue independent work or end your turn to park. You will wake automatically when the child completes. No polling is needed."
+            };
+            object.insert("note".to_owned(), Value::String(note.to_owned()));
         }
     }
     value
@@ -613,11 +612,15 @@ impl Tool for AgentTool {
                 };
                 let clamped = timeout_ms
                     .is_some_and(|requested| requested > self.wait_policy.max_timeout_ms());
-                let monitor = if status.state == ChildState::Running {
-                    self.wait_timers.arm(child.as_str(), timeout)
-                } else {
+                let monitor = if status.state != ChildState::Running {
                     self.wait_timers.cancel(child.as_str());
                     None
+                } else if timeout.is_zero() {
+                    // A status check arms nothing, but must not hide a timer
+                    // an earlier wait left armed.
+                    self.wait_timers.armed(child.as_str())
+                } else {
+                    self.wait_timers.arm(child.as_str(), timeout)
                 };
                 // The status carries the completed result text; when it is
                 // the child's latest outcome, the model now has it.

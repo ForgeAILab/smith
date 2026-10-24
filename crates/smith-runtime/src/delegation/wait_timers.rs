@@ -118,6 +118,19 @@ impl AgentWaitTimers {
         Some(monitor)
     }
 
+    /// The timer still armed for `child`, reporting its remaining duration.
+    pub(super) fn armed(&self, child: &str) -> Option<ChildWaitMonitor> {
+        let state = self.state.lock().expect("wait timers poisoned");
+        state.timers.get(child).map(|timer| ChildWaitMonitor {
+            wake_after_ms: timer
+                .expires
+                .saturating_duration_since(TimerInstant::now())
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+            ..timer.monitor.clone()
+        })
+    }
+
     pub(super) fn task_restarted(&self, child: &str) {
         let mut state = self.state.lock().expect("wait timers poisoned");
         if !state.shutdown {

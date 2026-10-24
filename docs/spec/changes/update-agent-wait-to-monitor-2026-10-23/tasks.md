@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-23T09:39:03Z
-updated_at: 2026-10-23T11:48:59Z
+updated_at: 2026-10-23T21:27:31Z
 completed_at:
 ---
 
@@ -57,8 +57,9 @@ completed_at:
   immediately and wakes on completion or at the deadline.
 - [x] 3.3 Update `docs/` delegation guidance pages that describe `wait`.
 
-Full-gate evidence is recorded in [verification.md](verification.md). Task 3.1
-remains open for the catalog-adoption fixture failure in the isolated tree.
+Full-gate evidence and the failures in the other concurrent changes are recorded
+in [verification.md](verification.md). Task 3.1 remains open until the shared
+checkout passes that gate.
 
 ## 4. Guidance follow-up (`session-1878584b`)
 
