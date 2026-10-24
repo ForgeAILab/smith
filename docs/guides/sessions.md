@@ -53,6 +53,9 @@ shows status. Only persisted root sessions have goals.
 - The main agent can inspect the same committed conversation with
   `agent` action `transcript`, using the child's ID. Follow its continuation
   cursor and artifact references to read large conversations and tool results.
+  A running task's finished steps are included; a response still streaming is
+  not. `wait` and `list` report a running child's `activity`: elapsed time,
+  steps so far, the last step, and the size of any response in flight.
 - Completed child results are delivered automatically. The main agent should
   continue independent work or end its turn and park while the child works,
   instead of repeatedly checking status. Transcript reads are for inspection

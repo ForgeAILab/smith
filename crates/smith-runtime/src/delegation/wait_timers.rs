@@ -1,5 +1,6 @@
 use super::*;
 use agent_runtime::runtime::InternalTurnAdmission;
+use agent_runtime_core::clock::SystemClock;
 use agent_runtime_core::content::{InternalTurnInput, InternalTurnSensitivity, InternalTurnSource};
 use std::sync::Mutex;
 use tokio::time::Instant as TimerInstant;
@@ -36,6 +37,7 @@ pub struct AgentWaitTimers {
     state: Mutex<TimerState>,
     changed: tokio::sync::Notify,
     default_profile: String,
+    redactor: crate::journal::DefaultRedactor,
 }
 
 impl Default for AgentWaitTimers {
@@ -51,7 +53,71 @@ impl AgentWaitTimers {
             state: Mutex::new(TimerState::default()),
             changed: tokio::sync::Notify::new(),
             default_profile: default_profile.into(),
+            redactor: crate::journal::DefaultRedactor::new(),
         }
+    }
+
+    /// Redacts the activity summaries reported for running children with the
+    /// root's credential policy, the same one child transcripts use.
+    #[must_use]
+    pub fn with_redactor(mut self, redactor: crate::journal::DefaultRedactor) -> Self {
+        self.redactor = redactor;
+        self
+    }
+
+    /// What `child` is doing in its current task, or `None` when it is not
+    /// running or its history cannot be read.
+    pub(super) async fn activity(
+        &self,
+        coordinator: &DelegationCoordinator,
+        status: &ChildStatus,
+    ) -> Option<Value> {
+        if status.state != ChildState::Running {
+            return None;
+        }
+        let snapshot = coordinator.child_history(&status.child).await.ok()?;
+        let elapsed = self
+            .state
+            .lock()
+            .expect("wait timers poisoned")
+            .children
+            .get(status.child.as_str())
+            .map(|(_, started)| started.elapsed());
+        Some(super::progress::child_activity(
+            &snapshot,
+            &self.redactor,
+            elapsed,
+            SystemClock.now().as_millis(),
+        ))
+    }
+
+    /// Activity for every child whose timer has expired, read before
+    /// [`Self::try_admit`] so admission itself never awaits.
+    pub(super) async fn expired_activity(
+        &self,
+        coordinator: &DelegationCoordinator,
+    ) -> BTreeMap<String, Value> {
+        let now = TimerInstant::now();
+        let expired = self
+            .state
+            .lock()
+            .expect("wait timers poisoned")
+            .timers
+            .iter()
+            .filter(|(_, timer)| timer.expires <= now)
+            .map(|(child, _)| child.clone())
+            .collect::<Vec<_>>();
+        let mut activity = BTreeMap::new();
+        for child in expired {
+            let Ok(status) = coordinator.status(&agent_runtime_core::ids::ChildId::new(&child))
+            else {
+                continue;
+            };
+            if let Some(value) = self.activity(coordinator, &status).await {
+                activity.insert(child, value);
+            }
+        }
+        activity
     }
 
     /// Live monitor tags in deterministic child-ID order.
@@ -193,6 +259,7 @@ impl AgentWaitTimers {
         &self,
         session: &SessionHandle,
         coordinator: &DelegationCoordinator,
+        activity: &BTreeMap<String, Value>,
     ) -> Result<Option<InternalTurnAdmission>, RuntimeError> {
         let mut state = self.state.lock().expect("wait timers poisoned");
         if state.shutdown {
@@ -215,7 +282,8 @@ impl AgentWaitTimers {
                 let (profile, started) = &state.children[child];
                 json!({"child_id": child, "profile": profile, "state": "running",
                     "elapsed_ms": now.saturating_duration_since(*started).as_millis() as u64,
-                    "wake_after_ms": timer.monitor.wake_after_ms})
+                    "wake_after_ms": timer.monitor.wake_after_ms,
+                    "activity": activity.get(child)})
             })
             .collect::<Vec<_>>();
         if expired.is_empty() {
@@ -223,7 +291,7 @@ impl AgentWaitTimers {
         }
         let input = InternalTurnInput::new(
             format!(
-                "The single-use agent wait deadline elapsed. These children are still running:\n{}\nEach child's outcome will arrive as a host message in a later turn. Do any independent work, then end your response; do not predict, announce, or write an outcome yourself. Arm wait again only if you need another deadline; inspect or stop a child only when useful. No partial child output is included.",
+                "The single-use agent wait deadline elapsed. These children are still running:\n{}\nEach child's outcome will arrive as a host message in a later turn. Do any independent work, then end your response; do not predict, announce, or write an outcome yourself. Arm wait again only if you need another deadline; inspect or stop a child only when useful. Each activity counts the child's committed steps in its current task and sizes any response still streaming; agent transcript shows the committed steps.",
                 Value::Array(expired.clone())
             ),
             InternalTurnSource {

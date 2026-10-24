@@ -8,6 +8,9 @@ struct WaitProvider {
     requests: Mutex<Vec<String>>,
     child_release: tokio::sync::Semaphore,
     user_release: tokio::sync::Semaphore,
+    /// A child first calls `list`, then streams a draft until released.
+    tool_step: bool,
+    draft_release: Arc<tokio::sync::Semaphore>,
 }
 
 impl Default for WaitProvider {
@@ -16,9 +19,13 @@ impl Default for WaitProvider {
             requests: Mutex::new(Vec::new()),
             child_release: tokio::sync::Semaphore::new(0),
             user_release: tokio::sync::Semaphore::new(0),
+            tool_step: false,
+            draft_release: Arc::new(tokio::sync::Semaphore::new(0)),
         }
     }
 }
+
+const DRAFT: &str = "Drafting the answer";
 
 #[async_trait]
 impl Provider for WaitProvider {
@@ -36,7 +43,34 @@ impl Provider for WaitProvider {
         let wire = serde_json::to_string(&request.messages).unwrap();
         let child = wire.contains("controlled child") && !wire.contains("parent boundary");
         let busy = wire.contains("busy parent") && !wire.contains("delegation.");
-        self.requests.lock().unwrap().push(wire);
+        self.requests.lock().unwrap().push(wire.clone());
+        if child && self.tool_step {
+            if !wire.contains("progress-list") {
+                return Ok(Box::pin(futures_util::stream::iter(vec![
+                    ProviderStreamEvent::ToolCallDelta {
+                        index: 0,
+                        id: Some("progress-list".into()),
+                        name: Some("list".into()),
+                        arguments_fragment: r#"{"path":"."}"#.into(),
+                    },
+                    ProviderStreamEvent::Finish {
+                        reason: FinishReason::ToolCalls,
+                    },
+                ])));
+            }
+            let release = self.draft_release.clone();
+            return Ok(Box::pin(
+                futures_util::stream::iter(vec![ProviderStreamEvent::TextDelta {
+                    text: DRAFT.into(),
+                }])
+                .chain(futures_util::stream::once(async move {
+                    release.acquire().await.unwrap().forget();
+                    ProviderStreamEvent::Finish {
+                        reason: FinishReason::Stop,
+                    }
+                })),
+            ));
+        }
         if child {
             self.child_release.acquire().await.unwrap().forget();
         } else if busy {
@@ -69,8 +103,20 @@ struct WaitFixture {
 
 impl WaitFixture {
     async fn new() -> Self {
+        Self::with_provider(WaitProvider::default()).await
+    }
+
+    async fn with_tool_step() -> Self {
+        Self::with_provider(WaitProvider {
+            tool_step: true,
+            ..WaitProvider::default()
+        })
+        .await
+    }
+
+    async fn with_provider(provider: WaitProvider) -> Self {
         let fixture = Fixture::new();
-        let provider = Arc::new(WaitProvider::default());
+        let provider = Arc::new(provider);
         let runtime = factory::build_request(request(&fixture, provider.clone()))
             .await
             .unwrap();
@@ -153,6 +199,21 @@ impl WaitFixture {
         self.settle().await;
     }
 
+    /// Polls until the child's draft is streaming, after its `list` step.
+    async fn streaming_status(&self, child: &str) -> serde_json::Value {
+        for _ in 0..200 {
+            let status = self.wait(child, 0).await;
+            if status["activity"]["streaming"]["text_chars"] == DRAFT.len() {
+                return status;
+            }
+            self.advance(10).await;
+        }
+        panic!(
+            "child never streamed its draft: {}",
+            self.wait(child, 0).await
+        );
+    }
+
     async fn close(self) {
         self.lifecycle.shutdown().await;
         self.session.shutdown().await.unwrap();
@@ -220,7 +281,14 @@ async fn expiry_wakes_once_with_status_and_no_child_output() {
     f.advance(51).await;
     let wakes = f.wakes("delegation.wait-timeout");
     assert_eq!(wakes.len(), 1, "{wakes:?}");
-    for expected in [&child, "dev", "running", "elapsed_ms", "wake_after_ms"] {
+    for expected in [
+        &child,
+        "dev",
+        "running",
+        "elapsed_ms",
+        "wake_after_ms",
+        "steps_this_task",
+    ] {
         assert!(wakes[0].contains(expected), "{}", wakes[0]);
     }
     assert!(!wakes[0].contains("private child result"));
@@ -274,6 +342,7 @@ async fn a_running_follow_up_reports_no_earlier_result() {
     let finished = f.wait(&child, 0).await;
     assert_eq!(finished["state"], "idle", "{finished}");
     assert_eq!(finished["result"], "private child result", "{finished}");
+    assert!(finished.get("activity").is_none(), "{finished}");
 
     let sent = f
         .call(serde_json::json!({"action":"follow_up", "child_id":child, "task":"second task"}))
@@ -362,5 +431,62 @@ async fn shutdown_cancels_armed_timers_without_waking() {
             .is_empty()
     );
     assert_eq!(f.wait(&child, 50).await["armed"], false);
+    f.close().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn running_status_reports_committed_steps_and_draft_size_only() {
+    let f = WaitFixture::with_tool_step().await;
+    let child = f.spawn().await;
+    f.advance(1_000).await;
+    let status = f.streaming_status(&child).await;
+    let activity = &status["activity"];
+    assert_eq!(activity["steps_this_task"], 2, "{status}");
+    assert_eq!(activity["last_step"]["kind"], "tool_result", "{status}");
+    assert_eq!(activity["last_step"]["tool"], "list", "{status}");
+    assert_eq!(activity["pending_tools"], serde_json::json!([]), "{status}");
+    assert_eq!(activity["streaming"]["attempt"], 1, "{status}");
+    assert!(activity["streaming"]["for_ms"].is_u64(), "{status}");
+    assert!(
+        activity["elapsed_ms"].as_u64().unwrap() >= 1_000,
+        "{status}"
+    );
+    assert!(!status.to_string().contains(DRAFT), "{status}");
+
+    let listed = f.call(serde_json::json!({"action":"list"})).await;
+    assert_eq!(
+        listed["children"][0]["activity"]["steps_this_task"], 2,
+        "{listed}"
+    );
+
+    f.provider.draft_release.add_permits(1);
+    f.settle().await;
+    f.advance(1).await;
+    let finished = f.wait(&child, 0).await;
+    assert_eq!(finished["state"], "idle", "{finished}");
+    assert!(finished.get("activity").is_none(), "{finished}");
+    f.close().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn expiry_wake_carries_activity_without_streamed_text() {
+    let f = WaitFixture::with_tool_step().await;
+    let child = f.spawn().await;
+    f.streaming_status(&child).await;
+    f.wait(&child, 50).await;
+    f.advance(51).await;
+    let wakes = f.wakes("delegation.wait-timeout");
+    assert_eq!(wakes.len(), 1, "{wakes:?}");
+    for expected in [
+        "steps_this_task",
+        "tool_result",
+        "text_chars",
+        "agent transcript shows the committed steps",
+    ] {
+        assert!(wakes[0].contains(expected), "{}", wakes[0]);
+    }
+    assert!(!wakes[0].contains(DRAFT), "{}", wakes[0]);
+    f.provider.draft_release.add_permits(1);
+    f.settle().await;
     f.close().await;
 }

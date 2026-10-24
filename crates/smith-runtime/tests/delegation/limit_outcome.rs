@@ -182,6 +182,32 @@ async fn a_limit_stopped_child_is_delivered_to_the_parent_as_its_limit() {
         Some("output")
     );
 
+    // An idle limit-stopped child reports its limit, not running activity.
+    let slot = Arc::new(OnceLock::new());
+    slot.set(coordinator.clone()).unwrap();
+    let ctx = InvocationContext {
+        session: session.id().clone(),
+        turn: None,
+        call_id: ToolCallId::new("limit-list"),
+        request: RequestId::new("limit-list"),
+        workspace: Arc::new(LexicalWorkspace::new("/repo")),
+        clock: Arc::new(SystemClock),
+        cancel: Cancellation::new(),
+        deadline: Deadline::never(),
+        output_limit: 100_000,
+    };
+    let listed = invoke_agent(
+        &AgentTool::new(slot),
+        serde_json::json!({"action": "list"}),
+        &ctx,
+    )
+    .await
+    .unwrap()
+    .value;
+    let child = &listed["children"][0];
+    assert_eq!(child["stopped_at_limit"], "output", "{listed}");
+    assert!(child.get("activity").is_none(), "{listed}");
+
     session.shutdown().await.expect("a clean shutdown");
 }
 
@@ -210,6 +236,7 @@ async fn waiting_on_a_limit_stopped_child_reports_the_limit_instead_of_a_result(
         "{answer}"
     );
     assert!(!answer.contains(CUT_OFF_TEXT), "{answer}");
+    assert!(!answer.contains(r#"\"activity\""#), "{answer}");
     assert!(
         coordinator.take_ready_task_outcomes().is_empty(),
         "the limit the model read is no longer pending automatic delivery"

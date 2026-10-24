@@ -791,6 +791,7 @@ pub async fn wire_delegation_with_wait_policy(
 }
 
 mod lifecycle;
+mod progress;
 mod tool;
 mod transcript;
 mod wait_timers;

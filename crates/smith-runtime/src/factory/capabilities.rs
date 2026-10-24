@@ -94,9 +94,10 @@ pub(super) fn prepare(
         }
     }
 
-    let delegation_wait_timers = Arc::new(crate::delegation::AgentWaitTimers::new(
-        request.config.agent.profile.name.clone(),
-    ));
+    let delegation_wait_timers = Arc::new(
+        crate::delegation::AgentWaitTimers::new(request.config.agent.profile.name.clone())
+            .with_redactor(request.persistence_redactor.clone().unwrap_or_default()),
+    );
     let delegation_slot = if let Some(slot) = delegation_slot {
         let wait_policy = DelegationWaitPolicy::new(
             request.config.child_agents.wait_default_timeout_ms.value,

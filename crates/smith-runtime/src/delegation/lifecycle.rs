@@ -322,7 +322,8 @@ pub(super) fn start_delegation_lifecycle_tasks(
                     )
             };
             if can_admit_timeout {
-                match admission_timers.try_admit(&admission_session, &coordinator) {
+                let activity = admission_timers.expired_activity(&coordinator).await;
+                match admission_timers.try_admit(&admission_session, &coordinator, &activity) {
                     Ok(Some(agent_runtime::runtime::InternalTurnAdmission::Accepted(turn))) => {
                         progressed = true;
                         turn.completed().await;

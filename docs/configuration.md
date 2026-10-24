@@ -208,8 +208,8 @@ shows `monitor` with the wake time. Timers never repeat, survive restart, or
 extend headless process life; shutdown cancels them.
 
 Expiry admits one `delegation.wait-timeout` turn once any running turn ends;
-it carries status, not partial output. Completion supersedes pending expiry;
-user input takes priority.
+it carries status and activity, not partial output. Completion supersedes
+pending expiry; user input takes priority.
 Outcomes already read through `wait` or `result` are not delivered again.
 `parked-awaiting-child` requires live child work and holds no provider stream or
 tool call. Child activity does not reset parent inactivity or cache-touch clocks.

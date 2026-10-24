@@ -98,6 +98,20 @@ impl AgentTool {
         })
     }
 
+    /// Adds a running child's current-task activity to its status object.
+    async fn insert_activity(
+        &self,
+        coordinator: &DelegationCoordinator,
+        status: &ChildStatus,
+        value: &mut Value,
+    ) {
+        if let (Some(activity), Value::Object(object)) =
+            (self.wait_timers.activity(coordinator, status).await, value)
+        {
+            object.insert("activity".to_owned(), activity);
+        }
+    }
+
     /// Resolves a model-named profile against the registered directory.
     fn find_profile(&self, name: &str) -> Option<&AgentToolProfile> {
         self.profiles.iter().find(|profile| profile.name == name)
@@ -334,8 +348,9 @@ impl Tool for AgentTool {
             status); wait (returns immediately; a positive timeout_ms arms one wake-up, five \
             minutes by default and at most; 0 only reports status); result (the child's latest \
             completed result); transcript (pages of the child's committed conversation, by \
-            page_size and cursor, for diagnosis; read large entries with artifact.read; reading \
-            does not consume the outcome delivery); follow_up (a new task for an idle child); \
+            page_size and cursor, including a running task's finished steps but not a response \
+            still streaming; read large entries with artifact.read; reading does not consume \
+            the outcome delivery); follow_up (a new task for an idle child); \
             resume (continue an interrupted child from its exact checkpoint); stop.";
         const DELIVERY: &str = "After spawn, follow_up, or wait, do any independent work, then \
             end your response with no further tool calls. The child's outcome, or an expired \
@@ -343,7 +358,8 @@ impl Tool for AgentTool {
             when wait or result already returned the outcome. Never write that message \
             yourself or announce a completion you have not received. Copy artifact ids exactly \
             from tool results or host messages; never invent one. A running child's status \
-            carries no result. Do not call list, wait, result, or transcript repeatedly to \
+            carries no result; its activity shows elapsed time, steps so far, and any response \
+            still streaming. Do not call list, wait, result, or transcript repeatedly to \
             detect completion. A child's needs_input result is informational and does not \
             open user interface; decide whether to call root ask_user, then send the answer \
             with an explicit follow_up. Stop a child with agent stop and its child_id; \
@@ -628,7 +644,12 @@ impl Tool for AgentTool {
                 }
             }
             AgentAction::List => {
-                let children: Vec<Value> = coordinator.list().iter().map(status_json).collect();
+                let mut children = Vec::new();
+                for status in coordinator.list() {
+                    let mut value = status_json(&status);
+                    self.insert_activity(coordinator, &status, &mut value).await;
+                    children.push(value);
+                }
                 Ok(ToolOutcome::json(json!({ "children": children })))
             }
             AgentAction::Wait {
@@ -674,9 +695,9 @@ impl Tool for AgentTool {
                         return Ok(ToolOutcome::json(value));
                     }
                 }
-                Ok(ToolOutcome::json(wait_status_json(
-                    &status, monitor, clamped,
-                )))
+                let mut value = wait_status_json(&status, monitor, clamped);
+                self.insert_activity(coordinator, &status, &mut value).await;
+                Ok(ToolOutcome::json(value))
             }
             AgentAction::Result { child_id } => {
                 let outcome = coordinator
