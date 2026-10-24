@@ -4,6 +4,7 @@
 //! private child modules.
 
 mod agent;
+mod fallback;
 mod harness;
 mod load;
 mod mcp;

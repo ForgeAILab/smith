@@ -982,6 +982,7 @@ fn machine_result_v2() {
         model: "fixture-model".into(),
         output: "fixture answer".into(),
         usage: UsageOutput {
+            current_run_bindings: Vec::new(),
             current_turn: usage.clone(),
             session: usage,
             synthetic_cache: SyntheticUsageOutput::default(),
@@ -1030,6 +1031,7 @@ fn approval_required_v2() {
         model: "fixture-model".into(),
         output: String::new(),
         usage: UsageOutput {
+            current_run_bindings: Vec::new(),
             current_turn: UsageDelta::new(),
             session: UsageDelta::new(),
             synthetic_cache: SyntheticUsageOutput::default(),
@@ -1078,6 +1080,7 @@ fn interaction_required_v2() {
         model: "fixture-model".into(),
         output: String::new(),
         usage: UsageOutput {
+            current_run_bindings: Vec::new(),
             current_turn: UsageDelta::new(),
             session: UsageDelta::new(),
             synthetic_cache: SyntheticUsageOutput::default(),
@@ -1201,6 +1204,7 @@ fn lifecycle_text() {
         model: "fixture-model".into(),
         output: "answer".into(),
         usage: UsageOutput {
+            current_run_bindings: Vec::new(),
             current_turn: UsageDelta::new(),
             session: UsageDelta::new(),
             synthetic_cache: SyntheticUsageOutput::default(),
@@ -1369,6 +1373,7 @@ fn canonical_cache() {
         model: "fixture-model".to_owned(),
         output: "fixture answer".to_owned(),
         usage: UsageOutput {
+            current_run_bindings: Vec::new(),
             current_turn: usage.clone(),
             session: usage,
             synthetic_cache: SyntheticUsageOutput::default(),

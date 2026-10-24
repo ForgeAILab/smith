@@ -315,6 +315,10 @@ pub(super) enum ResultStatus {
 
 #[derive(Debug, Serialize)]
 pub(super) struct UsageOutput {
+    /// Model work observed during this invocation, including attempts with
+    /// unreported usage. Omitted for single-model profiles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) current_run_bindings: Vec<smith_client::usage_log::BindingUsageRecord>,
     pub(super) current_turn: UsageDelta,
     pub(super) session: UsageDelta,
     /// Provider/session usage from typed cache-maintenance and idle-compaction

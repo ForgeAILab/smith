@@ -257,6 +257,7 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                     rotation: started.headless_rotation.as_deref(),
                     credential_pool: started.credential_pool.as_ref(),
                     cache_price,
+                    catalog: Some(&started.catalog),
                     cache_miss_notices: started.cache_miss_notices,
                     mcp_trust_notices: &started.mcp_trust_notices,
                 },

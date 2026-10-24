@@ -107,6 +107,11 @@ impl ConversationMut<'_> {
     /// are true, and neither belongs in the other's code.
     pub(super) fn apply(&mut self, event: &RuntimeEvent) -> bool {
         match event {
+            RuntimeEvent::ModelFallback { .. } => {
+                if let Some(notice) = smith_client::notice::model_fallback_notice(event) {
+                    self.transcript.push_notice(NoticeKind::Provider, notice);
+                }
+            }
             RuntimeEvent::HostedSearch {
                 action,
                 query,

@@ -58,6 +58,7 @@ use workspace::LexicalWorkspace;
 
 mod compaction;
 mod credentials;
+mod fallback;
 mod mcp;
 mod model_catalog;
 mod preflight;

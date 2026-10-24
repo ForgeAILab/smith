@@ -125,6 +125,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     provenance.extend(session);
     provenance.extend(advisor_binding);
     validate_model_sync_policy(&provenance)?;
+    let fallback_provenance = provenance.clone();
     apply_product_model_defaults(&mut provenance);
     apply_image_generation_defaults(&mut provenance);
     super::vision::explain_model_input(&mut provenance, request.catalog.as_deref())?;
@@ -140,6 +141,8 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
         request,
     )?;
     let mut global = Provenance::default();
+    config.fallback = super::fallback::resolve(&fallback_provenance, &config, &declared, request)?;
+    super::fallback::explain(&mut provenance, &config.fallback);
     for layer in &file_layers {
         global.extend(layer.clone());
     }
@@ -1021,6 +1024,24 @@ pub(super) fn flatten(
         prefix.push(name.clone());
         super::web::validate_file_setting(&join_owned(prefix), layer, path)?;
         let result = match value {
+            toml::Value::Array(items)
+                if prefix.len() >= 2
+                    && prefix[prefix.len() - 2] == "fallback"
+                    && name == "models" =>
+            {
+                let key = join_owned(prefix);
+                let source = source_for(layer, path, &key);
+                let value =
+                    serde_json::to_string(items).map_err(|error| ConfigError::Unrepresentable {
+                        message: error.to_string(),
+                    })?;
+                out.push(Contribution {
+                    key,
+                    value: SettingValue::Text(value),
+                    source,
+                });
+                Ok(())
+            }
             toml::Value::Table(_)
                 if prefix.len() >= 3
                     && prefix[prefix.len() - 3] == "plugins"

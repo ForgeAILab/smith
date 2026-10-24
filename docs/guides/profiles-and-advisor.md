@@ -42,6 +42,48 @@ Smith rejects unknown profiles, cycles, and undeclared providers when the
 config loads. Run `smith config explain profile --profile <name>` after an
 edit to catch mistakes before the user switches.
 
+## Model fallback
+
+Keep `provider` and `model` as the primary, then add ordered alternatives:
+
+```toml
+[profiles.code.fallback]
+first_response_timeout_ms = 30000
+models = [
+  { provider = "chatgpt", model = "gpt-6.1-sol" },
+  { provider = "anthropic", model = "claude-sonnet-4-6", first_response_timeout_ms = 60000 },
+]
+```
+
+Providers must already be declared. A switch sends the conversation context
+to the selected provider. Instructions, posture, permissions, and completed
+tool results stay with the profile.
+
+The timeout covers waiting for a response to start, including connection,
+retries, and backoff. Local setup and account-rotation prompts finish before
+this timer starts. Text, reasoning, or tool activity stops it. Smith does
+not switch because an answer stalls after it starts. Omit the timeout to use
+failure fallback alone; its triggers are quota exhaustion, unavailable local
+credential sources, and exhausted transient failures. Authentication rejection
+and invalid requests remain errors.
+
+Each model is tried in order at most once per turn. A successful fallback
+serves the rest of that turn; the next user turn starts with the primary.
+An unfinished turn saved by an older version finishes with its original
+execution policy; new turns can use fallback.
+Entries can override `reasoning`, `max_output_tokens`, and `context_window`.
+An explicit `reasoning` table replaces inherited profile reasoning controls;
+`reasoning = {}` uses the model's defaults. Invocation overrides still win.
+Unsupported explicit controls fail preflight. A smaller model is skipped if
+the pending request cannot fit without losing protected history.
+
+The list inherits through `extends`; a new `models` list replaces it, and
+`models = []` disables fallback and its timer. An explicit `/model`,
+`--model`, or `--provider` selection disables the chain until the profile is
+selected again. Installed `cli/...` agents do not support this policy.
+Inspect with `smith config explain fallback.models --profile code` and
+`smith config explain fallback.first_response_timeout_ms --profile code`.
+
 ## The advisor
 
 The advisor is a stronger model the main agent can consult. Set it at the

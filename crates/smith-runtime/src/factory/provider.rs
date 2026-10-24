@@ -14,6 +14,7 @@ pub(super) use children::{
 };
 pub(super) use credentials::{active_credential_reference, validate_pool_references};
 pub(super) use resolution::prepare;
+pub(super) use resolution::prepare_metadata;
 
 pub(super) struct CompactionRoute {
     pub provider: Arc<dyn Provider>,

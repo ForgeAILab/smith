@@ -233,6 +233,14 @@ pub struct SmithChildRoute {
     /// What executes this route's turns: the provider above, or the installed
     /// agent the profile's model id named.
     pub(crate) execution: TurnExecution,
+    /// The profile's ordered model alternatives for provider-executed turns.
+    /// A pooled provider defers quota rotation to these whenever the profile
+    /// configures a chain, so a child must receive them too.
+    pub(crate) model_fallbacks: Vec<agent_runtime::runtime::ModelRoute>,
+    /// The chain's default first-response budget.
+    pub(crate) first_response_timeout_ms: Option<u64>,
+    /// Retry-delay observers for the alternatives' providers.
+    pub(crate) fallback_observers: Vec<Arc<dyn agent_runtime_core::observer::EventObserver>>,
 }
 
 /// Opaque Smith host route persisted in the existing child model-selection slot.
@@ -632,6 +640,14 @@ impl ChildRuntimeFactory for SmithChildFactory {
             builder = builder
                 .external_agent(backend)
                 .external_excluded_tools(crate::cli_bridge::excluded_tool_names());
+        } else if !route.model_fallbacks.is_empty() {
+            builder = builder.model_fallbacks(
+                route.model_fallbacks.clone(),
+                route.first_response_timeout_ms,
+            );
+            for observer in &route.fallback_observers {
+                builder = builder.observer(observer.clone());
+            }
         }
         if let Some(identity) = route.cache_endpoint_identity.as_ref() {
             builder = builder.cache_endpoint_identity(identity.clone());

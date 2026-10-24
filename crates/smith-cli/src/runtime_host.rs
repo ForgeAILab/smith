@@ -1078,9 +1078,13 @@ async fn run_interactive_hosts(
             }
             InteractiveExit::CatalogChanged(next) => {
                 // Snapshot adoption does not choose a model, including when
-                // the session was originally selected through a default.
-                args.selection.provider = Some(host.runtime().policy().provider_name.clone());
-                args.selection.model = Some(host.runtime().policy().model.as_str().to_owned());
+                // the session was originally selected through a default. An
+                // active fallback chain already proves the profile chose its
+                // primary, and pinning it here would disable that chain.
+                if host.runtime().policy().fallback_models.is_empty() {
+                    args.selection.provider = Some(host.runtime().policy().provider_name.clone());
+                    args.selection.model = Some(host.runtime().policy().model.as_str().to_owned());
+                }
                 resume = Some(current_session);
                 catalog_change = Some(catalog);
                 frozen_catalog = Some(next);

@@ -6,6 +6,12 @@ behavior. If that turn explicitly creates an active persistent goal, the host
 remains subscribed through attributed internal continuations until the goal
 stops.
 
+Profiles can opt into ordered model fallback and a first-response timeout.
+Switches appear as `model_fallback` stream events and stderr notices. The final
+result names the last selected provider/model and includes
+`usage.current_run_bindings` for that invocation; unreported attempts retain
+unknown usage. See [Model fallback](guides/profiles-and-advisor.md#model-fallback).
+
 ## Input and output modes
 
 ```sh

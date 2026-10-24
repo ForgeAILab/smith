@@ -1,6 +1,45 @@
 use super::*;
 
 #[test]
+fn fallback_keeps_unreported_attempts_unknown_in_cost_totals() {
+    let mut first = priced(1_000_000, 0, 0, 0);
+    first.provider = "first".into();
+    first.model = "primary".into();
+    let mut backup = priced(2_000_000, 0, 0, 0);
+    backup.provider = "backup".into();
+    backup.model = "secondary".into();
+    let mut status = Status::new("primary", "project");
+    status.switch_model(Some("first".into()), "primary");
+    status.set_price(Some(first.clone()));
+    status.record_usage_record(&UsageRecord {
+        source: UsageSource::ProviderAttempt,
+        provenance: agent_runtime_core::usage::Provenance::default(),
+        delta: UsageDelta::new(),
+    });
+    assert!(status.session_usage().cost_price(Some(&first)).is_none());
+    status.switch_model(Some("backup".into()), "secondary");
+    status.set_price(Some(backup.clone()));
+    status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1000));
+    let usage = status.session_usage();
+    assert!(
+        !usage
+            .bindings
+            .iter()
+            .find(|binding| binding.model == "primary")
+            .unwrap()
+            .reported
+    );
+    let cost = SessionCost::compute(&usage, &backup);
+    assert_eq!(cost.micro_usd, 2000);
+    assert_eq!(cost.label, CostLabel::Estimated);
+    assert!(
+        backup
+            .render_sources(&usage)
+            .contains("usage unknown for first/primary")
+    );
+}
+
+#[test]
 fn hosted_search_requests_are_retained_but_excluded_from_token_totals_and_display() {
     let totals = BTreeMap::from([
         (CounterKind::InputUncached, 100),

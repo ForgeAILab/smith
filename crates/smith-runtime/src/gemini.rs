@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use agent_runtime_core::content::{Message, Role};
 use agent_runtime_core::provider::{
-    Capabilities, ModelDescriptor, ModelId, Provider, ProviderCallContext, ProviderError,
-    ProviderRequest, ProviderStream,
+    CacheResourceProvider, Capabilities, ModelDescriptor, ModelId, Provider, ProviderCallContext,
+    ProviderError, ProviderRequest, ProviderStream,
 };
 use async_trait::async_trait;
 
@@ -52,12 +52,34 @@ impl fmt::Debug for GeminiContinuationProvider {
 
 #[async_trait]
 impl Provider for GeminiContinuationProvider {
+    async fn prepare_request(
+        &self,
+        request: &ProviderRequest,
+        ctx: &ProviderCallContext,
+    ) -> Result<(), ProviderError> {
+        self.inner.prepare_request(request, ctx).await
+    }
+
+    // The appended continuation turn adds no hosted side effect, so the
+    // adapter's own replay judgement still holds for the request it sends.
+    fn pre_output_replay_safe(&self, request: &ProviderRequest) -> bool {
+        self.inner.pre_output_replay_safe(request)
+    }
+
     fn describe(&self) -> Vec<ModelDescriptor> {
         self.inner.describe()
     }
 
     fn capabilities(&self, model: &ModelId) -> Option<Capabilities> {
         self.inner.capabilities(model)
+    }
+
+    fn requires_nonempty_assistant_content(&self) -> bool {
+        self.inner.requires_nonempty_assistant_content()
+    }
+
+    fn cache_resource_provider(&self) -> Option<&dyn CacheResourceProvider> {
+        self.inner.cache_resource_provider()
     }
 
     async fn stream(
@@ -172,5 +194,39 @@ mod tests {
             close_model_turn(&mut planned);
             assert_eq!(planned.messages, before);
         }
+    }
+
+    #[derive(Debug)]
+    struct ReplaySafeAdapter;
+
+    #[async_trait]
+    impl Provider for ReplaySafeAdapter {
+        fn pre_output_replay_safe(&self, _request: &ProviderRequest) -> bool {
+            true
+        }
+
+        fn describe(&self) -> Vec<ModelDescriptor> {
+            Vec::new()
+        }
+
+        fn capabilities(&self, _model: &ModelId) -> Option<Capabilities> {
+            None
+        }
+
+        async fn stream(
+            &self,
+            _request: ProviderRequest,
+            _ctx: ProviderCallContext,
+        ) -> Result<ProviderStream, ProviderError> {
+            unreachable!("replay judgement never streams")
+        }
+    }
+
+    /// Model fallback and reactive rotation read this judgement through the
+    /// wrapper; the trait default would refuse every Gemini replay.
+    #[test]
+    fn the_adapter_replay_judgement_reaches_the_runtime() {
+        let wrapped = accept_internal_turns(Arc::new(ReplaySafeAdapter));
+        assert!(wrapped.pre_output_replay_safe(&request(Vec::new())));
     }
 }

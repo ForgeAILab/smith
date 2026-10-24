@@ -11,6 +11,7 @@ pub(super) fn fixture_result() -> ResultEnvelope {
         model: "fixture-model".into(),
         output: "answer".into(),
         usage: UsageOutput {
+            current_run_bindings: Vec::new(),
             current_turn: UsageDelta::new(),
             session: UsageDelta::new(),
             synthetic_cache: SyntheticUsageOutput::default(),

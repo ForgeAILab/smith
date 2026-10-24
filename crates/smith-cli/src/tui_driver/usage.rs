@@ -303,6 +303,57 @@ pub(crate) fn resolve_price(
     bound_price(&policy.provider_name, policy.model.as_str(), binding)
 }
 
+pub(crate) fn resolve_model_price(
+    policy: &RuntimePolicy,
+    provider: &str,
+    model: &str,
+    catalog: &smith_config::catalog::CatalogSnapshot,
+) -> Option<smith_client::status::PriceReference> {
+    if provider == policy.provider_name && model == policy.model.as_str() {
+        return resolve_price(policy, catalog);
+    }
+    let route = policy
+        .fallback_models
+        .iter()
+        .find(|route| route.provider_name == provider && route.model.as_str() == model)?;
+    let binding =
+        catalog.bound_provider(provider, &route.provider_kind, route.endpoint.as_deref())?;
+    bound_price(provider, model, binding)
+}
+
+pub(crate) fn apply_model_policy(
+    status: &mut smith_client::status::Status,
+    policy: &RuntimePolicy,
+    provider: &str,
+    model: &str,
+    catalog: &smith_config::catalog::CatalogSnapshot,
+) {
+    let details = if provider == policy.provider_name && model == policy.model.as_str() {
+        Some((&policy.reasoning, &policy.context_window))
+    } else {
+        policy
+            .fallback_models
+            .iter()
+            .find(|route| route.provider_name == provider && route.model.as_str() == model)
+            .map(|route| (&route.reasoning, &route.context_window))
+    };
+    let Some((reasoning, context_window)) = details else {
+        return;
+    };
+    if status.provider.as_deref() != Some(provider) || status.model != model {
+        status.switch_model(Some(provider.to_owned()), model);
+    }
+    status.set_price(resolve_model_price(policy, provider, model, catalog));
+    status.context_window.clone_from(context_window);
+    status.set_reasoning_hint(reasoning.has_override().then(|| {
+        format!(
+            "think {} · effort {}",
+            reasoning.effective_state(),
+            reasoning.effective_effort()
+        )
+    }));
+}
+
 pub(super) fn bound_price(
     provider: &str,
     model: &str,

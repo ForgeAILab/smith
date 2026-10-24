@@ -28,9 +28,11 @@ use agent_runtime_core::store::Secret;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
+mod fallback;
 mod models;
 mod web;
 
+pub use fallback::{FallbackModelSection, ModelFallbackSection};
 pub use models::{ModelCacheSection, ModelSection};
 pub use web::{WebFetchSection, WebSearchBackend, WebSearchMode, WebSearchSection};
 
@@ -438,6 +440,9 @@ pub struct ProfileSection {
     /// The model this profile sends to that provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Ordered alternative bindings and an optional first-response budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<ModelFallbackSection>,
     /// Default named context window for this profile's selected model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<String>,

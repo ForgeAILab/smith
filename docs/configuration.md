@@ -6,6 +6,9 @@ fields, wrong types, conflicting values in one layer, incomplete provider/model
 selection, unsupported adapter options, unsafe credentials, and missing model
 limits are errors. Smith does not guess through them.
 
+For ordered models and a first-response deadline within one profile, see
+[Model fallback](guides/profiles-and-advisor.md#model-fallback).
+
 ## Discovery and precedence
 
 Starting at `--project` or the current directory, Smith walks upward to the

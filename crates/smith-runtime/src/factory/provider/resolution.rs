@@ -9,6 +9,19 @@ use super::credentials;
 pub(in crate::factory) async fn prepare(
     request: &RuntimeRequest,
 ) -> Result<PreparedFactoryInputs, FactoryError> {
+    prepare_with_credentials(request, true).await
+}
+
+pub(in crate::factory) async fn prepare_metadata(
+    request: &RuntimeRequest,
+) -> Result<PreparedFactoryInputs, FactoryError> {
+    prepare_with_credentials(request, false).await
+}
+
+async fn prepare_with_credentials(
+    request: &RuntimeRequest,
+    acquire_credentials: bool,
+) -> Result<PreparedFactoryInputs, FactoryError> {
     let config = &request.config;
     let provider_name = config.provider.name.value.clone();
     let provider_kind = config.provider.kind.value.clone();
@@ -296,16 +309,20 @@ pub(in crate::factory) async fn prepare(
 
     // Capability and requested-value validation precede credential lookup, so
     // an invalid effort never opens a keychain prompt.
-    let secret = match (
-        &request.provider,
-        credentials::active_credential_reference(request),
-        &config.provider.api_key,
-    ) {
-        (None, _, Some(api_key)) => Some(api_key.value.clone()),
-        (None, Some(reference), None) => Some(credentials::secret(request, &reference).await?),
-        _ => None,
+    let secret = if !acquire_credentials {
+        None
+    } else {
+        match (
+            &request.provider,
+            credentials::active_credential_reference(request),
+            &config.provider.api_key,
+        ) {
+            (None, _, Some(api_key)) => Some(api_key.value.clone()),
+            (None, Some(reference), None) => Some(credentials::secret(request, &reference).await?),
+            _ => None,
+        }
     };
-    if adapter == Adapter::ChatGptResponses && request.provider.is_none() {
+    if acquire_credentials && adapter == Adapter::ChatGptResponses && request.provider.is_none() {
         let secret = secret.as_ref().ok_or(FactoryError::ChatGptAuth(
             crate::chatgpt::ChatGptAuthError::InvalidBundle,
         ))?;
@@ -313,7 +330,7 @@ pub(in crate::factory) async fn prepare(
     }
     // Rejected here rather than at the first model call, so a login that never
     // completed is reported while the user is still in setup.
-    if adapter == Adapter::XaiResponses && request.provider.is_none() {
+    if acquire_credentials && adapter == Adapter::XaiResponses && request.provider.is_none() {
         let secret = secret.as_ref().ok_or(FactoryError::XaiAuth(
             crate::xai::XaiAuthError::InvalidBundle,
         ))?;
@@ -335,7 +352,10 @@ pub(in crate::factory) async fn prepare(
         ))));
     }
     let command = match static_command {
-        Some(command) => Some(adapter::prepare_command_provider(request, command).await?),
+        Some(command) if acquire_credentials => {
+            Some(adapter::prepare_command_provider(request, command).await?)
+        }
+        Some(_) => None,
         None => None,
     };
     Ok(PreparedFactoryInputs {

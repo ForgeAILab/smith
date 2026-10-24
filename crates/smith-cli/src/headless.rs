@@ -61,6 +61,8 @@ pub(crate) struct HeadlessBrokers<'a> {
     pub(crate) credential_pool: Option<&'a SharedPool>,
     /// The exact active-model price reference, when the catalog supplies one.
     pub(crate) cache_price: Option<CachePrice>,
+    /// Frozen catalog used to attribute configured fallback model prices.
+    pub(crate) catalog: Option<&'a smith_config::catalog::CatalogSnapshot>,
     /// Layered local notice policy.
     pub(crate) cache_miss_notices: bool,
     /// Declared servers that cannot run until the user confirms trust.

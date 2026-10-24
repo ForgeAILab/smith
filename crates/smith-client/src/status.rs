@@ -592,6 +592,12 @@ impl Status {
             self.record_synthetic_usage(purpose, &record.delta);
             return;
         }
+        if record.source == UsageSource::ProviderAttempt
+            && record.delta.is_empty()
+            && let Some(binding) = &mut self.active_binding
+        {
+            binding.record(&record.delta, false);
+        }
         self.record_usage(&record.delta);
         if record.delta.input_tokens() > 0
             && let Some(binding) = &mut self.active_binding

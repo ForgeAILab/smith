@@ -348,6 +348,7 @@ fn machine_result_v2_compatibility_fixture_is_stable() {
         model: "fixture-model".into(),
         output: "fixture answer".into(),
         usage: UsageOutput {
+            current_run_bindings: Vec::new(),
             current_turn: usage.clone(),
             session: usage,
             synthetic_cache: SyntheticUsageOutput::default(),
@@ -402,6 +403,7 @@ fn approval_required_v2_compatibility_fixture_is_stable_and_redacted() {
         model: "fixture-model".into(),
         output: String::new(),
         usage: UsageOutput {
+            current_run_bindings: Vec::new(),
             current_turn: UsageDelta::new(),
             session: UsageDelta::new(),
             synthetic_cache: SyntheticUsageOutput::default(),
@@ -464,6 +466,7 @@ fn interaction_required_v2_fixture_is_stable_and_content_free() {
         model: "fixture-model".into(),
         output: String::new(),
         usage: UsageOutput {
+            current_run_bindings: Vec::new(),
             current_turn: UsageDelta::new(),
             session: UsageDelta::new(),
             synthetic_cache: SyntheticUsageOutput::default(),
@@ -549,6 +552,7 @@ fn text_projection_reports_lifecycle_without_exposing_todo_or_argument_content()
         model: "fixture-model".into(),
         output: "answer".into(),
         usage: UsageOutput {
+            current_run_bindings: Vec::new(),
             current_turn: UsageDelta::new(),
             session: UsageDelta::new(),
             synthetic_cache: SyntheticUsageOutput::default(),
@@ -723,6 +727,7 @@ fn canonical_cache_fixture_matches_tui_final_stream_and_text_surfaces() {
         model: "fixture-model".to_owned(),
         output: "fixture answer".to_owned(),
         usage: UsageOutput {
+            current_run_bindings: Vec::new(),
             current_turn: usage.clone(),
             session: usage,
             synthetic_cache: SyntheticUsageOutput::default(),

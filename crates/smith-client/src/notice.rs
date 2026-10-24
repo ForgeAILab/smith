@@ -8,6 +8,41 @@ use smith_runtime::client::{BudgetCategory, SmithEvent, SmithEventKind};
 
 use crate::format::compact_tokens;
 
+/// The same fallback decision text for interactive, replay, and headless output.
+pub fn model_fallback_notice(event: &SmithEventKind) -> Option<String> {
+    let SmithEventKind::ModelFallback {
+        from_provider,
+        from_model,
+        to_provider,
+        to_model,
+        candidate_index,
+        total_candidates,
+        reason,
+        elapsed_ms,
+        first_response_timeout_ms,
+    } = event
+    else {
+        return None;
+    };
+    use smith_runtime::client::ModelFallbackReason;
+    let reason = match reason {
+        ModelFallbackReason::FirstResponseTimeout => format!(
+            "no response within {}",
+            crate::status::render_elapsed(std::time::Duration::from_millis(
+                first_response_timeout_ms.unwrap_or(*elapsed_ms)
+            ))
+        ),
+        ModelFallbackReason::QuotaExhausted => "usage limit reached".to_owned(),
+        ModelFallbackReason::TransientFailure => "provider retries exhausted".to_owned(),
+        ModelFallbackReason::Unavailable => "provider or credential source unavailable".to_owned(),
+        ModelFallbackReason::Incompatible => "model cannot serve this request".to_owned(),
+    };
+    Some(format!(
+        "model fallback: {from_provider}/{from_model} ({reason}); trying {to_provider}/{to_model} ({}/{total_candidates})",
+        candidate_index.saturating_add(1)
+    ))
+}
+
 /// Whether a notice records an event or only answers a keypress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoticePersistence {

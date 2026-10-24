@@ -75,6 +75,8 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("agent_order", ValueKind::List),
     ("agent.read_only_network_modules", ValueKind::List),
     ("profile_order", ValueKind::List),
+    ("fallback.models", ValueKind::Text),
+    ("fallback.first_response_timeout_ms", ValueKind::Integer),
     ("approval.auto_approve", ValueKind::List),
     ("approval.auto", ValueKind::Text),
     ("approval.mode", ValueKind::Text),
@@ -403,6 +405,9 @@ pub struct Provenance {
 }
 
 impl Provenance {
+    pub(super) fn remove(&mut self, key: &str) {
+        self.entries.remove(key);
+    }
     /// Every configured key, in deterministic order.
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(String::as_str)

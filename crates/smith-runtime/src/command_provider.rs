@@ -888,6 +888,7 @@ impl From<CommandErrorKind> for ProviderErrorKind {
 
 fn provider_error_kind_label(kind: ProviderErrorKind) -> &'static str {
     match kind {
+        ProviderErrorKind::Unavailable => "unavailable",
         ProviderErrorKind::Network => "network",
         ProviderErrorKind::Timeout => "timeout",
         ProviderErrorKind::RateLimited => "rate-limited",

@@ -10,6 +10,7 @@ pub async fn preflight(request: &RuntimeRequest) -> Result<FactoryPreflight, Fac
     // first account is spent and rotation reaches for a reference that was
     // never going to work.
     provider::validate_pool_references(request)?;
+    let _fallbacks = fallback::prepare(request).await?;
     let prepared = provider::prepare(request).await?;
     Ok(FactoryPreflight {
         provider_name: prepared.provider_name,
@@ -198,6 +199,11 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     let workspace = authority.workspace;
     let approval = authority.approval;
     request.workspace = Some(workspace.clone());
+    let fallback::PreparedFallbacks {
+        routes: fallback_routes,
+        policies: fallback_policies,
+        observers: fallback_observers,
+    } = fallback::prepare(&request).await?;
     let PreparedFactoryInputs {
         provider_name,
         provider_kind,
@@ -336,6 +342,12 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     let durability = persistence::prepare(&request).await?;
 
     let policy = assemble_policy(RuntimePolicy {
+        fallback_models: fallback_policies,
+        first_response_timeout_ms: config
+            .fallback
+            .first_response_timeout_ms
+            .as_ref()
+            .map(|timeout| timeout.value),
         modules: config.modules.clone(),
         user_dir: config.user_dir.clone(),
         harness: request.config.harness.clone(),
@@ -477,13 +489,24 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         .observer(backoff)
         .observer(request.web_search_session.clone())
         .provider_name(provider_name.clone())
+        .model_fallbacks(
+            fallback_routes.clone(),
+            config
+                .fallback
+                .first_response_timeout_ms
+                .as_ref()
+                .map(|timeout| timeout.value),
+        )
         // The profile rather than the catalog: the run must plan against
         // exactly the limits validated above, and passing a catalog as well
         // would be dead weight because an explicit profile always outranks it.
         .model_profile(profile.profile.clone())
         .loop_config(loop_config.clone())
-        .hosted_tools(web.hosted.clone())
-        .model_interceptor(Arc::new(ReasoningInterceptor::new(&reasoning)))
+        .hosted_tools(web.hosted.clone());
+    if config.fallback.models.is_empty() {
+        builder = builder.model_interceptor(Arc::new(ReasoningInterceptor::new(&reasoning)));
+    }
+    builder = builder
         .context_policy(context_policy.clone())
         .compactor(StructuralCompactor::new(compaction_policy))
         // Declared explicitly so the shared planner records Smith's answer
@@ -527,6 +550,9 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         .clock(clock.clone())
         .event_buffer(request.event_buffer)
         .shutdown_timeout_ms(request.shutdown_timeout_ms);
+    for observer in &fallback_observers {
+        builder = builder.observer(observer.clone());
+    }
     // A harness replaces how a turn is executed, leaving every other piece of
     // the composition above in place.
     if let crate::cli_agent::TurnExecution::InstalledAgent(plan) = &execution {
@@ -674,6 +700,13 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                         .cloned(),
                     modules: request.modules.clone(),
                     module_context: child_module_context,
+                    model_fallbacks: fallback_routes,
+                    first_response_timeout_ms: config
+                        .fallback
+                        .first_response_timeout_ms
+                        .as_ref()
+                        .map(|timeout| timeout.value),
+                    fallback_observers,
                 },
                 profile_routes: child_profile_routes,
                 capability_limits: capability_limits.clone(),

@@ -657,6 +657,18 @@ impl App {
         // line, using the same reviewed tool display projection the
         // transcript uses; see `refresh_child_tool_detail`.
         match &envelope.payload {
+            RuntimeEvent::ModelProfileResolved {
+                provider, model, ..
+            } => {
+                self.switch_child_usage_binding(
+                    child,
+                    smith_client::status::BindingUsage::new(
+                        Some(provider.clone()),
+                        model.as_str(),
+                        None,
+                    ),
+                );
+            }
             RuntimeEvent::ToolCallRequested { .. }
             | RuntimeEvent::ToolCallCompleted { .. }
             | RuntimeEvent::ExternalToolInvoked { .. }
@@ -685,6 +697,7 @@ impl App {
                         });
                     binding.totals.clear();
                     binding.synthetic_by_purpose.clear();
+                    binding.reported = true;
                     binding.record(&record.delta, true);
                     let bindings = self.child_module_usage.entry(module.into()).or_default();
                     if let Some(existing) = bindings.iter_mut().find(|existing| {
@@ -701,6 +714,18 @@ impl App {
                 {
                     self.status.record_synthetic_usage(purpose, &record.delta);
                 } else {
+                    if record.source == UsageSource::ProviderAttempt && record.delta.is_empty() {
+                        self.child_usage_bindings
+                            .entry(child.to_owned())
+                            .or_insert_with(|| {
+                                smith_client::status::BindingUsage::new(
+                                    None,
+                                    format!("child {child}"),
+                                    None,
+                                )
+                            })
+                            .record(&record.delta, false);
+                    }
                     self.record_delegated_usage(
                         child,
                         &record.delta,
@@ -766,10 +791,13 @@ impl App {
         usage.delegated_module_usage = self.child_module_usage.clone();
         usage.delegated_contributors =
             u32::try_from(self.delegated_contributors.len()).unwrap_or(u32::MAX);
+        usage
+            .bindings
+            .extend(self.earlier_child_usage_bindings.iter().cloned());
         usage.bindings.extend(
             self.child_usage_bindings
                 .values()
-                .filter(|binding| !binding.totals.is_empty())
+                .filter(|binding| !binding.totals.is_empty() || !binding.reported)
                 .cloned(),
         );
         usage
@@ -796,6 +824,28 @@ impl App {
                     smith_client::status::BindingUsage::new(None, format!("child {child}"), None)
                 })
             });
+    }
+
+    /// Advances a child's observed model while freezing its previous usage.
+    pub fn switch_child_usage_binding(
+        &mut self,
+        child: &str,
+        binding: smith_client::status::BindingUsage,
+    ) {
+        if let Some(previous) = self.child_usage_bindings.get_mut(child)
+            && previous.provider == binding.provider
+            && previous.model == binding.model
+        {
+            if previous.totals.is_empty() && previous.price.is_none() {
+                previous.price = binding.price;
+            }
+            return;
+        }
+        if let Some(previous) = self.child_usage_bindings.insert(child.to_owned(), binding)
+            && (!previous.totals.is_empty() || !previous.reported)
+        {
+            self.earlier_child_usage_bindings.push(previous);
+        }
     }
 
     /// The profile a lifecycle transition that replaces a child's whole
@@ -1000,6 +1050,69 @@ mod usage_binding_tests {
         assert_eq!(usage.merged_total_tokens(), 10);
         assert!(usage.delegated_totals.is_empty());
         assert_eq!(SessionCost::compute(&usage, &root_price).micro_usd, 20);
+    }
+
+    #[test]
+    fn child_fallback_freezes_each_models_counters_and_prices() {
+        let mut app = App::new("root", "project");
+        let root = price("root-provider", "root", 2_000_000);
+        app.status
+            .switch_model(Some("root-provider".into()), "root");
+        app.status.set_price(Some(root.clone()));
+        app.status
+            .record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1000));
+        app.set_child_usage_binding(
+            "child",
+            Some(BindingUsage::new(
+                Some("first".into()),
+                "primary",
+                Some(price("first", "primary", 10_000_000)),
+            )),
+        );
+        child_usage(&mut app, "child", 100);
+        let event = EventEnvelope::new(
+            1,
+            agent_runtime_core::ids::EventId::new("model"),
+            agent_runtime_core::ids::SessionId::new("child"),
+            None,
+            agent_runtime_core::clock::Timestamp::ZERO,
+            RuntimeEvent::ModelProfileResolved {
+                provider: "backup".into(),
+                model: agent_runtime_core::provider::ModelId::new("secondary"),
+                profile: agent_runtime::registry::Fingerprint::of("backup"),
+            },
+        );
+        app.apply_child("child", &event);
+        app.switch_child_usage_binding(
+            "child",
+            BindingUsage::new(
+                Some("backup".into()),
+                "secondary",
+                Some(price("backup", "secondary", 20_000_000)),
+            ),
+        );
+        child_usage(&mut app, "child", 200);
+        let usage = app.session_usage();
+        assert_eq!(usage.delegated_contributors, 1);
+        assert_eq!(
+            usage
+                .bindings
+                .iter()
+                .find(|binding| binding.model == "primary")
+                .unwrap()
+                .totals[&CounterKind::InputUncached],
+            100
+        );
+        assert_eq!(
+            usage
+                .bindings
+                .iter()
+                .find(|binding| binding.model == "secondary")
+                .unwrap()
+                .totals[&CounterKind::InputUncached],
+            200
+        );
+        assert_eq!(SessionCost::compute(&usage, &root).micro_usd, 7000);
     }
 
     #[test]
