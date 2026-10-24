@@ -24,7 +24,8 @@ five-minute foreground wait is still the most attractive action on offer.
 - When an armed timer expires while the child is still running, Smith admits
   one idle-only internal continuation attributed `delegation.wait-timeout`,
   carrying a bounded status of the child (no partial output). If the parent is
-  busy, the status is delivered at the next safe boundary instead.
+  busy, the status is delivered when that turn ends, as its own
+  continuation; it is never injected into the running turn.
 - `timeout_ms = 0` keeps its immediate-status meaning and arms nothing.
   Re-arming a child replaces its earlier timer. Timers never re-arm themselves.
 - A `timeout_ms` above the configured maximum is clamped to that maximum and

@@ -260,7 +260,9 @@ continuations: it MUST NOT queue behind or run concurrently with real user
 work or another parent turn, MUST NOT fabricate a user-role message, and
 SHALL batch every expired, still-running child ready at admission in
 deterministic child-ID order. A notice that cannot be admitted because the
-parent is serving SHALL be supplied at the next safe boundary. Armed timers
+parent is serving SHALL be admitted as a `delegation.wait-timeout`
+continuation when that parent turn ends and MUST NOT be injected into the
+running turn. Armed timers
 SHALL NOT be persisted; restart reconciliation supersedes them.
 
 #### Scenario: Timer expires while the parent is parked
@@ -291,7 +293,9 @@ SHALL NOT be persisted; restart reconciliation supersedes them.
 - **GIVEN** the parent is processing a user turn
 - **WHEN** an armed timer expires for a running child
 - **THEN** no competing internal turn starts
-- **AND** the status notice is supplied at the next safe boundary
+- **AND** the status notice is not injected into the running turn
+- **WHEN** that user turn ends
+- **THEN** one `delegation.wait-timeout` continuation carries the notice
 
 #### Scenario: Re-arming replaces the deadline
 

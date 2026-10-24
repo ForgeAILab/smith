@@ -45,8 +45,10 @@ change keeps without blocking.
   - Terminal outcome injected for a child → its timer is cancelled.
   - Timer fires but the child is terminal (outcome pending or delivered) →
     the timeout wake is dropped; completion delivery wins.
-  - Timer fires while the parent is serving → the bounded status notice is
-    queued and supplied at the next safe boundary; no competing turn starts.
+  - Timer fires while the parent is serving → the timer stays expired and
+    its notice is admitted as a `delegation.wait-timeout` continuation when
+    that turn ends. It is not injected into the running turn, and no
+    competing turn starts. (Owner decision, 2026-10-24: turn-end delivery.)
   - Several timers expire before admission → one continuation carries every
     expired, still-running child in deterministic child-ID order.
   - Real user input keeps priority over a timeout wake, as over completion.
@@ -70,8 +72,9 @@ change keeps without blocking.
   short turn instead of a blocked tool call, which is still strictly cheaper
   in wall-clock and keeps the parent interruptible. No minimum timer is
   imposed; automatic-wake guidance discourages polling.
-- A model that arms a timer and keeps working gets the notice mid-task at the
-  next safe boundary; this matches how monitor notifications already behave.
+- A model that arms a timer and keeps working gets the notice only after its
+  current turn ends, so a long turn can deliver it well past the deadline.
+  Turn-end delivery keeps the running turn's context unchanged.
 - Removing the foreground path removes the 30 s slicing code; existing tests
   that assert a blocking wait must be rewritten, not deleted.
 

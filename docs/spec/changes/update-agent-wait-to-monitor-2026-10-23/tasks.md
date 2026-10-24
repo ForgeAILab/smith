@@ -17,7 +17,7 @@ completed_at: 2026-10-24T10:30:20Z
   queue a bounded host-authored status notice and attempt
   `try_send_internal_if_idle` with source kind `delegation.wait-timeout`,
   batching every expired running child in child-ID order.
-- [x] 1.5 Deliver a queued timeout notice at the next safe boundary when the
+- [x] 1.5 Deliver a queued timeout notice when the parent's turn ends if the
   parent was busy, without starting a competing turn.
 - [x] 1.6 Apply the same behavior to bridged harness roots; keep headless
   process lifetime tied to required child work only.
@@ -41,7 +41,7 @@ completed_at: 2026-10-24T10:30:20Z
 - [x] 2.4 Child completes before expiry: timer cancelled, only the
   child-completion turn runs.
 - [x] 2.5 Timer expires while parent serves a user turn: no competing turn;
-  notice supplied at the next safe boundary.
+  notice delivered as its own continuation when that turn ends.
 - [x] 2.6 Expiry and completion race: completion wins, no timeout wake.
 - [x] 2.7 Re-arm replaces the earlier deadline; two children expiring together
   produce one continuation in child-ID order.
