@@ -61,7 +61,7 @@ expect {{
 }}
 send -- "wait check\r"
 expect {{
-    -re {{nitor [0-9]}} {{}}
+    -re {{nitor(\e\[[0-9;]*H| )[0-9]}} {{}}
     timeout {{ exit 126 }}
     eof {{ exit 125 }}
 }}
@@ -102,13 +102,14 @@ expect {{
     };
     assert!(
         output.status.success(),
-        "screen: {}\nstderr: {}",
+        "status: {}\nscreen: {}\nstderr: {}",
+        output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let screen = String::from_utf8_lossy(&output.stdout);
     assert!(
-        screen.contains("nitor ")
+        (screen.contains("nitor ") || screen.contains("nitor\u{1b}["))
             && screen.contains("delegation.wait-timeout")
             && screen.contains("AUTOMATIC_WAKE")
     );
