@@ -334,6 +334,20 @@ pub(super) async fn materialize_prepared_submission(
             input.parts.push(ContentPart::text(description));
             continue;
         }
+        // A binary file cannot be inlined as text, but `@` still names it:
+        // the model gets the path to inspect with tools.
+        if let Some(bytes) = smith_tools::support::workspace_binary_size(
+            workspace.clone(),
+            std::path::Path::new(&canonical),
+        )
+        .await
+        .map_err(|error| format!("attachment `@{path}` was not sent: {error}"))?
+        {
+            input.parts.push(ContentPart::text(format!(
+                "<smith_file_attachment path=\"{path}\" source=\"path_only\" bytes=\"{bytes}\">\nBinary file; contents not included. Inspect it with tools by this path.\n</smith_file_attachment>"
+            )));
+            continue;
+        }
         let contents = smith_tools::support::read_bounded_from_workspace(
             workspace.clone(),
             std::path::Path::new(&canonical),

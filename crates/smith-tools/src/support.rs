@@ -202,6 +202,24 @@ pub fn looks_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(SNIFF_BYTES).any(|byte| *byte == 0)
 }
 
+/// The size of a workspace file whose leading bytes look binary, or `None`
+/// for text. Only the sniff window is read, so a large archive costs one
+/// small read.
+pub async fn workspace_binary_size(
+    workspace: ProjectWorkspace,
+    path: &Path,
+) -> Result<Option<u64>, RuntimeError> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        if !looks_binary(&workspace.read_prefix(&path, SNIFF_BYTES)?) {
+            return Ok(None);
+        }
+        Ok(Some(workspace.entry(&path)?.size.unwrap_or(0)))
+    })
+    .await
+    .map_err(|_| RuntimeError::internal("workspace read task failed"))?
+}
+
 /// UTF-8 text and the exact version returned from one capability read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundedText {
@@ -367,6 +385,36 @@ mod tests {
 
         let err = read_bounded(&ctx, &path, MAX_READ_BYTES).await.unwrap_err();
         assert!(err.message.contains("binary"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_binary_workspace_file_reports_its_size_and_text_does_not() {
+        let (dir, ctx) = crate::testing::project();
+        let workspace = project_workspace(&ctx).unwrap().clone();
+        let archive = dir.path().join("a.zip");
+        let mut bytes = b"PK\x03\x04\x00\x00".to_vec();
+        bytes.resize(SNIFF_BYTES * 2, b'x');
+        tokio::fs::write(&archive, &bytes).await.unwrap();
+        let text = dir.path().join("a.txt");
+        tokio::fs::write(&text, "plain\n").await.unwrap();
+
+        assert_eq!(
+            workspace_binary_size(workspace.clone(), &archive)
+                .await
+                .unwrap(),
+            Some(bytes.len() as u64)
+        );
+        assert_eq!(
+            workspace_binary_size(workspace.clone(), &text)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(
+            workspace_binary_size(workspace, &dir.path().join("missing.bin"))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

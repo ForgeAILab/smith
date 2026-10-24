@@ -243,3 +243,44 @@ async fn prepared_image_attachment_uses_signature_and_provider_limits() {
     );
     assert!(error.contains("unsupported or corrupt image"), "{error}");
 }
+
+#[tokio::test]
+async fn prepared_binary_attachment_is_sent_as_its_path() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("course-package.zip"),
+        b"PK\x03\x04\x00\x00ARCHIVE_BYTES",
+    )
+    .unwrap();
+    let mut app = App::new("example-model", project.path().display().to_string());
+    app.set_resources(RuntimeResources {
+        files: vec![ResourceEntry::new(
+            "file:course-package.zip",
+            "course-package.zip",
+            "workspace file",
+        )],
+        ..RuntimeResources::default()
+    });
+    app.composer.replace("unpack @course-package.zip");
+    let Some(Action::Submit { submission, .. }) =
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    else {
+        panic!("expected an attachment submission");
+    };
+    let input = materialize_prepared_submission(
+        project.path(),
+        &submission,
+        &smith_tools::ImageLimits::for_provider(smith_tools::ImageProvider::Other),
+    )
+    .await
+    .expect("a binary attachment is sent as a path");
+    assert_eq!(input.parts.len(), 2);
+    let wire = serde_json::to_string(&input).expect("input wire");
+    assert!(wire.contains("unpack @course-package.zip"), "{wire}");
+    assert!(
+        wire.contains("path=\\\"course-package.zip\\\" source=\\\"path_only\\\" bytes=\\\"19\\\""),
+        "{wire}"
+    );
+    assert!(!wire.contains("prepared_read"), "{wire}");
+    assert!(!wire.contains("ARCHIVE_BYTES"), "{wire}");
+}
