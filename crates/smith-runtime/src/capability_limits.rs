@@ -32,6 +32,77 @@ pub(crate) fn pinned_core(abilities: &SealedAbilities) -> Vec<RegistryId> {
         .collect()
 }
 
+/// Names the registered tools a session may activate but does not start with.
+///
+/// Discovery by search can miss: a model that searched the wrong words or
+/// domain concludes the tool does not exist. One line naming what is there
+/// makes `registry.activate` reachable without a search. Built from the tools
+/// actually registered, minus the pinned core and anything the session limits
+/// deny, so it never names a tool the session could not activate.
+pub(crate) fn activatable_tools(
+    tools: &[std::sync::Arc<dyn agent_runtime_core::tool::Tool>],
+    abilities: &SealedAbilities,
+    limits: &CapabilityLimits,
+) -> Option<ActivatableTools> {
+    let pinned = pinned_core(abilities);
+    let names = tools
+        .iter()
+        .map(|tool| tool.spec().name)
+        .filter(|name| {
+            let id = RegistryId::tool(name);
+            !pinned.contains(&id) && limits.admits(&id)
+        })
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        return None;
+    }
+    let body = format!(
+        "Tools you can activate with registry.activate (ids `tool:<name>`): {}.",
+        names.join(", ")
+    );
+    use sha2::{Digest, Sha256};
+    let revision = agent_runtime::registry::RegistryRevision::new(format!(
+        "{:x}",
+        Sha256::digest(body.as_bytes())
+    ));
+    Some(ActivatableTools { body, revision })
+}
+
+/// The one developer fragment [`activatable_tools`] contributes.
+#[derive(Debug)]
+pub(crate) struct ActivatableTools {
+    body: String,
+    revision: agent_runtime::registry::RegistryRevision,
+}
+
+#[async_trait::async_trait]
+impl agent_runtime::harness::ContextContributor for ActivatableTools {
+    fn descriptor(&self) -> agent_runtime::harness::ComponentDescriptor {
+        agent_runtime::harness::ComponentDescriptor::new(
+            "smith.activatable-tools",
+            self.revision.clone(),
+        )
+    }
+
+    async fn contribute(
+        &self,
+        _: &agent_runtime::harness::ContextView,
+    ) -> Result<agent_runtime::harness::ContextPatch, RuntimeError> {
+        use agent_runtime::context::{
+            ContextFragment, FragmentContent, FragmentKind, FragmentSource,
+        };
+        Ok(agent_runtime::harness::ContextPatch::new(vec![
+            ContextFragment::new(
+                "smith.activatable-tools",
+                FragmentKind::DeveloperInstruction,
+                FragmentSource::Host,
+                self.revision.clone(),
+                FragmentContent::Text(self.body.clone()),
+            ),
+        ]))
+    }
+}
+
 /// Validated `<domain>:<name>` patterns limiting what a session may use.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CapabilityLimits {
@@ -163,4 +234,47 @@ pub fn catalog(
             summary: entry.summary,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, OnceLock};
+
+    use agent_runtime::registry::RegistrySource;
+
+    use super::*;
+
+    #[test]
+    fn the_activatable_index_names_registered_tools_outside_the_core_and_limits() {
+        let mut tools = smith_tools::all();
+        tools.push(Arc::new(crate::delegation::AgentTool::new(Arc::new(
+            OnceLock::new(),
+        ))));
+        tools.push(Arc::new(agent_runtime::harness::WriteTodosTool::new()));
+        let abilities = crate::abilities::seal_tool_abilities(
+            tools
+                .iter()
+                .cloned()
+                .map(|tool| (tool, RegistrySource::BuiltIn)),
+        )
+        .unwrap();
+        let open = activatable_tools(&tools, &abilities, &CapabilityLimits::default()).unwrap();
+        assert!(open.body.contains("registry.activate"), "{}", open.body);
+        assert!(open.body.contains("agent"), "{}", open.body);
+        for core in CORE_TOOL_NAMES {
+            assert!(
+                !open.body.contains(&format!(" {core},"))
+                    && !open.body.contains(&format!(" {core}.")),
+                "{core}: {}",
+                open.body
+            );
+        }
+        let denied = CapabilityLimits {
+            allow: Vec::new(),
+            deny: vec!["tool:agent".into()],
+        };
+        let narrowed = activatable_tools(&tools, &abilities, &denied).unwrap();
+        assert!(!narrowed.body.contains("agent"), "{}", narrowed.body);
+        assert_ne!(open.revision, narrowed.revision);
+    }
 }

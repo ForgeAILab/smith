@@ -558,6 +558,13 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     if let Some(contributor) = prompt.memory.clone() {
         builder = builder.context_contributor(Arc::new(contributor));
     }
+    if let Some(index) = crate::capability_limits::activatable_tools(
+        &capabilities.tools,
+        &capabilities.abilities,
+        &capability_limits,
+    ) {
+        builder = builder.context_contributor(Arc::new(index));
+    }
     if let Some((coordinator, _)) = &semantic_summary {
         builder = builder.semantic_summary(coordinator.clone());
     }

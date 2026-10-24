@@ -530,10 +530,10 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 .with_workspace(workspace.root())
                 .with_agent("child"),
         );
-        let scope_inputs = self
-            .capability_limits
-            .for_child(&route.capabilities)
-            .apply(scope_inputs)?;
+        let child_limits = self.capability_limits.for_child(&route.capabilities);
+        let scope_inputs = child_limits.apply(scope_inputs)?;
+        let activatable =
+            crate::capability_limits::activatable_tools(&tools, &abilities, &child_limits);
         let activation_budget = ActivationBudget::new(
             ContextBudget::from_limits(&route.model_profile.limits, &route.context_policy)
                 .capability_budget,
@@ -629,6 +629,9 @@ impl ChildRuntimeFactory for SmithChildFactory {
         }
         if let Some(contributor) = self.memory.clone() {
             builder = builder.context_contributor(Arc::new(contributor));
+        }
+        if let Some(index) = activatable {
+            builder = builder.context_contributor(Arc::new(index));
         }
         if let Some(coordinator) = self.semantic_summary.clone() {
             builder = builder.semantic_summary(coordinator);
