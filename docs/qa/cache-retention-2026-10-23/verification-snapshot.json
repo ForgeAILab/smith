@@ -1,0 +1,18 @@
+{
+  "path": "/private/tmp/smith-compaction-verify-rpanik29",
+  "purpose": "Validate compaction without the concurrently declared but absent factory fallback module",
+  "source_changes": "Only the unused missing-module declaration and its unused import are omitted in this temporary snapshot; shared sources are unchanged.",
+  "passed_checks": [
+    "Cold model-switch regression on the default test-thread stack",
+    "Host summary route, one-off instruction, output-cap, and cold-resume checks",
+    "Configuration precedence, atomic edits, reset, and concurrent-writer protection",
+    "Decimal rate-limit journal round-trip regression",
+    "CLI suite: 416 passed, 1 ignored"
+  ],
+  "current_workspace_checks": [
+    "Cold model-switch regression passed after boxing secondary routing futures",
+    "CLI suite: 416 passed, 1 ignored",
+    "Production targets: cargo check, cargo build, and clippy with -D warnings pass",
+    "Built binary accepts compaction model/instructions and per-model idle cutoff"
+  ]
+}

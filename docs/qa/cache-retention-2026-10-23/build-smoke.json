@@ -1,0 +1,19 @@
+{
+  "binary": "/Volumes/Data/codes/ai/tui/target/debug/smith",
+  "version": "smith 0.7.12",
+  "checks": [
+    {
+      "key": "context.compaction.model",
+      "passed": true
+    },
+    {
+      "key": "context.compaction.instructions",
+      "passed": true
+    },
+    {
+      "key": "context.cache.inactivity_limit_ms",
+      "passed": true
+    }
+  ],
+  "compress_alias_absent": true
+}

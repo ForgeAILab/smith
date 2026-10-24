@@ -1,0 +1,1780 @@
+{
+  "browser_version": "155.0.8059.85",
+  "results": [
+    {
+      "case": "codex-sol",
+      "status": "rendered",
+      "html_sha256": "d85b7e5b19f4a2e6aca814ce4c50db5152ba36bc385c4e0dbe12415a2fd15de9",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "text_coverage_percent": 100.0,
+      "missing_text": [],
+      "recognition_marker_correct": true,
+      "observations": {
+        "page_title": "Your spaces, in sync.",
+        "recognition_marker": "BOARD 7F2A9C",
+        "sidebar_labels": [
+          "WAYFINDER",
+          "Alder House",
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings",
+          "Alex Morgan"
+        ],
+        "metrics": [
+          {
+            "label": "Monthly revenue",
+            "value": "$24,580"
+          },
+          {
+            "label": "Occupancy",
+            "value": "84%"
+          },
+          {
+            "label": "Active members",
+            "value": "128"
+          },
+          {
+            "label": "Available desks",
+            "value": "18"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date",
+          "Status"
+        ],
+        "table_rows": [
+          [
+            "Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "chart_labels": [
+          "Booking activity",
+          "Week",
+          "Month",
+          "0",
+          "20",
+          "40",
+          "60",
+          "Mon",
+          "Tue",
+          "Wed",
+          "Thu",
+          "Fri",
+          "Sat",
+          "Sun",
+          "Fri · 42 bookings",
+          "Space utilization",
+          "84%",
+          "24 of 28 spaces active",
+          "Desks",
+          "Studios",
+          "Meeting rooms"
+        ],
+        "dominant_colors": {
+          "sidebar": "#0c3325",
+          "canvas": "#faf9f6",
+          "panels": "#ffffff",
+          "heading": "#0b3326",
+          "text": "#0a151d",
+          "muted": "#68717b",
+          "lime": "#d8ff8e",
+          "ring": "#c7fa64",
+          "border": "#d7dce0"
+        },
+        "major_regions": [
+          {
+            "name": "sidebar",
+            "x": 0,
+            "y": 0,
+            "width": 0.174,
+            "height": 1
+          },
+          {
+            "name": "header",
+            "x": 0.199,
+            "y": 0.019,
+            "width": 0.787,
+            "height": 0.132
+          },
+          {
+            "name": "metrics",
+            "x": 0.199,
+            "y": 0.176,
+            "width": 0.786,
+            "height": 0.144
+          },
+          {
+            "name": "booking_activity",
+            "x": 0.199,
+            "y": 0.339,
+            "width": 0.525,
+            "height": 0.321
+          },
+          {
+            "name": "space_utilization",
+            "x": 0.733,
+            "y": 0.34,
+            "width": 0.253,
+            "height": 0.321
+          },
+          {
+            "name": "upcoming_bookings",
+            "x": 0.199,
+            "y": 0.675,
+            "width": 0.475,
+            "height": 0.267
+          },
+          {
+            "name": "promotion",
+            "x": 0.682,
+            "y": 0.675,
+            "width": 0.304,
+            "height": 0.269
+          },
+          {
+            "name": "update_status",
+            "x": 0.199,
+            "y": 0.958,
+            "width": 0.15,
+            "height": 0.018
+          }
+        ]
+      },
+      "major_regions": [
+        {
+          "name": "sidebar",
+          "anchor": "WAYFINDER",
+          "bbox": [
+            0,
+            0,
+            267,
+            1024
+          ],
+          "actual_bbox": [
+            0,
+            0,
+            267,
+            1024
+          ],
+          "iou": 1.0
+        },
+        {
+          "name": "revenue card",
+          "anchor": "Monthly revenue",
+          "bbox": [
+            306,
+            180,
+            290,
+            147
+          ],
+          "actual_bbox": [
+            306,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9881
+        },
+        {
+          "name": "occupancy card",
+          "anchor": "Occupancy",
+          "bbox": [
+            615,
+            180,
+            288,
+            147
+          ],
+          "actual_bbox": [
+            612.5,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9779
+        },
+        {
+          "name": "members card",
+          "anchor": "Active members",
+          "bbox": [
+            920,
+            180,
+            287,
+            147
+          ],
+          "actual_bbox": [
+            919,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9881
+        },
+        {
+          "name": "desks card",
+          "anchor": "Available desks",
+          "bbox": [
+            1224,
+            180,
+            289,
+            147
+          ],
+          "actual_bbox": [
+            1225.5,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9847
+        },
+        {
+          "name": "activity chart",
+          "anchor": "Booking activity",
+          "bbox": [
+            305,
+            348,
+            807,
+            329
+          ],
+          "actual_bbox": [
+            306,
+            347,
+            805.953125,
+            330
+          ],
+          "iou": 0.9957
+        },
+        {
+          "name": "utilization card",
+          "anchor": "Space utilization",
+          "bbox": [
+            1125,
+            348,
+            389,
+            329
+          ],
+          "actual_bbox": [
+            1125.953125,
+            347,
+            388.046875,
+            330
+          ],
+          "iou": 0.9945
+        },
+        {
+          "name": "bookings table",
+          "anchor": "Upcoming bookings",
+          "bbox": [
+            305,
+            691,
+            730,
+            273
+          ],
+          "actual_bbox": [
+            306,
+            691,
+            729.109375,
+            273
+          ],
+          "iou": 0.9985
+        },
+        {
+          "name": "announcement",
+          "anchor": "Make room for ideas.",
+          "bbox": [
+            1048,
+            690,
+            466,
+            277
+          ],
+          "actual_bbox": [
+            1048.109375,
+            691,
+            465.890625,
+            276
+          ],
+          "iou": 0.9962
+        }
+      ],
+      "mean_region_iou": 0.9915,
+      "desktop_dom": {
+        "text": "WAYFINDER\nWorkspace\nAlder House\nAll spaces\nCedar House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nYour spaces, in sync.\nBOARD 7F2A9C\n\nA little room for everything you are building.\n\nMonthly revenue\n\n$24,580\n\n↗\n+12.8%\nthis month\n\nOccupancy\n\n84%\n\n↗\n+6.2%\nthis month\n\nActive members\n\n128\n\n↗\n+14\nthis month\n\nAvailable desks\n\n18\n\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n84%\n\n24 of 28 spaces active\n\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nMake room\nfor ideas.\n\nYour next great project\nstarts here.\n\nExplore spaces\n\nLast updated just now",
+        "visibleText": "WAYFINDER Workspace Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Your spaces, in sync. BOARD 7F2A9C A little room for everything you are building. Monthly revenue $24,580 ↗ +12.8% this month Occupancy 84% ↗ +6.2% this month Active members 128 ↗ +14 this month Available desks 18 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 84% 24 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Make room for ideas. Your next great project starts here. Explore spaces Last updated just now Alder House",
+        "title": "Wayfinder · Workspace overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Explore spaces",
+            "disabled": false
+          },
+          {
+            "text": "Close booking dialog",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Add booking",
+            "disabled": false
+          },
+          {
+            "text": "Close spaces",
+            "disabled": false
+          },
+          {
+            "text": "Book a space",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "pixel_metrics": {
+        "ssim": 0.83663,
+        "blurred_ssim_radius_3": 0.93154,
+        "mean_absolute_rgb_error": 14.8316
+      },
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "html_unchanged_by_evaluation": true
+    },
+    {
+      "case": "smith-astra",
+      "status": "rendered",
+      "html_sha256": "db59b66ec7efbb6cc3116417db9ddcee810a8fbfdd261fe2738fb54f7758fde8",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "text_coverage_percent": 100.0,
+      "missing_text": [],
+      "recognition_marker_correct": true,
+      "observations": {
+        "page_title": "Your spaces, in sync.",
+        "recognition_marker": "BOARD 7F2A9C",
+        "sidebar_labels": [
+          "WAYFINDER",
+          "Alder House",
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings",
+          "Alex Morgan"
+        ],
+        "metrics": [
+          {
+            "label": "Monthly revenue",
+            "value": "$24,580",
+            "detail": "+12.8% this month"
+          },
+          {
+            "label": "Occupancy",
+            "value": "84%",
+            "detail": "+6.2% this month"
+          },
+          {
+            "label": "Active members",
+            "value": "128",
+            "detail": "+14 this month"
+          },
+          {
+            "label": "Available desks",
+            "value": "18",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date",
+          "Status"
+        ],
+        "table_rows": [
+          [
+            "Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "chart_labels": {
+          "activity": [
+            "Booking activity",
+            "Week",
+            "Month",
+            "Mon",
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun",
+            "0",
+            "20",
+            "40",
+            "60",
+            "Fri · 42 bookings"
+          ],
+          "utilization": [
+            "Space utilization",
+            "84%",
+            "24 of 28 spaces active",
+            "Desks",
+            "Studios",
+            "Meeting rooms"
+          ]
+        },
+        "dominant_colors": [
+          "#0b3023",
+          "#d9ff93",
+          "#caff5e",
+          "#faf9f6",
+          "#ffffff",
+          "#0a141c",
+          "#686f77",
+          "#d8dce0"
+        ],
+        "major_regions": [
+          {
+            "name": "sidebar",
+            "x": 0,
+            "y": 0,
+            "width": 0.174,
+            "height": 1
+          },
+          {
+            "name": "heading_and_toolbar",
+            "x": 0.199,
+            "y": 0.018,
+            "width": 0.787,
+            "height": 0.133
+          },
+          {
+            "name": "metric_cards",
+            "x": 0.199,
+            "y": 0.176,
+            "width": 0.787,
+            "height": 0.144
+          },
+          {
+            "name": "booking_activity",
+            "x": 0.199,
+            "y": 0.339,
+            "width": 0.525,
+            "height": 0.322
+          },
+          {
+            "name": "space_utilization",
+            "x": 0.733,
+            "y": 0.34,
+            "width": 0.253,
+            "height": 0.321
+          },
+          {
+            "name": "upcoming_bookings",
+            "x": 0.199,
+            "y": 0.675,
+            "width": 0.475,
+            "height": 0.267
+          },
+          {
+            "name": "promotional_card",
+            "x": 0.682,
+            "y": 0.675,
+            "width": 0.304,
+            "height": 0.269
+          },
+          {
+            "name": "last_updated",
+            "x": 0.199,
+            "y": 0.958,
+            "width": 0.14,
+            "height": 0.016
+          }
+        ],
+        "other_visible_text": [
+          "Workspace",
+          "Overview",
+          "October 23, 2026",
+          "New booking",
+          "A little room for everything you are building.",
+          "Upcoming bookings",
+          "View all",
+          "JC",
+          "OR",
+          "NW",
+          "AM",
+          "Make room for ideas.",
+          "Your next great project starts here.",
+          "Explore spaces",
+          "Last updated just now"
+        ],
+        "visual_notes": "Reference is 1536 by 1024. Sidebar is 267px wide. Main content starts at x306. Seven activity points appear approximately 11,22,34,38,42,29,13; only Friday's 42 is explicitly labeled. The utilization ring has a lime foreground and muted green remainder. The promotional card contains fine green architectural linework, an arched doorway, a hanging lamp, and a potted plant."
+      },
+      "major_regions": [
+        {
+          "name": "sidebar",
+          "anchor": "WAYFINDER",
+          "bbox": [
+            0,
+            0,
+            267,
+            1024
+          ],
+          "actual_bbox": [
+            0,
+            0,
+            267,
+            1024
+          ],
+          "iou": 1.0
+        },
+        {
+          "name": "revenue card",
+          "anchor": "Monthly revenue",
+          "bbox": [
+            306,
+            180,
+            290,
+            147
+          ],
+          "actual_bbox": [
+            306,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9881
+        },
+        {
+          "name": "occupancy card",
+          "anchor": "Occupancy",
+          "bbox": [
+            615,
+            180,
+            288,
+            147
+          ],
+          "actual_bbox": [
+            612.5,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9779
+        },
+        {
+          "name": "members card",
+          "anchor": "Active members",
+          "bbox": [
+            920,
+            180,
+            287,
+            147
+          ],
+          "actual_bbox": [
+            919,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9881
+        },
+        {
+          "name": "desks card",
+          "anchor": "Available desks",
+          "bbox": [
+            1224,
+            180,
+            289,
+            147
+          ],
+          "actual_bbox": [
+            1225.5,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9847
+        },
+        {
+          "name": "activity chart",
+          "anchor": "Booking activity",
+          "bbox": [
+            305,
+            348,
+            807,
+            329
+          ],
+          "actual_bbox": [
+            306,
+            347,
+            806.375,
+            330
+          ],
+          "iou": 0.9953
+        },
+        {
+          "name": "utilization card",
+          "anchor": "Space utilization",
+          "bbox": [
+            1125,
+            348,
+            389,
+            329
+          ],
+          "actual_bbox": [
+            1125.375,
+            347,
+            388.625,
+            330
+          ],
+          "iou": 0.996
+        },
+        {
+          "name": "bookings table",
+          "anchor": "Upcoming bookings",
+          "bbox": [
+            305,
+            691,
+            730,
+            273
+          ],
+          "actual_bbox": [
+            306,
+            691,
+            728.203125,
+            273
+          ],
+          "iou": 0.9975
+        },
+        {
+          "name": "announcement",
+          "anchor": "Make room for ideas.",
+          "bbox": [
+            1048,
+            690,
+            466,
+            277
+          ],
+          "actual_bbox": [
+            1047.203125,
+            691,
+            466.796875,
+            276
+          ],
+          "iou": 0.9947
+        }
+      ],
+      "mean_region_iou": 0.9914,
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nYour spaces, in sync.\nBOARD 7F2A9C\n\nA little room for everything you are building.\n\nMonthly revenue\n$24,580\n+12.8%\nthis month\nOccupancy\n84%\n+6.2%\nthis month\nActive members\n128\n+14\nthis month\nAvailable desks\n18\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n84%\n24 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nMake room\nfor ideas.\n\nYour next great project\nstarts here.\n\nExplore spaces\n\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Your spaces, in sync. BOARD 7F2A9C A little room for everything you are building. Monthly revenue $24,580 +12.8% this month Occupancy 84% +6.2% this month Active members 128 +14 this month Available desks 18 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 84% 24 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Make room for ideas. Your next great project starts here. Explore spaces Last updated just now",
+        "title": "Wayfinder — Workspace Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "Workspace settings",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications — one unread update",
+            "disabled": false
+          },
+          {
+            "text": "Mark as read",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Explore spaces",
+            "disabled": false
+          },
+          {
+            "text": "Close new booking dialog",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Create booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "pixel_metrics": {
+        "ssim": 0.86842,
+        "blurred_ssim_radius_3": 0.96496,
+        "mean_absolute_rgb_error": 7.6609
+      },
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "html_unchanged_by_evaluation": true
+    },
+    {
+      "case": "codex-astra",
+      "status": "rendered",
+      "html_sha256": "351199d5a1410776d935db1b9b171b3cdf4cdf4481e24eeeaeeab2d1bea5548c",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "text_coverage_percent": 100.0,
+      "missing_text": [],
+      "recognition_marker_correct": true,
+      "observations": {
+        "page_title": "Your spaces, in sync.",
+        "recognition_marker": "BOARD 7F2A9C",
+        "sidebar_labels": [
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings"
+        ],
+        "metrics": [
+          {
+            "label": "Monthly revenue",
+            "value": "$24,580"
+          },
+          {
+            "label": "Occupancy",
+            "value": "84%"
+          },
+          {
+            "label": "Active members",
+            "value": "128"
+          },
+          {
+            "label": "Available desks",
+            "value": "18"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date",
+          "Status"
+        ],
+        "table_rows": [
+          [
+            "Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "chart_labels": {
+          "title": "Booking activity",
+          "periods": [
+            "Week",
+            "Month"
+          ],
+          "x_axis": [
+            "Mon",
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "y_axis": [
+            "0",
+            "20",
+            "40",
+            "60"
+          ],
+          "tooltip": "Fri · 42 bookings",
+          "utilization_title": "Space utilization",
+          "utilization_value": "84%",
+          "utilization_detail": "24 of 28 spaces active",
+          "legend": [
+            "Desks",
+            "Studios",
+            "Meeting rooms"
+          ]
+        },
+        "dominant_colors": [
+          "#0b3225",
+          "#fcfaf6",
+          "#d9fc96",
+          "#caff62",
+          "#0a151e",
+          "#69717a",
+          "#d7dce0"
+        ],
+        "major_regions": {
+          "sidebar": {
+            "x": 0,
+            "y": 0,
+            "width": 0.174,
+            "height": 1
+          },
+          "top_toolbar": {
+            "x": 0.199,
+            "y": 0.018,
+            "width": 0.787,
+            "height": 0.045
+          },
+          "heading": {
+            "x": 0.199,
+            "y": 0.064,
+            "width": 0.4,
+            "height": 0.09
+          },
+          "metrics": {
+            "x": 0.199,
+            "y": 0.176,
+            "width": 0.787,
+            "height": 0.144
+          },
+          "booking_chart": {
+            "x": 0.199,
+            "y": 0.339,
+            "width": 0.525,
+            "height": 0.321
+          },
+          "utilization": {
+            "x": 0.733,
+            "y": 0.34,
+            "width": 0.253,
+            "height": 0.321
+          },
+          "bookings_table": {
+            "x": 0.199,
+            "y": 0.675,
+            "width": 0.474,
+            "height": 0.266
+          },
+          "promotion": {
+            "x": 0.682,
+            "y": 0.674,
+            "width": 0.304,
+            "height": 0.27
+          }
+        }
+      },
+      "major_regions": [
+        {
+          "name": "sidebar",
+          "anchor": "WAYFINDER",
+          "bbox": [
+            0,
+            0,
+            267,
+            1024
+          ],
+          "actual_bbox": [
+            0,
+            0,
+            267,
+            1024
+          ],
+          "iou": 1.0
+        },
+        {
+          "name": "revenue card",
+          "anchor": "Monthly revenue",
+          "bbox": [
+            306,
+            180,
+            290,
+            147
+          ],
+          "actual_bbox": [
+            306,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9881
+        },
+        {
+          "name": "occupancy card",
+          "anchor": "Occupancy",
+          "bbox": [
+            615,
+            180,
+            288,
+            147
+          ],
+          "actual_bbox": [
+            612.5,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9779
+        },
+        {
+          "name": "members card",
+          "anchor": "Active members",
+          "bbox": [
+            920,
+            180,
+            287,
+            147
+          ],
+          "actual_bbox": [
+            919,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9881
+        },
+        {
+          "name": "desks card",
+          "anchor": "Available desks",
+          "bbox": [
+            1224,
+            180,
+            289,
+            147
+          ],
+          "actual_bbox": [
+            1225.5,
+            180,
+            288.5,
+            148
+          ],
+          "iou": 0.9847
+        },
+        {
+          "name": "activity chart",
+          "anchor": "Booking activity",
+          "bbox": [
+            305,
+            348,
+            807,
+            329
+          ],
+          "actual_bbox": [
+            306,
+            347,
+            806.625,
+            330
+          ],
+          "iou": 0.995
+        },
+        {
+          "name": "utilization card",
+          "anchor": "Space utilization",
+          "bbox": [
+            1125,
+            348,
+            389,
+            329
+          ],
+          "actual_bbox": [
+            1125.625,
+            347,
+            388.375,
+            330
+          ],
+          "iou": 0.9954
+        },
+        {
+          "name": "bookings table",
+          "anchor": "Upcoming bookings",
+          "bbox": [
+            305,
+            691,
+            730,
+            273
+          ],
+          "actual_bbox": [
+            306,
+            691,
+            728.203125,
+            273
+          ],
+          "iou": 0.9975
+        },
+        {
+          "name": "announcement",
+          "anchor": "Make room for ideas.",
+          "bbox": [
+            1048,
+            690,
+            466,
+            277
+          ],
+          "actual_bbox": [
+            1047.203125,
+            691,
+            466.796875,
+            277
+          ],
+          "iou": 0.9911
+        }
+      ],
+      "mean_region_iou": 0.9909,
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nYour spaces, in sync.\nBOARD 7F2A9C\n\nA little room for everything you are building.\n\nMonthly revenue\n\n$24,580\n\n+12.8%\nthis month\nOccupancy\n\n84%\n\n+6.2%\nthis month\nActive members\n\n128\n\n+14\nthis month\nAvailable desks\n\n18\n\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n84%\n24 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nMake room\nfor ideas.\n\nYour next great project\nstarts here.\n\nExplore spaces\n\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Your spaces, in sync. BOARD 7F2A9C A little room for everything you are building. Monthly revenue $24,580 +12.8% this month Occupancy 84% +6.2% this month Active members 128 +14 this month Available desks 18 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 84% 24 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Make room for ideas. Your next great project starts here. Explore spaces Last updated just now",
+        "title": "Wayfinder — Workspace Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Explore spaces",
+            "disabled": false
+          },
+          {
+            "text": "Close dialog",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Create booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "pixel_metrics": {
+        "ssim": 0.82927,
+        "blurred_ssim_radius_3": 0.91714,
+        "mean_absolute_rgb_error": 15.7791
+      },
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 656,
+          "horizontalOverflow": true
+        }
+      ],
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "html_unchanged_by_evaluation": true
+    },
+    {
+      "case": "smith-sol",
+      "status": "rendered",
+      "html_sha256": "5e7daf001951fc6dbde229c871a34dc628a68caa1b57f257ef8c611c3f38bb11",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "text_coverage_percent": 100.0,
+      "missing_text": [],
+      "recognition_marker_correct": true,
+      "observations": {
+        "page_title": "Your spaces, in sync.",
+        "recognition_marker": "BOARD 7F2A9C",
+        "sidebar_labels": [
+          "WAYFINDER",
+          "Alder House",
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings",
+          "Alex Morgan"
+        ],
+        "metrics": [
+          {
+            "label": "Monthly revenue",
+            "value": "$24,580",
+            "change": "+12.8% this month"
+          },
+          {
+            "label": "Occupancy",
+            "value": "84%",
+            "change": "+6.2% this month"
+          },
+          {
+            "label": "Active members",
+            "value": "128",
+            "change": "+14 this month"
+          },
+          {
+            "label": "Available desks",
+            "value": "18",
+            "change": "Across 4 spaces"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date",
+          "Status"
+        ],
+        "table_rows": [
+          [
+            "JC · Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "OR · Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "NW · Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "chart_labels": [
+          "Booking activity",
+          "Week",
+          "Month",
+          "0",
+          "20",
+          "40",
+          "60",
+          "Mon",
+          "Tue",
+          "Wed",
+          "Thu",
+          "Fri",
+          "Sat",
+          "Sun",
+          "Fri · 42 bookings",
+          "Space utilization",
+          "84%",
+          "24 of 28 spaces active",
+          "Desks",
+          "Studios",
+          "Meeting rooms"
+        ],
+        "dominant_colors": {
+          "sidebar_and_dark_card": "#0b3325",
+          "page": "#faf9f6",
+          "cards": "#ffffff",
+          "lime": "#d8ff91",
+          "ring": "#caff60",
+          "text": "#0b1620",
+          "muted": "#69717c",
+          "border": "#d9dde0",
+          "promotion": "#e2f9b8",
+          "pending": "#ffd0c2"
+        },
+        "major_regions": [
+          {
+            "name": "sidebar",
+            "rect": [
+              0,
+              0,
+              0.174,
+              1
+            ]
+          },
+          {
+            "name": "header",
+            "rect": [
+              0.199,
+              0.018,
+              0.787,
+              0.133
+            ]
+          },
+          {
+            "name": "metrics",
+            "rect": [
+              0.199,
+              0.176,
+              0.787,
+              0.144
+            ]
+          },
+          {
+            "name": "booking_activity",
+            "rect": [
+              0.199,
+              0.339,
+              0.525,
+              0.322
+            ]
+          },
+          {
+            "name": "space_utilization",
+            "rect": [
+              0.733,
+              0.339,
+              0.253,
+              0.322
+            ]
+          },
+          {
+            "name": "upcoming_bookings",
+            "rect": [
+              0.199,
+              0.675,
+              0.475,
+              0.267
+            ]
+          },
+          {
+            "name": "promotion",
+            "rect": [
+              0.682,
+              0.675,
+              0.304,
+              0.27
+            ]
+          },
+          {
+            "name": "updated_note",
+            "rect": [
+              0.199,
+              0.958,
+              0.12,
+              0.018
+            ]
+          }
+        ],
+        "other_visible_text": [
+          "Workspace",
+          "Overview",
+          "October 23, 2026",
+          "New booking",
+          "A little room for everything you are building.",
+          "Upcoming bookings",
+          "View all",
+          "Make room for ideas.",
+          "Your next great project starts here.",
+          "Explore spaces",
+          "Last updated just now"
+        ],
+        "chart_observations": "Smooth dark-green line with a pale green area fill. Approximate daily values 11, 22, 34, 38, 42, 29, 13. Friday has a lime point and dark tooltip. Utilization is a thick lime ring with a muted green remainder."
+      },
+      "major_regions": [
+        {
+          "name": "sidebar",
+          "anchor": "WAYFINDER",
+          "bbox": [
+            0,
+            0,
+            267,
+            1024
+          ],
+          "actual_bbox": [
+            0,
+            0,
+            267,
+            1024
+          ],
+          "iou": 1.0
+        },
+        {
+          "name": "revenue card",
+          "anchor": "Monthly revenue",
+          "bbox": [
+            306,
+            180,
+            290,
+            147
+          ],
+          "actual_bbox": [
+            306,
+            179.390625,
+            288.5,
+            148
+          ],
+          "iou": 0.9881
+        },
+        {
+          "name": "occupancy card",
+          "anchor": "Occupancy",
+          "bbox": [
+            615,
+            180,
+            288,
+            147
+          ],
+          "actual_bbox": [
+            612.5,
+            179.390625,
+            288.5,
+            148
+          ],
+          "iou": 0.9779
+        },
+        {
+          "name": "members card",
+          "anchor": "Active members",
+          "bbox": [
+            920,
+            180,
+            287,
+            147
+          ],
+          "actual_bbox": [
+            919,
+            179.390625,
+            288.5,
+            148
+          ],
+          "iou": 0.9881
+        },
+        {
+          "name": "desks card",
+          "anchor": "Available desks",
+          "bbox": [
+            1224,
+            180,
+            289,
+            147
+          ],
+          "actual_bbox": [
+            1225.5,
+            179.390625,
+            288.5,
+            148
+          ],
+          "iou": 0.9847
+        },
+        {
+          "name": "activity chart",
+          "anchor": "Booking activity",
+          "bbox": [
+            305,
+            348,
+            807,
+            329
+          ],
+          "actual_bbox": [
+            306,
+            347.390625,
+            807,
+            329
+          ],
+          "iou": 0.9938
+        },
+        {
+          "name": "utilization card",
+          "anchor": "Space utilization",
+          "bbox": [
+            1125,
+            348,
+            389,
+            329
+          ],
+          "actual_bbox": [
+            1126,
+            347.390625,
+            388,
+            329
+          ],
+          "iou": 0.9937
+        },
+        {
+          "name": "bookings table",
+          "anchor": "Upcoming bookings",
+          "bbox": [
+            305,
+            691,
+            730,
+            273
+          ],
+          "actual_bbox": [
+            306,
+            690.390625,
+            728.203125,
+            276
+          ],
+          "iou": 0.9867
+        },
+        {
+          "name": "announcement",
+          "anchor": "Make room for ideas.",
+          "bbox": [
+            1048,
+            690,
+            466,
+            277
+          ],
+          "actual_bbox": [
+            1047.203125,
+            690.390625,
+            466.796875,
+            276
+          ],
+          "iou": 0.9947
+        }
+      ],
+      "mean_region_iou": 0.9897,
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nYour spaces, in sync.\nBOARD 7F2A9C\n\nA little room for everything you are building.\n\nMonthly revenue\n$24,580\n\n+12.8%\nthis month\n\nOccupancy\n84%\n\n+6.2%\nthis month\n\nActive members\n128\n\n+14\nthis month\n\nAvailable desks\n18\n\nAcross 4 spaces\n\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n84%\n24 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\nStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\nMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\nDesk 14\tOct 24, 14:00\tConfirmed\nMake room\nfor ideas.\n\nYour next great project\nstarts here.\n\nExplore spaces\n\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Your spaces, in sync. BOARD 7F2A9C A little room for everything you are building. Monthly revenue $24,580 +12.8% this month Occupancy 84% +6.2% this month Active members 128 +14 this month Available desks 18 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 84% 24 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Make room for ideas. Your next great project starts here. Explore spaces Last updated just now",
+        "title": "Wayfinder — Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications: one unread",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Explore spaces",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Add booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "pixel_metrics": {
+        "ssim": 0.85748,
+        "blurred_ssim_radius_3": 0.95771,
+        "mean_absolute_rgb_error": 8.3461
+      },
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 804,
+          "horizontalOverflow": true
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "html_unchanged_by_evaluation": true
+    }
+  ]
+}
