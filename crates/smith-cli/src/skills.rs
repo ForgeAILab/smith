@@ -8,8 +8,8 @@
 //! a higher layer, or held back with the reason attached; and every file
 //! discovery refused appears beside them rather than in a log nobody opens.
 //!
-//! Nothing here activates a body. Listing reads the bounded index, which is
-//! built from names, descriptions, and digests — never from instructions.
+//! Listing reads the bounded index, which is built from names, descriptions,
+//! and digests, never from instructions. Invocation loads the verified body.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -21,14 +21,14 @@ use smith_runtime::skills::{SkillProblem, SmithSkillSources};
 
 pub(super) struct PreparedSkillInvocation {
     pub(super) selected: smith_runtime::skills::RequestedSkill,
-    pub(super) submission: Option<smith_tui::app::PreparedSubmission>,
+    pub(super) submission: smith_tui::app::PreparedSubmission,
     pub(super) already_active: bool,
 }
 
 pub(super) struct PendingSkillActivation {
     pub(super) previous: Vec<smith_runtime::skills::RequestedSkill>,
     pub(super) selected: smith_runtime::skills::RequestedSkill,
-    pub(super) submission: Option<smith_tui::app::PreparedSubmission>,
+    pub(super) submission: smith_tui::app::PreparedSubmission,
 }
 
 pub(super) fn prepare_invocation(
@@ -41,15 +41,11 @@ pub(super) fn prepare_invocation(
     if app.is_busy() || app.has_pending_input() || app.has_pending_prompt() {
         return Err(format!("skill `{name}` requires an idle turn"));
     }
-    let submission = if arguments.trim().is_empty() {
-        None
-    } else {
-        Some(app.prepare_file_command_submission(typed, arguments)?)
-    };
-    let selected = host
+    let (selected, instructions) = host
         .runtime()
-        .prepare_skill_activation(host.session(), name)
+        .prepare_skill_invocation(host.session(), name)
         .map_err(|error| error.to_string())?;
+    let submission = app.prepare_skill_submission(typed, &instructions, arguments)?;
     let already_active = smith_runtime::capability_limits::catalog(host.session(), &[])
         .iter()
         .any(|row| {

@@ -43,10 +43,10 @@ use crate::{FRAME, SPINNER_TICK, interaction, local_command, terminal};
 pub(super) enum InteractiveExit {
     /// Persist a validated compaction setting and rebuild the idle session.
     CompactionSetting(smith_client::commands::CompactAction),
-    /// Admit a requested skill, then optionally dispatch its prepared task.
+    /// Admit a requested skill, then dispatch its instructions and task text.
     ActivateSkill {
         selected: smith_runtime::skills::RequestedSkill,
-        submission: Option<smith_tui::app::PreparedSubmission>,
+        submission: smith_tui::app::PreparedSubmission,
     },
     /// A validated cache snapshot can join at an idle boundary.
     CatalogChanged(Arc<smith_config::catalog::CatalogSnapshot>),

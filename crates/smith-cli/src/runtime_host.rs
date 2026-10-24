@@ -868,7 +868,7 @@ async fn run_interactive_hosts(
                     submission,
                 } = skill_change.take().expect("pending skill activation");
                 args.selection.requested_skills = previous;
-                if let (Some(app), Some(submission)) = (app.as_mut(), submission) {
+                if let Some(app) = app.as_mut() {
                     app.app.composer.replace(submission.display_text());
                 }
                 if let Some(app) = app.as_mut() {
@@ -932,7 +932,7 @@ async fn run_interactive_hosts(
                     format!("skill `{}` active", selected.name),
                 );
             }
-            if let (Some(app), Some(submission)) = (app.as_mut(), submission) {
+            if let Some(app) = app.as_mut() {
                 app.app.schedule_prepared(submission);
             }
         }

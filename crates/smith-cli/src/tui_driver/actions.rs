@@ -93,14 +93,12 @@ impl TuiLoop<'_> {
                             NoticeKind::Local,
                             format!("skill `{name}` already active"),
                         );
-                        if let Some(submission) = prepared.submission {
-                            let Action::Submit { submission, target } =
-                                self.app.submit_prepared(submission)
-                            else {
-                                unreachable!("a prepared task produces a submission");
-                            };
-                            self.on_submit(submission, target).await;
-                        }
+                        let Action::Submit { submission, target } =
+                            self.app.submit_prepared(prepared.submission)
+                        else {
+                            unreachable!("a prepared skill produces a submission");
+                        };
+                        self.on_submit(submission, target).await;
                     }
                     Ok(prepared) => {
                         return Some(InteractiveExit::ActivateSkill {

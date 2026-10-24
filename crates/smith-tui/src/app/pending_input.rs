@@ -446,6 +446,24 @@ impl App {
         Ok(submission)
     }
 
+    /// Prepends verified skill instructions without parsing their authored references.
+    pub fn prepare_skill_submission(
+        &self,
+        typed: String,
+        instructions: &str,
+        arguments: &str,
+    ) -> Result<PreparedSubmission, String> {
+        let mut submission = self.prepare_file_command_submission(typed, arguments)?;
+        let prompt = if submission.committed_text.trim().is_empty() {
+            instructions.to_owned()
+        } else {
+            format!("{instructions}\n\n{}", submission.committed_text)
+        };
+        submission.committed_text = prompt.clone();
+        submission.expanded_text = prompt;
+        Ok(submission)
+    }
+
     /// Accepts host-prepared input through the ordinary composer submission path.
     pub fn submit_prepared(&mut self, submission: PreparedSubmission) -> Action {
         let target = if self.is_busy() {
