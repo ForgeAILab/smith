@@ -262,6 +262,8 @@ pub struct ResolvedConfig {
     pub harness: Option<ResolvedHarness>,
     /// The selected model.
     pub model: Sourced<String>,
+    /// Ordered model alternatives and their source-explainable startup budgets.
+    pub fallback: ResolvedModelFallback,
     /// Image-input support before runtime layering supplies text-only defaults.
     pub model_image_input: Sourced<ImageInput>,
     /// Accepted input modalities before runtime layering, absent without metadata.
@@ -309,6 +311,28 @@ pub struct ResolvedConfig {
     pub image_generation: ResolvedImageGeneration,
     /// Provenance-carrying configuration for web fetch and search.
     pub web: ResolvedWeb,
+}
+
+/// Effective routing policy for the selected profile.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedModelFallback {
+    /// Validated alternative configurations in declaration order.
+    pub models: Vec<ResolvedFallbackModel>,
+    /// Startup budget for the primary and entries without an override.
+    pub first_response_timeout_ms: Option<Sourced<u64>>,
+    /// Why a declared chain is inactive for an exact selection.
+    pub inactive_reason: Option<String>,
+}
+
+/// One resolved alternative, retaining the profile's policy and authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedFallbackModel {
+    /// Complete model-bound configuration; nested fallback is disabled.
+    pub config: Box<ResolvedConfig>,
+    /// Effective candidate startup budget.
+    pub first_response_timeout_ms: Option<Sourced<u64>>,
+    /// Original ordered-list entry location.
+    pub source: Source,
 }
 
 /// One resolved installed plugin selection. Trust remains a host decision.

@@ -112,7 +112,7 @@ pub(super) fn profile_contributions(
                 };
                 // Selection explain retains every file and inheritance source.
                 // Other settings preserve their existing winner-only behavior.
-                if matches!(rest, "advisor" | "vision") {
+                if matches!(rest, "advisor" | "vision") || rest.starts_with("fallback.") {
                     own.entry(rest.to_owned())
                         .or_default()
                         .push(contribution.clone());
@@ -156,7 +156,7 @@ pub(super) fn profile_contributions(
         stack.pop();
 
         for (key, contributions) in own {
-            if matches!(key.as_str(), "advisor" | "vision") {
+            if matches!(key.as_str(), "advisor" | "vision") || key.starts_with("fallback.") {
                 winners.entry(key).or_default().extend(contributions);
             } else {
                 winners.insert(key, contributions);
@@ -927,6 +927,7 @@ pub(super) fn extract(
         provider,
         harness,
         model,
+        fallback: ResolvedModelFallback::default(),
         model_image_input: input.image,
         model_input_modalities: input.modalities,
         max_output_tokens: optional_u32(provenance, "max_output_tokens")?,

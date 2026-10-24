@@ -55,7 +55,7 @@ impl BindingUsage {
 
     /// Synthetic-only buckets must survive switches and freeze their rates.
     pub(super) fn has_usage(&self) -> bool {
-        !self.totals.is_empty() || !self.synthetic_by_purpose.is_empty()
+        !self.totals.is_empty() || !self.synthetic_by_purpose.is_empty() || !self.reported
     }
 
     /// Idle compaction can use a separate summary model, so its counters
@@ -167,6 +167,7 @@ impl SessionUsage {
         let retained = self
             .bindings
             .iter()
+            .filter(|binding| binding.cost_totals().next().is_some())
             .find_map(|binding| binding.price.as_ref());
         active
             .filter(|_| retained.is_some())
@@ -686,6 +687,15 @@ impl PriceReference {
                 .collect::<Vec<_>>()
                 .join(" · ")
         };
+        let unknown = usage
+            .bindings
+            .iter()
+            .filter(|binding| !binding.reported && binding.cost_totals().next().is_none())
+            .map(BindingUsage::name)
+            .collect::<std::collections::BTreeSet<_>>();
+        for name in unknown {
+            sources.push_str(&format!(" · usage unknown for {name}"));
+        }
         for (label, totals, bindings, active) in [
             (
                 "advisor",
@@ -799,10 +809,10 @@ impl SessionCost {
         } else {
             all_reported = true;
             for binding in &usage.bindings {
+                all_reported &= binding.reported;
                 if binding.cost_totals().next().is_none() {
                     continue;
                 }
-                all_reported &= binding.reported;
                 for (kind, tokens) in binding.cost_totals() {
                     if let Some(price) = &binding.price {
                         accumulate_price(

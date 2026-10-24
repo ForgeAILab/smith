@@ -391,6 +391,14 @@ async fn classify_auth_rejection(
 
 #[async_trait]
 impl<T: HttpTransport> Provider for ChatGptProvider<T> {
+    fn pre_output_replay_safe(&self, request: &ProviderRequest) -> bool {
+        request.hosted_tools.iter().all(|tool| {
+            matches!(
+                tool,
+                agent_runtime_core::provider::HostedTool::WebSearch { .. }
+            )
+        })
+    }
     fn describe(&self) -> Vec<ModelDescriptor> {
         vec![ModelDescriptor {
             id: self.config.model.clone(),

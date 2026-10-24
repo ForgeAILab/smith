@@ -412,6 +412,14 @@ impl App {
                     });
                 }
             }
+            RuntimeEvent::ModelFallback {
+                to_provider,
+                to_model,
+                ..
+            } => {
+                self.status
+                    .switch_model(Some(to_provider.clone()), to_model.as_str());
+            }
             RuntimeEvent::ModelProfileResolved {
                 provider, model, ..
             } => {

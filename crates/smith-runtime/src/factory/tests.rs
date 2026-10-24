@@ -226,6 +226,7 @@ fn profile(limits: ModelLimits) -> ResolvedModelProfile {
 
 fn resolved_config() -> ResolvedConfig {
     ResolvedConfig {
+        fallback: Default::default(),
         model_sync: model_sync(),
         modules: Default::default(),
         user_dir: std::path::PathBuf::from("/tmp/smith"),
@@ -680,6 +681,7 @@ fn an_endpoint_must_be_an_absolute_http_url() {
 fn an_absent_request_budget_is_derived_and_shared_with_context_policy() {
     let profile = profile(ModelLimits::new(128_000, 124_000, 4_096));
     let mut config = ResolvedConfig {
+        fallback: Default::default(),
         model_sync: model_sync(),
         modules: Default::default(),
         user_dir: std::path::PathBuf::from("/tmp/smith"),
@@ -826,6 +828,7 @@ fn automatic_budget_reaches_both_loop_and_context_policy() {
 fn reserves_that_consume_the_whole_window_fail_instead_of_planning() {
     let profile = profile(ModelLimits::new(8_000, 8_000, 4_096));
     let config = ResolvedConfig {
+        fallback: Default::default(),
         model_sync: model_sync(),
         modules: Default::default(),
         user_dir: std::path::PathBuf::from("/tmp/smith"),
@@ -876,6 +879,7 @@ fn a_changed_reserve_changes_the_policy_revision() {
 fn compaction_watermarks_are_derived_from_the_enforced_input_budget() {
     let profile = profile(ModelLimits::new(1_000, 900, 200));
     let mut config = ResolvedConfig {
+        fallback: Default::default(),
         model_sync: model_sync(),
         modules: Default::default(),
         user_dir: std::path::PathBuf::from("/tmp/smith"),
@@ -928,6 +932,7 @@ fn compaction_watermarks_are_derived_from_the_enforced_input_budget() {
 #[tokio::test]
 async fn scoped_auto_approval_is_shared_factory_policy_and_falls_back() {
     let mut config = ResolvedConfig {
+        fallback: Default::default(),
         model_sync: model_sync(),
         modules: Default::default(),
         user_dir: std::path::PathBuf::from("/tmp/smith"),

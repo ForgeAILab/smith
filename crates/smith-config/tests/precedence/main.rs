@@ -160,6 +160,7 @@ fn resolve_project(text: &str) -> Result<Resolution, ConfigError> {
 mod approval;
 mod credentials;
 mod diagnostics;
+mod fallback;
 mod layering;
 mod mcp;
 mod profiles;

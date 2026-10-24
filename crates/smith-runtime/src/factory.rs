@@ -176,6 +176,7 @@ mod construction;
 mod context_policy;
 mod delegation;
 mod errors;
+mod fallback;
 pub(crate) mod modules;
 mod persistence;
 mod provider;
@@ -183,6 +184,7 @@ mod resolve;
 mod skill_activation;
 mod web;
 
+pub use fallback::ModelFallbackPolicy;
 pub use web::WebSearchSession;
 
 /// The reply the deterministic development provider gives.
@@ -437,6 +439,11 @@ pub struct RuntimeRequest {
     /// A provider to use instead of constructing the configured one, for tests
     /// and development. The configured adapter kind is still validated.
     pub provider: Option<Arc<dyn Provider>>,
+    /// Optional provider injections for individual fallback bindings.
+    pub fallback_providers: BTreeMap<(String, String), Arc<dyn Provider>>,
+    /// Return quota exhaustion to shared model fallback instead of offering
+    /// reactive credential rotation. Proactive/manual rotation is unaffected.
+    pub defer_quota_rotation: bool,
     /// How the production HTTP transport behaves on the wire.
     pub transport: TransportConfig,
     /// How long a platform credential lookup may wait for access.
@@ -501,6 +508,8 @@ impl RuntimeRequest {
             clock: None,
             credentials: None,
             provider: None,
+            fallback_providers: BTreeMap::new(),
+            defer_quota_rotation: false,
             transport: TransportConfig::default(),
             credential_timeout_ms: DEFAULT_CREDENTIAL_TIMEOUT_MS,
             catalog_sources: Vec::new(),
@@ -592,6 +601,10 @@ pub struct VisionProfileRequest {
 /// secret — only values that are safe to display.
 #[derive(Clone, PartialEq)]
 pub struct RuntimePolicy {
+    /// Alternative model bindings validated with this profile, in order.
+    pub fallback_models: Vec<ModelFallbackPolicy>,
+    /// Primary model's optional startup budget across retries.
+    pub first_response_timeout_ms: Option<u64>,
     /// Effective module switches, including the deciding written key and layer.
     pub modules: BTreeMap<String, smith_config::resolve::ResolvedModule>,
     /// User configuration directory used by reviewed module switches.

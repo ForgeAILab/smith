@@ -1,6 +1,6 @@
 //! Host-independent accumulation of one headless run's runtime events.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use agent_runtime_core::goal::{GoalProjection, GoalStatus};
@@ -19,6 +19,12 @@ use super::output::{
 use super::run_flow::{finish_waits_for_required_follow_up, observe_sequence};
 
 pub(super) struct HeadlessFold {
+    pub(super) active_model: Option<(String, String)>,
+    pub(super) model_usage: Option<BTreeMap<(String, String), smith_client::status::BindingUsage>>,
+    pub(super) model_prices:
+        BTreeMap<(String, String), Option<smith_client::status::PriceReference>>,
+    pub(super) attempted_models: BTreeSet<(String, String)>,
+    pub(super) saw_fallback: bool,
     pub(super) turn_id: TurnId,
     pub(super) cache_projection: CacheProjection,
     pub(super) finish: Option<TurnFinish>,
@@ -43,6 +49,57 @@ pub(super) struct HeadlessFold {
 }
 
 impl HeadlessFold {
+    pub(super) fn configure_models(
+        &mut self,
+        policy: &smith_runtime::factory::RuntimePolicy,
+        catalog: Option<&smith_config::catalog::CatalogSnapshot>,
+    ) {
+        self.active_model = Some((policy.provider_name.clone(), policy.model.to_string()));
+        if policy.fallback_models.is_empty() {
+            return;
+        }
+        for (provider, model) in std::iter::once((&policy.provider_name, &policy.model)).chain(
+            policy
+                .fallback_models
+                .iter()
+                .map(|route| (&route.provider_name, &route.model)),
+        ) {
+            let price = catalog.and_then(|catalog| {
+                crate::tui_driver::resolve_model_price(policy, provider, model.as_str(), catalog)
+            });
+            self.model_prices
+                .insert((provider.clone(), model.to_string()), price);
+        }
+        self.model_usage = Some(BTreeMap::new());
+    }
+
+    pub(super) fn current_run_bindings(&self) -> Vec<smith_client::usage_log::BindingUsageRecord> {
+        let Some(usage) = &self.model_usage else {
+            return Vec::new();
+        };
+        let mut bindings = usage.values().cloned().collect::<Vec<_>>();
+        for (provider, model) in &self.attempted_models {
+            if !bindings.iter().any(|binding| {
+                binding.provider.as_deref() == Some(provider.as_str()) && binding.model == *model
+            }) {
+                let mut binding = smith_client::status::BindingUsage::new(
+                    Some(provider.clone()),
+                    model,
+                    self.model_prices
+                        .get(&(provider.clone(), model.clone()))
+                        .cloned()
+                        .flatten(),
+                );
+                binding.reported = false;
+                bindings.push(binding);
+            }
+        }
+        bindings
+            .iter()
+            .map(smith_client::usage_log::BindingUsageRecord::from)
+            .collect()
+    }
+
     pub(super) fn new(
         turn_id: TurnId,
         cache_projection: CacheProjection,
@@ -50,6 +107,11 @@ impl HeadlessFold {
         delivery_revision: u64,
     ) -> Self {
         Self {
+            active_model: None,
+            model_usage: None,
+            model_prices: BTreeMap::new(),
+            attempted_models: BTreeSet::new(),
+            saw_fallback: false,
             turn_id,
             cache_projection,
             finish: None,
@@ -74,6 +136,36 @@ impl HeadlessFold {
     }
 
     pub(super) fn apply(&mut self, event: &EventEnvelope) {
+        if let RuntimeEvent::ModelProfileResolved {
+            provider, model, ..
+        } = &event.payload
+        {
+            self.active_model = Some((provider.clone(), model.to_string()));
+        }
+        if matches!(&event.payload, RuntimeEvent::ModelFallback { .. }) {
+            self.saw_fallback = true;
+        }
+        if matches!(&event.payload, RuntimeEvent::ProviderAttemptStarted { .. })
+            && let Some(binding) = &self.active_model
+        {
+            self.attempted_models.insert(binding.clone());
+        }
+        if let RuntimeEvent::Usage { record } = &event.payload
+            && record.source == agent_runtime_core::usage::UsageSource::ProviderAttempt
+            && record.provenance.purpose.is_none()
+            && !is_synthetic_usage(record)
+            && let Some((provider, model)) = self.active_model.clone()
+            && let Some(usage) = &mut self.model_usage
+        {
+            let key = (provider.clone(), model.clone());
+            let price = self.model_prices.get(&key).cloned().flatten();
+            usage
+                .entry(key)
+                .or_insert_with(|| {
+                    smith_client::status::BindingUsage::new(Some(provider), model, price)
+                })
+                .record(&record.delta, !record.delta.is_empty());
+        }
         self.cache_projection.apply(event);
         observe_sequence(&mut self.last_sequence, event.seq, &mut self.sequence_error);
         if let RuntimeEvent::InternalTurnStarted { source } = &event.payload

@@ -96,6 +96,7 @@ fn terminal_stream_result(lines: &[serde_json::Value]) -> &serde_json::Value {
 
 mod background;
 mod exit_deadline;
+mod fallback;
 mod file_commands;
 mod fixtures;
 mod flow;

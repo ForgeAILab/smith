@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn model_fallback_updates_the_visible_model_and_preserves_the_profile() {
+    let mut app = app();
+    app.status.set_agent("work");
+    app.status.switch_model(Some("first".into()), "primary");
+    app.apply(&event(RuntimeEvent::ModelFallback {
+        from_provider: "first".into(),
+        from_model: ModelId::new("primary"),
+        to_provider: "backup".into(),
+        to_model: ModelId::new("secondary"),
+        candidate_index: 1,
+        total_candidates: 2,
+        reason: smith_runtime::client::ModelFallbackReason::FirstResponseTimeout,
+        elapsed_ms: 30000,
+        first_response_timeout_ms: Some(30000),
+    }));
+    assert_eq!(app.status.provider.as_deref(), Some("backup"));
+    assert_eq!(app.status.model, "secondary");
+    assert_eq!(app.status.agent, "work");
+}
+
+#[test]
 fn delegated_usage_from_a_live_child_stream_stays_separate_from_the_root_counters() {
     let mut app = app();
     app.apply(&event(RuntimeEvent::Usage {

@@ -235,6 +235,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
         route_request.catalog_sources = child.catalog_sources.clone();
         route_request.model_catalog = request.model_catalog.clone();
         route_request.persistence_redactor = request.persistence_redactor.clone();
+        route_request.fallback_providers = request.fallback_providers.clone();
 
         let vision = Box::pin(prepare_vision_route(
             &route_request,
@@ -263,6 +264,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
             endpoint.as_deref(),
             credentials::active_credential_reference(&route_request).as_deref(),
         );
+        let fallbacks = super::super::fallback::prepare(&route_request).await?;
         if let (Some(secret), Some(redactor)) = (&secret, &route_request.persistence_redactor) {
             redactor.register_secret(secret);
         }
@@ -393,6 +395,14 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
                     request.semantic_summary.is_some() && request.artifact_store.is_some(),
                     session_history.clone(),
                 )?,
+                model_fallbacks: fallbacks.routes,
+                first_response_timeout_ms: route_request
+                    .config
+                    .fallback
+                    .first_response_timeout_ms
+                    .as_ref()
+                    .map(|timeout| timeout.value),
+                fallback_observers: fallbacks.observers,
             },
         );
         if replaced.is_some() {

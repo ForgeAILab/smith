@@ -57,6 +57,16 @@ impl EventObserver for ProviderBackoff {
 
 #[async_trait]
 impl Provider for ProviderBackoff {
+    async fn prepare_request(
+        &self,
+        request: &ProviderRequest,
+        ctx: &ProviderCallContext,
+    ) -> Result<(), ProviderError> {
+        self.inner.prepare_request(request, ctx).await
+    }
+    fn pre_output_replay_safe(&self, request: &ProviderRequest) -> bool {
+        self.inner.pre_output_replay_safe(request)
+    }
     fn describe(&self) -> Vec<ModelDescriptor> {
         self.inner.describe()
     }

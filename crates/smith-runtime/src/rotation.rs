@@ -286,6 +286,7 @@ pub struct PooledProvider {
     pool: SharedPool,
     policy: Arc<dyn RotationPolicy>,
     clock: Arc<dyn Clock>,
+    defer_quota_rotation: bool,
 }
 
 impl PooledProvider {
@@ -301,7 +302,14 @@ impl PooledProvider {
             pool,
             policy,
             clock,
+            defer_quota_rotation: false,
         }
+    }
+
+    /// Lets the shared model route policy handle reactive quota exhaustion.
+    pub fn defer_quota_rotation(mut self, defer: bool) -> Self {
+        self.defer_quota_rotation = defer;
+        self
     }
 
     fn now_ms(&self) -> u64 {
@@ -394,6 +402,20 @@ impl PooledProvider {
 
 #[async_trait]
 impl Provider for PooledProvider {
+    async fn prepare_request(
+        &self,
+        request: &ProviderRequest,
+        ctx: &ProviderCallContext,
+    ) -> Result<(), ProviderError> {
+        self.offer_threshold().await;
+        self.inner.prepare_request(request, ctx).await
+    }
+    fn requires_nonempty_assistant_content(&self) -> bool {
+        self.inner.requires_nonempty_assistant_content()
+    }
+    fn pre_output_replay_safe(&self, request: &ProviderRequest) -> bool {
+        self.inner.pre_output_replay_safe(request)
+    }
     fn describe(&self) -> Vec<ModelDescriptor> {
         self.inner
             .describe()
@@ -441,6 +463,11 @@ impl Provider for PooledProvider {
                 return Err(error);
             }
             self.record_exhaustion(&error);
+            if self.defer_quota_rotation
+                && ctx.purpose == agent_runtime_core::provider::ProviderAttemptPurpose::Ordinary
+            {
+                return Err(self.with_earliest_reset(error));
+            }
             remaining = remaining.saturating_sub(1);
             if remaining == 0 || !self.offer_rotation().await {
                 return Err(self.with_earliest_reset(error));

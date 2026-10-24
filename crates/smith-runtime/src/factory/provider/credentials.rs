@@ -132,15 +132,20 @@ pub(super) fn apply_credential_pool(
         .rotation
         .clone()
         .unwrap_or_else(|| Arc::new(HeadlessRotation::new()) as Arc<dyn RotationPolicy>);
-    Arc::new(PooledProvider::new(
-        provider,
-        pool,
-        policy,
-        request
-            .clock
-            .clone()
-            .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn Clock>),
-    )) as Arc<dyn Provider>
+    Arc::new(
+        PooledProvider::new(
+            provider,
+            pool,
+            policy,
+            request
+                .clock
+                .clone()
+                .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn Clock>),
+        )
+        .defer_quota_rotation(
+            request.defer_quota_rotation || !request.config.fallback.models.is_empty(),
+        ),
+    ) as Arc<dyn Provider>
 }
 
 /// Resolves a configured credential reference into a secret.

@@ -126,8 +126,8 @@ const HARNESS_GUIDES: [HarnessGuide; 9] = [
     },
     HarnessGuide {
         name: "smith.guide.profiles-and-advisor",
-        description: "Create and inherit Smith profiles, switch profiles and postures, configure an advisor, and control delegation and capability limits.",
-        keywords: "profiles profile_order advisor posture",
+        description: "Create and inherit Smith profiles, configure ordered model fallback and first-response timeouts, switch postures, configure an advisor, and control delegation and capability limits.",
+        keywords: "profiles profile_order advisor posture fallback failover first_response_timeout_ms",
         body: include_str!("../../../docs/guides/profiles-and-advisor.md"),
     },
     HarnessGuide {

@@ -46,6 +46,20 @@ impl ReasoningDialectProvider {
 
 #[async_trait]
 impl Provider for ReasoningDialectProvider {
+    async fn prepare_request(
+        &self,
+        request: &ProviderRequest,
+        ctx: &ProviderCallContext,
+    ) -> Result<(), ProviderError> {
+        self.inner.prepare_request(request, ctx).await
+    }
+    fn pre_output_replay_safe(&self, request: &ProviderRequest) -> bool {
+        self.inner.pre_output_replay_safe(request)
+    }
+
+    fn requires_nonempty_assistant_content(&self) -> bool {
+        self.inner.requires_nonempty_assistant_content()
+    }
     fn describe(&self) -> Vec<ModelDescriptor> {
         self.inner.describe()
     }

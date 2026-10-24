@@ -77,6 +77,7 @@ async fn run_inner(
         rotation,
         credential_pool,
         cache_price,
+        catalog,
         cache_miss_notices,
         mcp_trust_notices,
     } = brokers;
@@ -136,6 +137,7 @@ async fn run_inner(
         initial_activation,
         delivery_cursor_revision(host),
     );
+    fold.configure_models(host.runtime().policy(), catalog);
 
     loop {
         let event = tokio::select! {
@@ -173,6 +175,9 @@ async fn run_inner(
             }
         };
         fold.apply(&event);
+        if let Some(notice) = smith_client::notice::model_fallback_notice(&event.payload) {
+            writeln!(stderr, "smith: {notice}").context("writing model fallback notice")?;
+        }
 
         if let Some(notice) = hosted_search_notices.observe(&event, session.id().as_str())
             && let Err(error) =
@@ -299,6 +304,28 @@ async fn run_inner(
         .map(|message| message.joined_text())
         .unwrap_or_default();
     let session_usage = snapshot.usage.total();
+    let current_run_bindings = fold.current_run_bindings();
+    let (active_provider, active_model) = fold.active_model.clone().unwrap_or_else(|| {
+        (
+            host.runtime().policy().provider_name.clone(),
+            host.runtime().policy().model.to_string(),
+        )
+    });
+    let active_reasoning = if active_provider == host.runtime().policy().provider_name
+        && active_model == host.runtime().policy().model.as_str()
+    {
+        Some(&host.runtime().policy().reasoning)
+    } else {
+        host.runtime()
+            .policy()
+            .fallback_models
+            .iter()
+            .find(|route| {
+                route.provider_name == active_provider && route.model.as_str() == active_model
+            })
+            .map(|route| &route.reasoning)
+    };
+    let cache_price = if fold.saw_fallback { None } else { cache_price };
     let synthetic_cache = SyntheticUsageOutput::from_records(snapshot.usage.records());
     if let Some(summary) = fold.cache_projection.completed_turn(turn_id.as_str()) {
         let summary = cache_price
@@ -347,10 +374,11 @@ async fn run_inner(
         status,
         session_id: session.id().as_str().to_owned(),
         turn_id: turn_id.as_str().to_owned(),
-        provider: host.runtime().policy().provider_name.clone(),
-        model: host.runtime().policy().model.as_str().to_owned(),
+        provider: active_provider.clone(),
+        model: active_model,
         output: output.clone(),
         usage: UsageOutput {
+            current_run_bindings,
             current_turn_provenance: UsageProvenance::of(&fold.turn_usage),
             session_provenance: UsageProvenance::of(&session_usage),
             current_turn: fold.turn_usage,
@@ -362,12 +390,14 @@ async fn run_inner(
         goal: final_goal,
         goal_continuation_turns,
         artifacts,
-        account: account_output(credential_pool, rotation),
+        account: (active_provider == host.runtime().policy().provider_name)
+            .then(|| account_output(credential_pool, rotation))
+            .flatten(),
         approval_required: approval_required.map(Into::into),
         interaction_required: interaction_required.map(Into::into),
         recovery: recovery_output(host),
         background_exit: background_exit_output,
-        reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
+        reasoning: active_reasoning.map(ReasoningOutput::of),
         cache: fold.cache,
         resume_capsule,
         diagnostics,
@@ -512,6 +542,7 @@ pub(super) async fn write_restored_interaction_required(
         output: String::new(),
         usage: UsageOutput {
             current_turn: UsageDelta::new(),
+            current_run_bindings: Vec::new(),
             session_provenance: UsageProvenance::of(&session_usage),
             current_turn_provenance: UsageProvenance::Unknown,
             session: session_usage,
@@ -599,6 +630,7 @@ pub(super) async fn write_submission_failure(
         output: String::new(),
         usage: UsageOutput {
             current_turn: UsageDelta::new(),
+            current_run_bindings: Vec::new(),
             session_provenance: UsageProvenance::of(&session_usage),
             current_turn_provenance: UsageProvenance::Unknown,
             session: session_usage,

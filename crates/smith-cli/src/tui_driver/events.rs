@@ -51,6 +51,19 @@ impl TuiLoop<'_> {
                         self.hosted_search_rebuild_pending = true;
                     }
                     let policy = self.host.runtime().policy();
+                    if !policy.fallback_models.is_empty()
+                        && let RuntimeEvent::ModelProfileResolved {
+                            provider, model, ..
+                        } = &envelope.payload
+                    {
+                        super::apply_model_policy(
+                            &mut self.app.status,
+                            policy,
+                            provider,
+                            model.as_str(),
+                            self.catalog,
+                        );
+                    }
                     if let Some(notice) = self.app.image_input_notices.observe(
                         &envelope,
                         self.session.id().as_str(),
@@ -196,11 +209,37 @@ impl TuiLoop<'_> {
 
     pub(super) async fn on_child_event(&mut self, child_event: Option<(ChildId, EventEnvelope)>) {
         if let Some((child, envelope)) = child_event {
+            let applies = self
+                .app
+                .child_next_event_sequence(child.as_str())
+                .is_none_or(|next| next == envelope.seq);
             let missed_events = self
                 .app
                 .child_next_event_sequence(child.as_str())
                 .is_some_and(|next| envelope.seq > next);
             self.app.apply_child(child.as_str(), &envelope);
+            if applies
+                && self.app.child_next_event_sequence(child.as_str())
+                    == Some(envelope.seq.saturating_add(1))
+                && let RuntimeEvent::ModelProfileResolved {
+                    provider, model, ..
+                } = &envelope.payload
+            {
+                let price = super::usage::resolve_inventory_price(
+                    provider,
+                    model.as_str(),
+                    self.inventory,
+                    self.catalog,
+                );
+                self.app.switch_child_usage_binding(
+                    child.as_str(),
+                    smith_client::status::BindingUsage::new(
+                        Some(provider.clone()),
+                        model.as_str(),
+                        price,
+                    ),
+                );
+            }
             // The child's events withhold argument values and result
             // text exactly as the root's do. Both are resolved the
             // same way: by call id, against that agent's canonical

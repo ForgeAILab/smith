@@ -39,7 +39,7 @@ use serde_json::Value;
 pub use agent_runtime_core::event::{
     BudgetCategory, CacheOperationOutcome, CacheOperationReason, CacheState, ChildPhase,
     ChildRecoveryState, CompactionReason, EstimationConfidence, GoalUpdateCause, LimitKind,
-    PlanItemProjection, PlanItemStatus, PlanSensitivity, TurnFinish,
+    ModelFallbackReason, PlanItemProjection, PlanItemStatus, PlanSensitivity, TurnFinish,
 };
 
 /// Current Smith client protocol revision.
@@ -261,6 +261,17 @@ pub enum SmithEventKind {
         provider: String,
         model: ModelId,
         profile: Fingerprint,
+    },
+    ModelFallback {
+        from_provider: String,
+        from_model: ModelId,
+        to_provider: String,
+        to_model: ModelId,
+        candidate_index: usize,
+        total_candidates: usize,
+        reason: ModelFallbackReason,
+        elapsed_ms: u64,
+        first_response_timeout_ms: Option<u64>,
     },
     CapabilityRetrievalPerformed {
         resolver_revision: RegistryRevision,
@@ -809,6 +820,17 @@ mod tests {
                 provider: "provider".into(),
                 model: ModelId::new("model"),
                 profile: Fingerprint::of("profile"),
+            },
+            ModelFallback {
+                from_provider: "provider".into(),
+                from_model: ModelId::new("model"),
+                to_provider: "backup".into(),
+                to_model: ModelId::new("backup-model"),
+                candidate_index: 1,
+                total_candidates: 2,
+                reason: ModelFallbackReason::FirstResponseTimeout,
+                elapsed_ms: 30000,
+                first_response_timeout_ms: Some(30000),
             },
             CapabilityRetrievalPerformed {
                 resolver_revision: RegistryRevision::new("v1"),

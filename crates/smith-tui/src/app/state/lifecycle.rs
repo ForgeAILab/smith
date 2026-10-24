@@ -32,6 +32,7 @@ impl App {
             pending_spawns: VecDeque::new(),
             delegated_usage: BTreeMap::new(),
             child_usage_bindings: BTreeMap::new(),
+            earlier_child_usage_bindings: Vec::new(),
             child_module_usage: BTreeMap::new(),
             delegated_contributors: BTreeSet::new(),
             running_tasks: Vec::new(),

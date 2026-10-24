@@ -50,6 +50,20 @@ impl fmt::Debug for ReasoningOnlyTextProvider {
 
 #[async_trait]
 impl Provider for ReasoningOnlyTextProvider {
+    async fn prepare_request(
+        &self,
+        request: &ProviderRequest,
+        ctx: &ProviderCallContext,
+    ) -> Result<(), ProviderError> {
+        self.inner.prepare_request(request, ctx).await
+    }
+    fn pre_output_replay_safe(&self, request: &ProviderRequest) -> bool {
+        self.inner.pre_output_replay_safe(request)
+    }
+
+    fn requires_nonempty_assistant_content(&self) -> bool {
+        self.inner.requires_nonempty_assistant_content()
+    }
     fn describe(&self) -> Vec<ModelDescriptor> {
         self.inner.describe()
     }
@@ -70,6 +84,7 @@ impl Provider for ReasoningOnlyTextProvider {
             ready: VecDeque::new(),
             reasoning: String::new(),
             classifying: true,
+            progress_emitted: false,
         }))
     }
 }
@@ -80,6 +95,7 @@ struct ReasoningOnlyTextStream {
     ready: VecDeque<ProviderStreamEvent>,
     reasoning: String,
     classifying: bool,
+    progress_emitted: bool,
 }
 
 impl ReasoningOnlyTextStream {
@@ -135,6 +151,9 @@ impl Stream for ReasoningOnlyTextStream {
                     }
 
                     let action = match &event {
+                        ProviderStreamEvent::ResponseProgress => {
+                            return Poll::Ready(Some(event));
+                        }
                         ProviderStreamEvent::ReasoningDelta {
                             text,
                             redacted: false,
@@ -165,9 +184,18 @@ impl Stream for ReasoningOnlyTextStream {
                         | ProviderStreamEvent::VendorMetadata { .. } => Action::Buffer,
                     };
 
+                    let progress = matches!(&event,
+                        ProviderStreamEvent::ReasoningDelta { text, .. } if !text.is_empty())
+                        || matches!(&event, ProviderStreamEvent::HostedSearch { .. });
                     this.buffered.push_back(event);
                     match action {
-                        Action::Buffer => continue,
+                        Action::Buffer => {
+                            if progress && !this.progress_emitted {
+                                this.progress_emitted = true;
+                                return Poll::Ready(Some(ProviderStreamEvent::ResponseProgress));
+                            }
+                            continue;
+                        }
                         Action::Preserve => this.preserve_buffered(),
                         Action::Promote => this.promote_buffered(),
                     }
@@ -236,8 +264,36 @@ mod tests {
             .stream(ProviderRequest::new(ModelId::new("m"), Vec::new()), context)
             .await
             .expect("a stream")
+            .filter(|event| {
+                futures_util::future::ready(!matches!(event, ProviderStreamEvent::ResponseProgress))
+            })
             .collect()
             .await
+    }
+
+    #[tokio::test]
+    async fn buffered_reasoning_reports_progress_before_its_terminal_frame() {
+        let provider = apply_response_policy(
+            Arc::new(ReplayProvider {
+                events: vec![reasoning("working", false), finish()],
+            }),
+            Some(ReasoningOnlyBehavior::Text),
+        );
+        let (context, _cancel) = call_ctx();
+        let mut stream = provider
+            .stream(ProviderRequest::new(ModelId::new("m"), Vec::new()), context)
+            .await
+            .unwrap();
+        assert_eq!(
+            stream.next().await,
+            Some(ProviderStreamEvent::ResponseProgress)
+        );
+        assert_eq!(
+            stream.next().await,
+            Some(ProviderStreamEvent::TextDelta {
+                text: "working".into()
+            })
+        );
     }
 
     fn reasoning(text: &str, redacted: bool) -> ProviderStreamEvent {

@@ -1021,6 +1021,7 @@ use usage::{last_session_usage, resolve_child_usage_binding, restore_usage_with_
 use usage::restore_usage_records;
 
 pub(super) use usage::resolve_price;
+pub(crate) use usage::{apply_model_policy, resolve_model_price};
 
 #[cfg(test)]
 mod tests;

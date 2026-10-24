@@ -55,6 +55,36 @@ fn hosted(mode: WebSearchMode, capable: bool, unavailable: bool) -> bool {
     capable && !unavailable && matches!(mode, WebSearchMode::Auto | WebSearchMode::Hosted)
 }
 
+pub(super) fn hosted_tools(request: &RuntimeRequest, capable: bool) -> Vec<HostedTool> {
+    let enabled = request.built_in_tools
+        && request.modules.enabled.contains("web")
+        && request.modules.compiled.iter().any(|module| {
+            module.module.id() == "web"
+                && matches!(module.origin, smith_module::ModuleOrigin::FirstParty)
+        });
+    let allowed = enabled
+        && (!request.config.agent.active_posture().is_read_only()
+            || request
+                .config
+                .agent
+                .read_only_network_modules
+                .value
+                .iter()
+                .any(|id| id == "web"));
+    if allowed
+        && request.config.harness.is_none()
+        && hosted(
+            request.config.web.search.mode.value,
+            capable,
+            request.web_search_session.unavailable(),
+        )
+    {
+        vec![HostedTool::WebSearch { max_uses: None }]
+    } else {
+        Vec::new()
+    }
+}
+
 pub(super) async fn prepare(request: &RuntimeRequest, capable: bool) -> WebRoute {
     let config = &request.config;
     let enabled = request.built_in_tools
