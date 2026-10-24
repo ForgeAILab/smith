@@ -49,10 +49,13 @@ async fn compact_settings_preflight_before_publication_and_rebind_the_same_sessi
         .unwrap(),
     );
     let selection = Selection::default();
+    // The preflight reuses the session's resolution environment (none here),
+    // never the test process's.
     let invalid = prepare_compaction_change(
         &host,
         project.path(),
         &selection,
+        request.env.clone(),
         catalog.clone(),
         CompactAction::Model(Some("missing-profile".into())),
     )
@@ -63,6 +66,7 @@ async fn compact_settings_preflight_before_publication_and_rebind_the_same_sessi
         &host,
         project.path(),
         &selection,
+        request.env.clone(),
         catalog.clone(),
         CompactAction::Model(Some("local/small".into())),
     )
@@ -110,6 +114,85 @@ async fn compact_settings_preflight_before_publication_and_rebind_the_same_sessi
             .contains("small")
     );
     resumed.shutdown().await.unwrap();
+}
+
+#[test]
+fn compact_reports_name_each_cause_and_when_to_retry() {
+    use crate::local_command::compact::outcome_report;
+    use smith_runtime::cache_controller::IdleCompactionOutcome as Outcome;
+
+    let plain = |outcome, earlier| {
+        smith_client::message_report::render_plain(&outcome_report(Ok(outcome), earlier))
+    };
+    let already = plain(Outcome::AlreadyAttempted, Some(Outcome::Completed));
+    assert!(
+        already.contains("already ran after the last turn: context was compacted"),
+        "{already}"
+    );
+    assert!(already.contains("send another message, then run /compact again"));
+    assert!(
+        plain(Outcome::AlreadyAttempted, Some(Outcome::Failed))
+            .contains("it failed (see /status --verbose)")
+    );
+    assert!(
+        plain(Outcome::AlreadyAttempted, Some(Outcome::NoSummary))
+            .contains("it found no eligible history")
+    );
+    assert!(plain(Outcome::AlreadyAttempted, None).contains("its result was not recorded"));
+    assert!(plain(Outcome::NotIdle, None).contains("A turn is still running"));
+    assert!(plain(Outcome::Busy, None).contains("Run /compact again once it is idle"));
+    assert!(plain(Outcome::RequestPending, None).contains("still waiting to run"));
+    assert!(plain(Outcome::EventGap, None).contains("resume this session"));
+
+    let all = [
+        Outcome::Completed,
+        Outcome::NoSummary,
+        Outcome::Busy,
+        Outcome::Shutdown,
+        Outcome::Failed,
+        Outcome::AlreadyAttempted,
+        Outcome::NotIdle,
+        Outcome::EventGap,
+        Outcome::RequestPending,
+    ];
+    let messages = all
+        .iter()
+        .map(|outcome| plain(*outcome, None))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        messages.len(),
+        all.len(),
+        "every outcome has its own message"
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.contains("busy or was already attempted")),
+        "no message lumps causes together"
+    );
+}
+
+#[test]
+fn compact_settings_preflight_ignores_unrelated_smith_environment_variables() {
+    // CI exports SMITH_AGENT_RUNTIME_REVISION. Run the preflight test in a
+    // child process with it set, without changing the environment shared by
+    // the other tests.
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "tests::local_commands::compact_settings_preflight_before_publication_and_rebind_the_same_session",
+        ])
+        .env("SMITH_AGENT_RUNTIME_REVISION", "ci")
+        .env("SMITH_UNRELATED_TEST_VARIABLE", "unrelated")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "compaction preflight failed with unrelated environment variables:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed;"));
 }
 
 #[test]

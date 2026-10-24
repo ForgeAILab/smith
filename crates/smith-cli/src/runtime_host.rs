@@ -1025,8 +1025,17 @@ async fn run_interactive_hosts(
             InteractiveExit::CompactionSetting(action) => {
                 resume = Some(current_session);
                 frozen_catalog = Some(catalog.clone());
-                match prepare_compaction_change(&host, &project, &args.selection, catalog, action)
-                    .await
+                // The same process environment that resolved this session.
+                let env = std::env::vars().collect();
+                match prepare_compaction_change(
+                    &host,
+                    &project,
+                    &args.selection,
+                    env,
+                    catalog,
+                    action,
+                )
+                .await
                 {
                     Ok(change) => compaction_change = Some(change),
                     Err(error) => {

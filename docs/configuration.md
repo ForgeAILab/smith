@@ -97,9 +97,15 @@ Use `/compact` during an idle turn to request compaction
 immediately. The command uses the same protected summary operation and
 `cache_idle_compaction` usage attribution, even when the automatic idle timer
 is disabled. It does not add a conversation turn. The existing minimum
-history and recent-turn retention still apply, and the current idle interval
-allows one attempt. A new completed turn opens another interval. Failed
-summary work preserves original history and the previous committed summary.
+history and recent-turn retention still apply. Each idle interval allows one
+attempt per run, and a new completed turn opens another interval; when that
+attempt was already used, `/compact` says what it did. An explicit `/compact`
+may still retry an interval the automatic timer used in an earlier run, or one
+where the session was busy; the automatic timer itself never retries. When
+compaction cannot run, the notice names the cause (a running turn, a busy
+session, a pending request, or missed session events) and when to retry.
+Failed summary work preserves original history and the previous committed
+summary.
 
 `/compact Preserve test failures and next steps` supplies instructions for one
 attempt. Set defaults in configuration or save them from an idle session:
