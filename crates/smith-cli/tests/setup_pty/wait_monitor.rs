@@ -60,15 +60,23 @@ expect {{
     eof {{ exit 125 }}
 }}
 send -- "wait check\r"
-expect {{
-    -re {{nitor(\e\[[0-9;]*H| )[0-9]}} {{}}
-    timeout {{ exit 126 }}
-    eof {{ exit 125 }}
-}}
-expect {{
-    -exact "PARENT_PARKED" {{}}
-    timeout {{ exit 127 }}
-    eof {{ exit 125 }}
+# The monitor tag and the parked reply can draw in either order, and a match
+# consumes everything before it, so record both from whichever arrives last.
+set monitor_seen 0
+set parked_seen 0
+while {{!($monitor_seen && $parked_seen)}} {{
+    expect {{
+        -re {{nitor(\e\[[0-9;]*H| )[0-9]}} {{
+            set monitor_seen 1
+            if {{[string first "PARENT_PARKED" $expect_out(buffer)] >= 0}} {{ set parked_seen 1 }}
+        }}
+        -exact "PARENT_PARKED" {{
+            set parked_seen 1
+            if {{[regexp {{nitor(\e\[[0-9;]*H| )[0-9]}} $expect_out(buffer)]}} {{ set monitor_seen 1 }}
+        }}
+        timeout {{ if {{$monitor_seen}} {{ exit 127 }} else {{ exit 126 }} }}
+        eof {{ exit 125 }}
+    }}
 }}
 expect {{
     -exact "delegation.wait-timeout" {{}}
