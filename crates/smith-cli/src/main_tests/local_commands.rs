@@ -121,28 +121,11 @@ fn compact_reports_name_each_cause_and_when_to_retry() {
     use crate::local_command::compact::outcome_report;
     use smith_runtime::cache_controller::IdleCompactionOutcome as Outcome;
 
-    let plain = |outcome, earlier| {
-        smith_client::message_report::render_plain(&outcome_report(Ok(outcome), earlier))
-    };
-    let already = plain(Outcome::AlreadyAttempted, Some(Outcome::Completed));
-    assert!(
-        already.contains("already ran after the last turn: context was compacted"),
-        "{already}"
-    );
-    assert!(already.contains("send another message, then run /compact again"));
-    assert!(
-        plain(Outcome::AlreadyAttempted, Some(Outcome::Failed))
-            .contains("it failed (see /status --verbose)")
-    );
-    assert!(
-        plain(Outcome::AlreadyAttempted, Some(Outcome::NoSummary))
-            .contains("it found no eligible history")
-    );
-    assert!(plain(Outcome::AlreadyAttempted, None).contains("its result was not recorded"));
-    assert!(plain(Outcome::NotIdle, None).contains("A turn is still running"));
-    assert!(plain(Outcome::Busy, None).contains("Run /compact again once it is idle"));
-    assert!(plain(Outcome::RequestPending, None).contains("still waiting to run"));
-    assert!(plain(Outcome::EventGap, None).contains("resume this session"));
+    let plain = |outcome| smith_client::message_report::render_plain(&outcome_report(Ok(outcome)));
+    assert!(plain(Outcome::NotIdle).contains("A turn is still running"));
+    assert!(plain(Outcome::Busy).contains("Run /compact again once it is idle"));
+    assert!(plain(Outcome::RequestPending).contains("still waiting to run"));
+    assert!(plain(Outcome::EventGap).contains("resume this session"));
 
     let all = [
         Outcome::Completed,
@@ -150,14 +133,13 @@ fn compact_reports_name_each_cause_and_when_to_retry() {
         Outcome::Busy,
         Outcome::Shutdown,
         Outcome::Failed,
-        Outcome::AlreadyAttempted,
         Outcome::NotIdle,
         Outcome::EventGap,
         Outcome::RequestPending,
     ];
     let messages = all
         .iter()
-        .map(|outcome| plain(*outcome, None))
+        .map(|outcome| plain(*outcome))
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
         messages.len(),

@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-23T00:00:00-04:00
-updated_at: 2026-10-24T10:33:43Z
+updated_at: 2026-10-24T20:03:46Z
 completed_at: 2026-10-23T09:46:55Z
 ---
 
@@ -18,6 +18,12 @@ completed_at: 2026-10-23T09:46:55Z
 - [x] Let an explicit request bypass a durable gate the runtime has not consumed in this process; restore the gate when the request is not admitted.
 - [x] Report history the committed summary already covers as no eligible history, without replacing the capsule summary with a failed projection.
 - [x] Resolve compaction settings preflight from the session's environment instead of re-reading the process environment.
+
+## Follow-up (2026-10-24): retry within one idle interval
+
+- [x] Pin Agent Runtime `046a942` (0.7 line), which adds `SessionHandle::try_manual_semantic_compaction`.
+- [x] Route `/compact` through it so an explicit request can retry an interval Runtime already attempted in this process; the automatic timer keeps `try_idle_semantic_compaction`.
+- [x] Remove the `AlreadyAttempted` outcome and its notice, which only that gate produced.
 
 ## Verification
 

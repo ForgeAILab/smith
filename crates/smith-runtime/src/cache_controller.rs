@@ -79,9 +79,6 @@ pub enum IdleCompactionOutcome {
     Shutdown,
     /// Persistence or another non-retryable operation failed.
     Failed,
-    /// Manual only: this idle interval's attempt already reached Runtime,
-    /// which admits one attempt until the next turn starts.
-    AlreadyAttempted,
     /// Manual only: a parent turn or cache operation was still running, so
     /// nothing was attempted.
     NotIdle,
@@ -241,10 +238,6 @@ struct ControllerState {
     parent_idle_interval: u64,
     boundary_evaluated: bool,
     event_gap: bool,
-    /// Interval whose attempt reached Runtime's in-memory once-per-interval
-    /// gate in this process. Unlike the durable gate, it does not survive a
-    /// restart, and only a new turn clears it.
-    runtime_attempted_interval: Option<String>,
     provider_rate_limits: Option<RateLimitSnapshot>,
     goal_remaining_tokens: Option<u64>,
 }
@@ -743,6 +736,7 @@ async fn run_controller(
                 artifacts.as_deref(),
                 &state,
                 &cancel,
+                IdleRequest::Automatic,
             )
             .await;
         }

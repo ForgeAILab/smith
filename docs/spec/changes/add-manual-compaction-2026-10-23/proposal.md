@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-23T00:00:00-04:00
-updated_at: 2026-10-24T10:33:43Z
+updated_at: 2026-10-24T20:03:46Z
 ---
 
 # Proposal: Add manual conversation compaction
@@ -24,6 +24,9 @@ older conversation history while retaining the recent turns.
   let an explicit request retry a durable gate the runtime has not consumed
   in this process (for example after a restart); report already-covered
   history as no eligible history rather than a failure.
+- Follow-up (2026-10-24, later): pin Agent Runtime `046a942` and use its
+  `try_manual_semantic_compaction`, so an explicit request can also retry an
+  interval Runtime already attempted in this process.
 
 Automatic summary enablement restores behavior already required by the
 runtime-integration and prompt-cache specs and is a separate bug fix.

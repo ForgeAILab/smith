@@ -548,7 +548,7 @@ fn manual_refusals_name_each_suppression_cause() {
     );
     assert_eq!(
         refusal(Some(Reason::AlreadyAttempted), false),
-        IdleCompactionOutcome::AlreadyAttempted
+        IdleCompactionOutcome::Busy
     );
     assert_eq!(refusal(None, false), IdleCompactionOutcome::Failed);
 }
@@ -580,7 +580,7 @@ impl ArtifactStore for UnusedArtifacts {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn manual_compaction_bypasses_only_a_gate_runtime_has_not_consumed() {
+async fn manual_compaction_bypasses_the_interval_gate_and_restores_it_when_refused() {
     use agent_runtime::provider::fake::FakeProvider;
     use agent_runtime::runtime::{RuntimeBuilder, StartSession};
     use agent_runtime_core::provider::ModelId;
@@ -601,14 +601,13 @@ async fn manual_compaction_bypasses_only_a_gate_runtime_has_not_consumed() {
     let config = test_config(CacheMaintenancePolicy::default());
     let clock: Arc<dyn Clock> = clock;
     let cancel = Cancellation::new();
-    let consumed_state = |runtime_attempted: bool, event_gap: bool| {
+    let consumed_state = |event_gap: bool| {
         let mut state = ControllerState {
             last_meaningful_activity_at: Some(Timestamp(0)),
             // A turn is still running, so the idle gate refuses admission
             // before any persistence or Runtime call.
             parent_turn_active: true,
             event_gap,
-            runtime_attempted_interval: runtime_attempted.then(|| "root-turn:1".to_owned()),
             ..ControllerState::default()
         };
         state.snapshot.idle_compaction.interval_id = Some("root-turn:1".to_owned());
@@ -640,19 +639,14 @@ async fn manual_compaction_bypasses_only_a_gate_runtime_has_not_consumed() {
         }
     };
 
-    // Runtime already holds this interval's attempt: refuse without a call.
+    // An attempted interval's gate is bypassed, and restored when the
+    // request is not admitted, so automatic compaction stays gated.
     assert_eq!(
-        run(consumed_state(true, false)).await,
-        (IdleCompactionOutcome::AlreadyAttempted, true)
-    );
-    // A durable gate from an earlier process is bypassed, and restored when
-    // the request is not admitted, so automatic compaction stays gated.
-    assert_eq!(
-        run(consumed_state(false, false)).await,
+        run(consumed_state(false)).await,
         (IdleCompactionOutcome::NotIdle, true)
     );
     assert_eq!(
-        run(consumed_state(false, true)).await,
+        run(consumed_state(true)).await,
         (IdleCompactionOutcome::EventGap, true)
     );
     assert!(

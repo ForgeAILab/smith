@@ -270,9 +270,11 @@ async fn default_persisted_sessions_compact_once_after_inactivity() {
         host.session().snapshot().extension_state["harness.semantic_summary"].value["summary"],
         "IDLE_SUMMARY"
     );
+    // An explicit request reaches Runtime in the same interval, and the new
+    // summary already covers this history.
     assert_eq!(
         host.compact().await.unwrap(),
-        IdleCompactionOutcome::AlreadyAttempted
+        IdleCompactionOutcome::NoSummary
     );
     assert_eq!(provider.requests().len(), 5);
     let session = host.session().id().clone();
@@ -378,12 +380,12 @@ async fn manual_compaction_bypasses_the_automatic_timer_and_persists_for_resume(
     assert_eq!(host.session().history(), original);
     assert_eq!(
         host.compact().await.unwrap(),
-        IdleCompactionOutcome::AlreadyAttempted
+        IdleCompactionOutcome::NoSummary
     );
     assert_eq!(
         provider.requests().len(),
         5,
-        "same interval cannot spend twice"
+        "a repeat with nothing new to summarize sends no request"
     );
     let capsule = host.resume_capsule().expect("capsule");
     assert!(
@@ -426,7 +428,7 @@ async fn manual_compaction_bypasses_the_automatic_timer_and_persists_for_resume(
 }
 
 #[tokio::test]
-async fn failed_manual_compaction_preserves_history_and_does_not_retry() {
+async fn failed_manual_compaction_preserves_history_and_retries_on_request() {
     use smith_runtime::cache_controller::IdleCompactionOutcome;
 
     let fixture = Fixture::new();
@@ -436,6 +438,7 @@ async fn failed_manual_compaction_preserves_history_and_does_not_retry() {
     scripts.push(ScriptedStream::new(vec![ProviderStreamEvent::Error {
         error: ProviderError::new(ProviderErrorKind::Server, "summary unavailable"),
     }]));
+    scripts.push(compaction_reply("RETRIED_SUMMARY", 100));
     let provider = Arc::new(FakeProvider::new(
         "example-model",
         Capabilities::basic_streaming(),
@@ -460,38 +463,23 @@ async fn failed_manual_compaction_preserves_history_and_does_not_retry() {
             .extension_state
             .contains_key("harness.semantic_summary")
     );
+    // An explicit retry in the same interval reaches the summary model again
+    // and the summary now commits.
     assert_eq!(
         host.compact().await.unwrap(),
-        IdleCompactionOutcome::AlreadyAttempted
-    );
-    assert_eq!(provider.requests().len(), 5);
-    let session = host.session().id().clone();
-    host.shutdown().await.expect("shutdown");
-
-    // After a restart Runtime's in-memory gate is gone, so an explicit
-    // request retries the failed interval and the summary now commits.
-    let resumed_provider = Arc::new(FakeProvider::new(
-        "example-model",
-        Capabilities::basic_streaming(),
-        vec![compaction_reply("RETRIED_SUMMARY", 100)],
-    ));
-    let mut resume = fixture.request(HostSurface::Headless).resume(session);
-    resume.runtime.provider = Some(resumed_provider.clone());
-    let resumed = start(resume).await.expect("resume failed session");
-    assert_eq!(
-        resumed.compact().await.unwrap(),
         IdleCompactionOutcome::Completed
     );
-    assert_eq!(resumed_provider.requests().len(), 1);
+    assert_eq!(provider.requests().len(), 6);
     assert_eq!(
-        resumed.session().snapshot().extension_state["harness.semantic_summary"].value["summary"],
+        host.session().snapshot().extension_state["harness.semantic_summary"].value["summary"],
         "RETRIED_SUMMARY"
     );
     assert_eq!(
-        resumed.compact().await.unwrap(),
-        IdleCompactionOutcome::AlreadyAttempted
+        host.compact().await.unwrap(),
+        IdleCompactionOutcome::NoSummary
     );
-    resumed.shutdown().await.expect("resumed shutdown");
+    assert_eq!(provider.requests().len(), 6);
+    host.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]

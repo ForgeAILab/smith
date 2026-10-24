@@ -5,17 +5,11 @@ use smith_runtime::host::HostSession;
 
 pub(crate) async fn report(host: &HostSession, instructions: Option<String>) -> LocalResult {
     let outcome = host.compact_with_instructions(instructions).await;
-    let earlier = host
-        .cache_lifecycle()
-        .and_then(|controller| controller.idle_compaction_outcome);
-    LocalResult::Message(Box::new(outcome_report(outcome, earlier)))
+    LocalResult::Message(Box::new(outcome_report(outcome)))
 }
 
-/// `earlier` is the last recorded attempt's outcome, which an
-/// `AlreadyAttempted` refusal describes.
 pub(crate) fn outcome_report(
     outcome: Result<IdleCompactionOutcome, agent_runtime_core::error::RuntimeError>,
-    earlier: Option<IdleCompactionOutcome>,
 ) -> MessageReport {
     let title = "compact".to_owned();
     match outcome {
@@ -28,13 +22,6 @@ pub(crate) fn outcome_report(
             title,
             message: "No eligible history to compact yet. Continue the conversation first."
                 .to_owned(),
-        },
-        Ok(IdleCompactionOutcome::AlreadyAttempted) => MessageReport::Empty {
-            title,
-            message: format!(
-                "Compaction already ran after the last turn: {}. Each idle interval allows one attempt; send another message, then run /compact again.",
-                earlier_attempt(earlier)
-            ),
         },
         Ok(IdleCompactionOutcome::NotIdle) => MessageReport::Empty {
             title,
@@ -69,15 +56,5 @@ pub(crate) fn outcome_report(
             title,
             message: error.to_string(),
         },
-    }
-}
-
-fn earlier_attempt(outcome: Option<IdleCompactionOutcome>) -> &'static str {
-    match outcome {
-        Some(IdleCompactionOutcome::Completed) => "context was compacted",
-        Some(IdleCompactionOutcome::NoSummary) => "it found no eligible history",
-        Some(IdleCompactionOutcome::Failed) => "it failed (see /status --verbose)",
-        Some(IdleCompactionOutcome::Shutdown) => "it was interrupted",
-        _ => "its result was not recorded",
     }
 }

@@ -25,19 +25,14 @@ pub(super) async fn run_manual_compaction(
     }
     let bypassed_gate = {
         let mut state = state.lock().expect("cache controller state poisoned");
-        let Some(interval_id) = state.snapshot.idle_compaction.interval_id.clone() else {
+        if state.snapshot.idle_compaction.interval_id.is_none() {
             return IdleCompactionOutcome::NoSummary;
-        };
+        }
         if state.snapshot.idle_compaction.attempted {
-            // Runtime keeps its own once-per-interval gate in memory, and only
-            // a new turn clears it; another call would just be refused.
-            if state.runtime_attempted_interval.as_deref() == Some(interval_id.as_str()) {
-                return IdleCompactionOutcome::AlreadyAttempted;
-            }
-            // The durable gate was consumed by an earlier process or by an
-            // attempt Runtime refused before admission. An explicit request
-            // may retry; automatic compaction keeps the gate (restored below
-            // when this request is not admitted either).
+            // An explicit request may retry an attempted interval, including
+            // one Runtime already ran in this process; automatic compaction
+            // keeps the gate (restored below when this request is not
+            // admitted).
             state.snapshot.idle_compaction.attempted = false;
             true
         } else {
@@ -58,6 +53,7 @@ pub(super) async fn run_manual_compaction(
         artifacts,
         state,
         cancel,
+        IdleRequest::Manual,
     )
     .await;
     let mut state = state.lock().expect("cache controller state poisoned");
@@ -97,9 +93,9 @@ pub(super) fn manual_refusal(state: &ControllerState) -> IdleCompactionOutcome {
         Some(CompactionSuppressionReason::UnsafeBoundary) => IdleCompactionOutcome::NotIdle,
         // No recorded parent activity yet, so there is nothing to summarize.
         Some(CompactionSuppressionReason::NotDue) => IdleCompactionOutcome::NoSummary,
-        Some(CompactionSuppressionReason::AlreadyAttempted) => {
-            IdleCompactionOutcome::AlreadyAttempted
-        }
+        // The manual path clears the durable gate before admission; if it is
+        // set again by then, another attempt owns the boundary.
+        Some(CompactionSuppressionReason::AlreadyAttempted) => IdleCompactionOutcome::Busy,
         Some(CompactionSuppressionReason::Disabled) | None => IdleCompactionOutcome::Failed,
     }
 }
@@ -176,6 +172,15 @@ pub(super) fn admit_idle_compaction(
     Some(interval_id)
 }
 
+/// Who asked for an idle-compaction attempt.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum IdleRequest {
+    /// The inactivity timer: Runtime admits one attempt per idle interval.
+    Automatic,
+    /// `/compact`: Runtime admits a retry within the interval.
+    Manual,
+}
+
 /// Runs one admitted ordinary idle-compaction attempt. The capsule marker is
 /// persisted before entering Runtime, so a store failure cannot authorize a
 /// provider retry.
@@ -189,6 +194,7 @@ pub(super) async fn run_idle_compaction(
     artifacts: Option<&dyn ArtifactStore>,
     state: &Arc<Mutex<ControllerState>>,
     cancel: &Cancellation,
+    request: IdleRequest,
 ) {
     let started_at = clock.now();
     let Some(interval_id) =
@@ -213,15 +219,10 @@ pub(super) async fn run_idle_compaction(
         return;
     }
 
-    let admission = session.try_idle_semantic_compaction().await;
-    // Runtime marks its own gate before any result other than Busy (an error
-    // is treated the same), so a manual retry in this interval cannot reach it.
-    if !matches!(admission, Ok(SemanticIdleCompactionAdmission::Busy)) {
-        state
-            .lock()
-            .expect("cache controller state poisoned")
-            .runtime_attempted_interval = Some(interval_id.clone());
-    }
+    let admission = match request {
+        IdleRequest::Automatic => session.try_idle_semantic_compaction().await,
+        IdleRequest::Manual => session.try_manual_semantic_compaction().await,
+    };
     let admission = match admission {
         Ok(admission) => admission,
         Err(_) => {
