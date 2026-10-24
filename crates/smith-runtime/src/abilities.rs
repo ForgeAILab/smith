@@ -259,8 +259,8 @@ fn keywords(name: &str) -> Vec<&'static str> {
     }
 }
 
-fn affordances(name: &str, permissions: &[Permission]) -> Vec<&'static str> {
-    let mut values = match name {
+fn affordances(name: &str, permissions: &[Permission]) -> Vec<String> {
+    let curated: Vec<&'static str> = match name {
         "read" => vec!["file-content-read", "file-read"],
         "list" => vec!["directory-list", "file-read"],
         "search" => vec!["file-search", "file-read"],
@@ -278,10 +278,22 @@ fn affordances(name: &str, permissions: &[Permission]) -> Vec<&'static str> {
         CREATE_GOAL_TOOL_NAME | UPDATE_GOAL_TOOL_NAME => vec!["goal-management"],
         _ => Vec::new(),
     };
-    if agent_runtime_mcp::naming::split_model_facing_name(name).is_some() {
-        values.push("remote-tool");
+    let mut values: Vec<String> = curated.iter().map(|value| (*value).to_owned()).collect();
+    // Without a curated affordance, a module, plugin, or remote tool would
+    // offer only permission-derived ones, and selection would reject every
+    // tool after the first with the same permissions as redundant (web_search
+    // behind web_fetch). Its own name keeps it distinct.
+    if curated.is_empty() {
+        values.push(format!("tool:{name}"));
     }
-    values.extend(permissions.iter().map(permission_affordance));
+    if agent_runtime_mcp::naming::split_model_facing_name(name).is_some() {
+        values.push("remote-tool".to_owned());
+    }
+    values.extend(
+        permissions
+            .iter()
+            .map(|permission| permission_affordance(permission).to_owned()),
+    );
     values
 }
 
@@ -634,6 +646,35 @@ mod tests {
                 "review workflow omitted `{expected}`: {selected:?}"
             );
         }
+    }
+
+    #[test]
+    fn uncurated_tools_with_equal_permissions_are_not_redundant_with_each_other() {
+        let view = view_for(vec![
+            Arc::new(HostTool("web_fetch")),
+            Arc::new(HostTool("web_search")),
+        ]);
+        let resolver = CapabilityResolver::new();
+        let retrieval = resolver.retrieve_descriptive(
+            &view,
+            &RoutingQuery::derive("web search fetch", Vec::<String>::new()),
+        );
+        let plan = resolver.select(
+            &view,
+            &retrieval.candidates,
+            &agent_runtime::capability::SelectionBudgets::unbounded(),
+            &[],
+        );
+        let bound = plan
+            .bindings
+            .iter()
+            .map(|binding| binding.descriptor.id().name.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            bound,
+            BTreeSet::from(["web_fetch", "web_search"]),
+            "{plan:?}"
+        );
     }
 
     #[derive(Debug)]

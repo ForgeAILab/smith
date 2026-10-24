@@ -484,13 +484,22 @@ fn reject_sandbox_tool_collisions(plan: &mut MountPlan, request: &RuntimeRequest
 
 pub(crate) fn reject_sandbox_tool_names(
     plan: &mut MountPlan,
-    mut taken: std::collections::BTreeSet<String>,
+    taken: std::collections::BTreeSet<String>,
 ) {
+    use agent_runtime::harness::{CAPABILITY_ACTIVATE_TOOL_NAME, CAPABILITY_SEARCH_TOOL_NAME};
+    use agent_runtime_core::tool::provider_tool_name;
+    // Compared as provider names: the runtime refuses two tools a provider
+    // would see under one name, which would fail the whole session.
+    let mut taken = taken
+        .iter()
+        .map(|name| provider_tool_name(name))
+        .chain([CAPABILITY_SEARCH_TOOL_NAME, CAPABILITY_ACTIVATE_TOOL_NAME].map(provider_tool_name))
+        .collect::<std::collections::BTreeSet<_>>();
     // Native modules keep their existing registration semantics and take precedence.
     for module in &plan.mounted {
         if !matches!(module.descriptor.origin, ModuleOrigin::Sandboxed { .. }) {
             taken.extend(module.contributions.iter().filter_map(|c| match c {
-                ModuleContribution::Tool(tool) => Some(tool.spec().name),
+                ModuleContribution::Tool(tool) => Some(provider_tool_name(&tool.spec().name)),
                 _ => None,
             }));
         }
@@ -507,7 +516,10 @@ pub(crate) fn reject_sandbox_tool_names(
                 _ => None,
             })
             .collect::<Vec<_>>();
-        if let Some(name) = names.iter().find(|name| taken.contains(*name)) {
+        if let Some(name) = names
+            .iter()
+            .find(|name| taken.contains(&provider_tool_name(name)))
+        {
             let reason = format!("sandboxed tool collision: {name}");
             if let Some(report) = plan
                 .report
@@ -523,7 +535,7 @@ pub(crate) fn reject_sandbox_tool_names(
             }
             false
         } else {
-            taken.extend(names);
+            taken.extend(names.iter().map(|name| provider_tool_name(name)));
             true
         }
     });

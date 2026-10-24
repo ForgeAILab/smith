@@ -132,6 +132,9 @@ pub(super) fn response_tool_names(
     let mut names = BTreeMap::new();
     for tool in tools {
         let wire = response_wire_tool_name(&tool.name);
+        if wire.is_empty() {
+            return Err(tool_name_collision());
+        }
         if names
             .insert(wire, tool.name.clone())
             .is_some_and(|canonical| canonical != tool.name)
@@ -142,12 +145,10 @@ pub(super) fn response_tool_names(
     Ok(names)
 }
 
+/// The same readable provider name the runtime's adapters send: a model has
+/// to be able to repeat it, so it carries no hash.
 pub(super) fn response_wire_tool_name(name: &str) -> String {
-    if valid_response_tool_name(name) {
-        return name.to_owned();
-    }
-    let digest = format!("{:x}", Sha256::digest(name.as_bytes()));
-    format!("smith_tool_{}", &digest[..53])
+    agent_runtime_core::tool::provider_tool_name(name)
 }
 
 fn tool_name_collision() -> ProviderError {
@@ -157,6 +158,7 @@ fn tool_name_collision() -> ProviderError {
     )
 }
 
+#[cfg(test)]
 pub(super) fn valid_response_tool_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64

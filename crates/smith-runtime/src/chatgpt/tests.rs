@@ -365,6 +365,7 @@ fn response_tool_names_are_backend_safe_collision_free_and_reversible() {
     ];
     let names = response_tool_names(&tools).expect("distinct tool names");
     let alias = response_wire_tool_name("tool:registry.search");
+    assert_eq!(alias, "tool_registry_search");
     assert_eq!(
         names.get("smith_tool_1").map(String::as_str),
         Some("smith_tool_1")
@@ -381,6 +382,51 @@ fn response_tool_names_are_backend_safe_collision_free_and_reversible() {
             .and_then(Value::as_str),
         Some(alias.as_str())
     );
+}
+
+#[test]
+fn a_model_call_by_wire_or_canonical_name_reaches_the_canonical_tool() {
+    let names = response_tool_names(&[ToolSchema {
+        name: "registry.activate".into(),
+        description: String::new(),
+        input_schema: json!({"type": "object"}),
+    }])
+    .expect("tool names");
+    for called in ["registry_activate", "registry.activate"] {
+        let mut state = StreamState {
+            tool_names: names.clone(),
+            ..StreamState::default()
+        };
+        let events = decode_event(
+            &json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"type": "function_call", "call_id": "c1", "name": called},
+            })
+            .to_string(),
+            &mut state,
+        )
+        .expect("a function call decodes");
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                ProviderStreamEvent::ToolCallDelta { name: Some(name), .. }
+                    if name == "registry.activate"
+            )),
+            "{called}: {events:?}"
+        );
+    }
+}
+
+#[test]
+fn response_tool_names_reject_tools_sharing_a_provider_name() {
+    let tool = |name: &str| ToolSchema {
+        name: name.into(),
+        description: String::new(),
+        input_schema: json!({"type": "object"}),
+    };
+    assert!(response_tool_names(&[tool("memory.search"), tool("memory_search")]).is_err());
+    assert!(response_tool_names(&[tool("")]).is_err());
 }
 
 #[test]

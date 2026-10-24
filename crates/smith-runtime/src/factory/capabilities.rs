@@ -1,6 +1,8 @@
 //! Built-in, trusted-native, MCP, and delegation-tool capability stage.
 
 use super::*;
+use agent_runtime::harness::{CAPABILITY_ACTIVATE_TOOL_NAME, CAPABILITY_SEARCH_TOOL_NAME};
+use agent_runtime_core::tool::provider_tool_name;
 
 pub(super) fn prepare(
     request: &RuntimeRequest,
@@ -64,13 +66,19 @@ pub(super) fn prepare(
     // scheme, and a shadowed `shell` would be the worst possible way to
     // discover that the scheme had changed.
     if let Some(supervisor) = &request.mcp {
+        // Keyed on the provider name: the runtime refuses two tools a provider
+        // would see under one name, so a remote tool must not take one.
         let mut taken = tools
             .iter()
-            .map(|tool| tool.spec().name)
+            .map(|tool| provider_tool_name(&tool.spec().name))
+            .chain(
+                [CAPABILITY_SEARCH_TOOL_NAME, CAPABILITY_ACTIVATE_TOOL_NAME]
+                    .map(provider_tool_name),
+            )
             .collect::<BTreeSet<_>>();
         for tool in supervisor.tools() {
             let name = tool.spec().name;
-            if !taken.insert(name.clone()) {
+            if !taken.insert(provider_tool_name(&name)) {
                 tracing::warn!(
                     tool = %name,
                     "a remote tool was not registered because that name is already in use"

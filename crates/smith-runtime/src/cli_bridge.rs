@@ -180,15 +180,7 @@ fn remove_unsupported_artifact_reader(
 }
 
 fn normalize_name(name: &str) -> String {
-    name.bytes()
-        .map(|byte| {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-') {
-                char::from(byte)
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    agent_runtime_core::tool::provider_tool_name(name)
 }
 
 /// Instructions and the tool names whose whole fragments exceeded the budget.

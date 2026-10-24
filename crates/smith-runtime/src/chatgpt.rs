@@ -38,7 +38,6 @@ use futures_util::StreamExt;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use smith_config::credential::{CredentialEnroller, CredentialRef};
 use url::form_urlencoded;
 use zeroize::Zeroize;
