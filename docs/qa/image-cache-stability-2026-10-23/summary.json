@@ -1,0 +1,187 @@
+{
+  "conclusion": "Image encoding is deterministic in the tested paths. Advancing the historical-image window changes earlier request messages and reduces cache reuse. The original session retained a high overall cache-hit rate while losing older reference pixels.",
+  "binary_sha256": "df3847df4a07ae0506ab145c3bf37a5b79b24724d91e6a831cee80441bada721",
+  "controlled_wire_tests": {
+    "cases": [
+      {
+        "name": "tool-window-10",
+        "window": 10,
+        "attached_reference": false,
+        "exit_code": 0,
+        "status": "ok",
+        "stderr": "",
+        "reference_encoding_variants": 1,
+        "cache_key_variants": 1,
+        "non_message_fields_variants": 1,
+        "final_images": 12,
+        "prefix_breaks": [
+          20,
+          30,
+          40
+        ],
+        "note": "Local scripted provider; cache-hit usage is not simulated or measured in this lane.",
+        "passed": true,
+        "request_count": 43,
+        "detail_file": "tool-window-10.json"
+      },
+      {
+        "name": "inline-window-10",
+        "window": 10,
+        "attached_reference": true,
+        "exit_code": 0,
+        "status": "ok",
+        "stderr": "",
+        "reference_encoding_variants": 1,
+        "cache_key_variants": 1,
+        "non_message_fields_variants": 1,
+        "final_images": 13,
+        "prefix_breaks": [
+          20,
+          30,
+          40
+        ],
+        "note": "Local scripted provider; cache-hit usage is not simulated or measured in this lane.",
+        "passed": true,
+        "request_count": 43,
+        "detail_file": "inline-window-10.json"
+      },
+      {
+        "name": "tool-window-100",
+        "window": 100,
+        "attached_reference": false,
+        "exit_code": 0,
+        "status": "ok",
+        "stderr": "",
+        "reference_encoding_variants": 1,
+        "cache_key_variants": 1,
+        "non_message_fields_variants": 1,
+        "final_images": 42,
+        "prefix_breaks": [],
+        "note": "Local scripted provider; cache-hit usage is not simulated or measured in this lane.",
+        "passed": true,
+        "request_count": 43,
+        "detail_file": "tool-window-100.json"
+      }
+    ],
+    "captured_requests": 129,
+    "all_passed": true,
+    "each_case_reference_encoding_variants": 1,
+    "each_case_cache_key_variants": 1,
+    "each_case_non_message_fields_variants": 1,
+    "default_window_prefix_breaks_at_image_counts": [
+      20,
+      30,
+      40
+    ],
+    "window_100_prefix_breaks": [],
+    "case_count": 3
+  },
+  "live_probes": [
+    {
+      "model": "selected-large",
+      "route": "xiaoge/selected-large",
+      "turns": 4,
+      "all_answers_correct": true,
+      "unchanged_image_encoding": true,
+      "quiet_before_last_turn_seconds": 30,
+      "last_turn_cached_tokens": 15488,
+      "last_turn_uncached_tokens": 91,
+      "last_turn_cached_percent": 99.42,
+      "detail_file": "selected-large-live.json"
+    },
+    {
+      "model": "gemini-4",
+      "route": "google/gemini-4-argon",
+      "turns": 4,
+      "all_answers_correct": true,
+      "unchanged_image_encoding": true,
+      "quiet_before_last_turn_seconds": 30,
+      "last_turn_cached_tokens": 17716,
+      "last_turn_uncached_tokens": 2095,
+      "last_turn_cached_percent": 89.43,
+      "detail_file": "gemini-4-live.json"
+    },
+    {
+      "model": "astra-6",
+      "route": "chatgpt/gpt-6-astra",
+      "turns": 4,
+      "all_answers_correct": true,
+      "unchanged_image_encoding": true,
+      "quiet_before_last_turn_seconds": 30,
+      "last_turn_cached_tokens": 3712,
+      "last_turn_uncached_tokens": 14993,
+      "last_turn_cached_percent": 19.84,
+      "detail_file": "astra-6-live.json"
+    }
+  ],
+  "original_session": {
+    "id": "session-2901410c-4676-46a4-8311-76987dfa6324",
+    "attempts_reporting_input_usage": 346,
+    "attempts_with_cache_reads": 345,
+    "weighted_cached_input_percent": 97.571,
+    "window_advances": 18,
+    "window_advances_with_cached_token_drop": 18,
+    "final_cached_tokens": 266496,
+    "final_uncached_tokens": 866,
+    "static_reference_reads": {
+      "/Volumes/Documents/设定/小麦/IMG_2696.png": {
+        "reads": 4,
+        "url_variants": 1,
+        "pixel_variants": 1
+      },
+      "/Volumes/Documents/设定/小麦/14B9B165229A30F9BC77CF0CC517EC0C.jpg": {
+        "reads": 3,
+        "url_variants": 1,
+        "pixel_variants": 1
+      }
+    },
+    "identical_pixel_render_pairs_with_different_source_metadata": 2,
+    "metadata_difference": "Only Blender Date and RenderTime PNG text chunks differ in these two pairs. Pixel and compressed-image data match.",
+    "encoding_audit_file": "original-encoding-audit.json",
+    "cache_audit_file": "original-cache-audit.json"
+  },
+  "regressions": {
+    "new_tests": 3,
+    "focused_tests_passed": 8,
+    "failed": 0,
+    "commands": [
+      {
+        "command": "cargo test -p smith-runtime --lib image_fitting_ -- --nocapture",
+        "passed": 7
+      },
+      {
+        "command": "cargo test -p smith-runtime --lib image_cache_prefix_is_stable_on_chatgpt_append_and_provider_restart -- --nocapture",
+        "passed": 1
+      }
+    ],
+    "tests": [
+      "image_fitting_preserves_encoded_history_after_eviction_and_restart",
+      "image_fitting_tile_resizing_is_byte_idempotent_across_provider_families",
+      "image_cache_prefix_is_stable_on_chatgpt_append_and_provider_restart"
+    ],
+    "coverage": [
+      "Five provider-family image limits",
+      "Cold provider instance and 32-entry local image-cache eviction",
+      "Preservation of user images and nested image tool results",
+      "Repeated tile-based resizing without cumulative byte changes",
+      "ChatGPT instructions, tool schemas, routing key and serialized image history remain unchanged on append and provider reconstruction"
+    ]
+  },
+  "interpretation": {
+    "established": [
+      "Retained image content did not acquire a different encoding on repeated preparation, append or provider reconstruction.",
+      "The default stepped image window rewrites earlier messages into placeholders; a larger window preserved those earlier messages in the controlled 42-image run.",
+      "Every observed original-session image-window advance coincided with a cache-read-token drop.",
+      "selected-large and Gemini warmed strongly in this short live probe; Astra reused only a partial prefix."
+    ],
+    "limits": [
+      "Local wire capture uses the OpenAI-compatible adapter with a scripted endpoint. It measures serialized bytes, not remote cache-hit behavior.",
+      "Live runs use four separately invoked Smith processes per route and a 30-second quiet interval before the last turn; this does not establish long-term cache TTL.",
+      "Later probe answers can be copied from earlier assistant text; their correctness alone does not prove repeated pixel attention. The first-turn visual test and independent image-hash checks provide the corresponding evidence.",
+      "The cause of partial Astra cache reuse is unresolved; deterministic encoding and the ChatGPT serializer tests do not establish remote caching behavior.",
+      "Metadata differences on newly rendered files do not establish mutation of earlier stored history."
+    ],
+    "recommended_change": "Keep reference artwork pinned separately from the rolling render-image window. Increasing inline_images delays eviction but cannot permanently pin reference art.",
+    "production_behavior_changed": false
+  }
+}

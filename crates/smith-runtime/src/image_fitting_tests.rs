@@ -184,3 +184,111 @@ fn image_fitting_cache_evicts_lru_and_bounds_output_bytes() {
     assert_eq!(cache.bytes, 1);
     assert_eq!(cache.entries.len(), 1);
 }
+
+#[tokio::test]
+async fn image_fitting_preserves_encoded_history_after_eviction_and_restart() {
+    for family in [
+        smith_tools::ImageProvider::OpenAi,
+        smith_tools::ImageProvider::Anthropic,
+        smith_tools::ImageProvider::Gemini,
+        smith_tools::ImageProvider::Xai,
+        smith_tools::ImageProvider::Other,
+    ] {
+        let limits = ImageLimits::for_provider(family);
+        let make_provider = |attempts| {
+            let inner = Arc::new(FakeProvider::new(
+                "m",
+                Capabilities::basic_streaming(),
+                (0..attempts)
+                    .map(|_| ScriptedStream::new(stop_events("seen")))
+                    .collect(),
+            ));
+            let fitting = ImageFittingProvider::new(inner.clone(), limits.clone());
+            (inner, fitting)
+        };
+        let source = vec![
+            Message {
+                role: agent_runtime_core::content::Role::User,
+                content: vec![image(&url(ImageFormat::Png, 3500))],
+            },
+            Message::tool_result(ToolResultBlock {
+                call_id: ToolCallId::new("reference"),
+                name: "read".into(),
+                content: vec![image(&url(ImageFormat::WebP, 100))],
+                is_error: false,
+            }),
+        ];
+        let request = ProviderRequest::new(ModelId::new("m"), source.clone());
+        let (inner, fitting) = make_provider(CACHE_ENTRIES + 3);
+        send(&fitting, request.clone()).await;
+        let expected = inner.requests()[0].messages.clone();
+
+        for width in 10..10 + CACHE_ENTRIES as u32 + 1 {
+            send(
+                &fitting,
+                ProviderRequest::new(
+                    ModelId::new("m"),
+                    vec![Message::assistant(vec![image(&url(
+                        ImageFormat::Png,
+                        width,
+                    ))])],
+                ),
+            )
+            .await;
+        }
+        let before = fitting.cache.lock().unwrap().preparations;
+        let mut appended = request;
+        appended.messages.push(Message::user("continue comparing"));
+        send(&fitting, appended).await;
+        assert_eq!(fitting.cache.lock().unwrap().preparations, before + 2);
+        assert_eq!(
+            &inner.requests().last().unwrap().messages[..source.len()],
+            expected.as_slice(),
+            "encoded history changed after eviction for {family:?}"
+        );
+
+        let (cold_inner, cold_fitting) = make_provider(1);
+        send(
+            &cold_fitting,
+            ProviderRequest::new(ModelId::new("m"), source.clone()),
+        )
+        .await;
+        assert_eq!(cold_inner.requests()[0].messages, expected, "{family:?}");
+        assert_eq!(source[0].content[0], image(&url(ImageFormat::Png, 3500)));
+    }
+}
+
+#[test]
+fn image_fitting_tile_resizing_is_byte_idempotent_across_provider_families() {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    DynamicImage::new_rgba8(2048, 1535)
+        .write_to(&mut bytes, ImageFormat::Png)
+        .unwrap();
+    let source = format!(
+        "data:image/png;base64,{}",
+        STANDARD.encode(bytes.into_inner())
+    );
+    for family in [
+        smith_tools::ImageProvider::OpenAi,
+        smith_tools::ImageProvider::Anthropic,
+        smith_tools::ImageProvider::Gemini,
+        smith_tools::ImageProvider::Xai,
+        smith_tools::ImageProvider::Other,
+    ] {
+        let limits = ImageLimits::for_provider(family);
+        let first = prepare_image_data_url(&source, &limits).unwrap();
+        let mut repeated = first.clone();
+        for _ in 0..5 {
+            repeated = prepare_image_data_url(&repeated, &limits).unwrap();
+            assert_eq!(
+                repeated, first,
+                "repeated fitting changed bytes for {family:?}"
+            );
+        }
+        assert_eq!(
+            prepare_image_data_url(&source, &limits).unwrap(),
+            first,
+            "a cold preparation changed bytes for {family:?}"
+        );
+    }
+}

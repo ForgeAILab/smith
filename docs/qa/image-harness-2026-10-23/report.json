@@ -1,0 +1,602 @@
+{
+  "created_at": "2026-10-23T20:23:47.554455+00:00",
+  "conclusion": "Fresh-session image delivery passes through both attachments and read tool results on all three configured model routes. The original long session stopped retaining reference pixels in its final request.",
+  "scope": {
+    "installed_binary": "/Users/mai1015/.local/bin/smith",
+    "installed_version": "0.7.13",
+    "worktree_binary": "/Volumes/Data/codes/ai/tui/target/debug/smith",
+    "worktree_version": "0.7.13",
+    "approval": "deny",
+    "source_images": "Extracted from persisted original tool results, not mutable /tmp render paths.",
+    "tested_routes": [
+      "xiaoge/selected-large",
+      "google/gemini-4-argon",
+      "chatgpt/gpt-6-astra"
+    ],
+    "production_code_changed": false,
+    "original_session_resumed": false,
+    "blender_files_changed": false
+  },
+  "live_cases": [
+    {
+      "case": "selected-large-inline",
+      "profile": "security",
+      "provider": "xiaoge",
+      "model": "selected-large",
+      "session_id": "session-71b56deb-f57b-4726-bd01-4ec02560dfd9",
+      "status": "ok",
+      "result_file": "selected-large-inline.json",
+      "image_delivery": "pass",
+      "visually_detected_missing_dark_fur": true,
+      "visually_detected_symbol_too_high": true,
+      "canary_exact_code": null,
+      "canary_shapes_and_equation_correct": null,
+      "tool_calls": [],
+      "tool_result_images": [],
+      "reasoning": {
+        "state": "on",
+        "effort": "high",
+        "source": "profile"
+      },
+      "prompt_file": "inline-prompt.txt",
+      "attachment_message_indices": [
+        5,
+        798,
+        799
+      ]
+    },
+    {
+      "case": "selected-large-read",
+      "profile": "security",
+      "provider": "xiaoge",
+      "model": "selected-large",
+      "session_id": "session-867bdf6c-5724-47ae-a176-c0b15d226a7b",
+      "status": "ok",
+      "result_file": "selected-large-read.json",
+      "image_delivery": "pass",
+      "visually_detected_missing_dark_fur": true,
+      "visually_detected_symbol_too_high": true,
+      "canary_exact_code": true,
+      "canary_shapes_and_equation_correct": true,
+      "tool_calls": [
+        {
+          "name": "read",
+          "arguments": {
+            "path": "probe.png"
+          }
+        },
+        {
+          "name": "read",
+          "arguments": {
+            "path": "reference.png"
+          }
+        },
+        {
+          "name": "read",
+          "arguments": {
+            "path": "render-front.png"
+          }
+        },
+        {
+          "name": "read",
+          "arguments": {
+            "path": "render-head.png"
+          }
+        }
+      ],
+      "tool_result_images": [
+        {
+          "sha256": "cc36ece35f5780379509677a5716c50360129e6d07f8bf6af87a83b4785c7b68",
+          "bytes": 12083,
+          "width": 900,
+          "height": 600,
+          "format": "PNG"
+        },
+        {
+          "sha256": "5a0f36d81da3b178d8fb95316a64f783f47e45878e194f5f5f8b10cb40e0c029",
+          "bytes": 705512,
+          "width": 2048,
+          "height": 1535,
+          "format": "PNG"
+        },
+        {
+          "sha256": "6f5821cbc50db2658c628841bb2113bf6c1b44ff1fb333ba3cf83a0a67ee3a67",
+          "bytes": 347043,
+          "width": 560,
+          "height": 760,
+          "format": "PNG"
+        },
+        {
+          "sha256": "65235dc5fc0b10e1dad90ef52e0cb9068297f4b013077ef2af180b191230e21a",
+          "bytes": 334545,
+          "width": 560,
+          "height": 760,
+          "format": "PNG"
+        }
+      ],
+      "reasoning": {
+        "state": "on",
+        "effort": "low",
+        "source": "command-line flag `--effort`"
+      },
+      "prompt_file": "read-prompt.txt",
+      "attachment_message_indices": []
+    },
+    {
+      "case": "gemini-4-inline",
+      "profile": "research",
+      "provider": "google",
+      "model": "gemini-4-argon",
+      "session_id": "session-ae70ab9b-23de-48d1-a1af-99b0f4f4ac6b",
+      "status": "ok",
+      "result_file": "gemini-4-inline.json",
+      "image_delivery": "pass",
+      "visually_detected_missing_dark_fur": true,
+      "visually_detected_symbol_too_high": true,
+      "canary_exact_code": null,
+      "canary_shapes_and_equation_correct": null,
+      "tool_calls": [],
+      "tool_result_images": [],
+      "reasoning": {
+        "state": "on",
+        "effort": "provider default",
+        "source": "provider/model default"
+      },
+      "prompt_file": "inline-prompt.txt",
+      "attachment_message_indices": [
+        5,
+        798,
+        799
+      ]
+    },
+    {
+      "case": "gemini-4-read",
+      "profile": "research",
+      "provider": "google",
+      "model": "gemini-4-argon",
+      "session_id": "session-f2f4ae9d-929b-4adf-a5d5-a0ccfe6407a1",
+      "status": "ok",
+      "result_file": "gemini-4-read.json",
+      "image_delivery": "pass",
+      "visually_detected_missing_dark_fur": true,
+      "visually_detected_symbol_too_high": true,
+      "canary_exact_code": true,
+      "canary_shapes_and_equation_correct": true,
+      "tool_calls": [
+        {
+          "name": "read",
+          "arguments": {
+            "path": "probe.png"
+          }
+        },
+        {
+          "name": "read",
+          "arguments": {
+            "path": "reference.png"
+          }
+        },
+        {
+          "name": "read",
+          "arguments": {
+            "path": "render-front.png"
+          }
+        },
+        {
+          "name": "read",
+          "arguments": {
+            "path": "render-head.png"
+          }
+        }
+      ],
+      "tool_result_images": [
+        {
+          "sha256": "cc36ece35f5780379509677a5716c50360129e6d07f8bf6af87a83b4785c7b68",
+          "bytes": 12083,
+          "width": 900,
+          "height": 600,
+          "format": "PNG"
+        },
+        {
+          "sha256": "5a0f36d81da3b178d8fb95316a64f783f47e45878e194f5f5f8b10cb40e0c029",
+          "bytes": 705512,
+          "width": 2048,
+          "height": 1535,
+          "format": "PNG"
+        },
+        {
+          "sha256": "6f5821cbc50db2658c628841bb2113bf6c1b44ff1fb333ba3cf83a0a67ee3a67",
+          "bytes": 347043,
+          "width": 560,
+          "height": 760,
+          "format": "PNG"
+        },
+        {
+          "sha256": "65235dc5fc0b10e1dad90ef52e0cb9068297f4b013077ef2af180b191230e21a",
+          "bytes": 334545,
+          "width": 560,
+          "height": 760,
+          "format": "PNG"
+        }
+      ],
+      "reasoning": {
+        "state": "on",
+        "effort": "low",
+        "source": "command-line flag `--effort`"
+      },
+      "prompt_file": "read-prompt.txt",
+      "attachment_message_indices": []
+    },
+    {
+      "case": "astra-6-inline",
+      "profile": "visual",
+      "provider": "chatgpt",
+      "model": "gpt-6-astra",
+      "session_id": "session-6f1ffbf2-48ae-4c81-9442-f654285df8dd",
+      "status": "ok",
+      "result_file": "astra-6-inline.json",
+      "image_delivery": "pass",
+      "visually_detected_missing_dark_fur": true,
+      "visually_detected_symbol_too_high": true,
+      "canary_exact_code": null,
+      "canary_shapes_and_equation_correct": null,
+      "tool_calls": [],
+      "tool_result_images": [],
+      "reasoning": {
+        "state": "on",
+        "effort": "medium",
+        "source": "provider/model default"
+      },
+      "prompt_file": "inline-prompt.txt",
+      "attachment_message_indices": [
+        5,
+        798,
+        799
+      ]
+    },
+    {
+      "case": "astra-6-read",
+      "profile": "visual",
+      "provider": "chatgpt",
+      "model": "gpt-6-astra",
+      "session_id": "session-46169d17-3193-455e-a6f2-174e8da3ba86",
+      "status": "ok",
+      "result_file": "astra-6-read.json",
+      "image_delivery": "pass",
+      "visually_detected_missing_dark_fur": true,
+      "visually_detected_symbol_too_high": true,
+      "canary_exact_code": true,
+      "canary_shapes_and_equation_correct": true,
+      "tool_calls": [
+        {
+          "name": "read",
+          "arguments": {
+            "path": "probe.png"
+          }
+        },
+        {
+          "name": "read",
+          "arguments": {
+            "path": "reference.png"
+          }
+        },
+        {
+          "name": "read",
+          "arguments": {
+            "path": "render-front.png"
+          }
+        },
+        {
+          "name": "read",
+          "arguments": {
+            "path": "render-head.png"
+          }
+        }
+      ],
+      "tool_result_images": [
+        {
+          "sha256": "cc36ece35f5780379509677a5716c50360129e6d07f8bf6af87a83b4785c7b68",
+          "bytes": 12083,
+          "width": 900,
+          "height": 600,
+          "format": "PNG"
+        },
+        {
+          "sha256": "c475e08f78c3c1cc7810764fbf7129c109cb4431898fbe2ce839f23b17f788b3",
+          "bytes": 620996,
+          "width": 1824,
+          "height": 1367,
+          "format": "PNG"
+        },
+        {
+          "sha256": "6f5821cbc50db2658c628841bb2113bf6c1b44ff1fb333ba3cf83a0a67ee3a67",
+          "bytes": 347043,
+          "width": 560,
+          "height": 760,
+          "format": "PNG"
+        },
+        {
+          "sha256": "65235dc5fc0b10e1dad90ef52e0cb9068297f4b013077ef2af180b191230e21a",
+          "bytes": 334545,
+          "width": 560,
+          "height": 760,
+          "format": "PNG"
+        }
+      ],
+      "reasoning": {
+        "state": "on",
+        "effort": "low",
+        "source": "command-line flag `--effort`"
+      },
+      "prompt_file": "read-prompt.txt",
+      "attachment_message_indices": []
+    }
+  ],
+  "worktree_control": {
+    "result_file": "worktree-selected-large-read.json",
+    "status": "ok",
+    "session_id": "session-1fd23b05-8b4c-4bd2-8016-7bb24785a0a2",
+    "canary_exact_code": true,
+    "output": "The image at `probe.png` (900×600 PNG) shows:\n\n- **Code (top-left):** `45C18F`\n- **Shapes left to right:** red square, blue circle, green triangle\n- **Equation:** `37 + 8 = ?` — the image prints only a question mark, not an answer; the computed result is **45**.\n\nNo other files were opened, nothing was modified, and no shell was used."
+  },
+  "canary": {
+    "expected": {
+      "code": "45C18F",
+      "left_to_right": [
+        "red square",
+        "blue circle",
+        "green triangle"
+      ],
+      "equation": "37 + 8 = ?",
+      "answer": 45
+    },
+    "payload_sha256": "cc36ece35f5780379509677a5716c50360129e6d07f8bf6af87a83b4785c7b68",
+    "expected_answer_file_exposed_to_model": false,
+    "observed_calls": "The three read cases called read only on probe.png, reference.png, render-front.png, render-head.png; none read the expected-answer file."
+  },
+  "original_session": {
+    "id": "session-2901410c-4676-46a4-8311-76987dfa6324",
+    "listing": {
+      "schema_version": 1,
+      "turn_count": 4,
+      "provider": "xiaoge",
+      "model": "selected-large",
+      "user_preview": "resume"
+    },
+    "messages": 801,
+    "image_occurrences": 192,
+    "last_context_plan": {
+      "cache_plan": "8ac7c7f20180f3743c9bc38de3aadc92",
+      "confidence": "estimated",
+      "context": "4042cc34c1d9ee7f9b0c290904e3a903",
+      "event": "context_planned",
+      "images_windowed": 180,
+      "input_budget_tokens": 1040384,
+      "input_tokens": 175300,
+      "reserved_tokens": 8192,
+      "segment_count": 822,
+      "totals": {
+        "ability_instruction": 3954,
+        "developer_instruction": 956,
+        "history": 130147,
+        "system_instruction": 45,
+        "tool_result": 38567,
+        "tool_schema": 1625,
+        "user_input": 6
+      }
+    },
+    "images_retained_in_final_request": 12,
+    "last_reference_read": {
+      "message_index": 668,
+      "image_ordinal": 162,
+      "source_path": "/tmp/cA/figA.png",
+      "sha256": "d1e731e257f37daa4cd03a5d0305f67e291147a0c9ee1100c0d59e41dcef2a38",
+      "bytes": 260768,
+      "width": 585,
+      "height": 1733,
+      "format": "PNG"
+    },
+    "retained_image_sources": [
+      {
+        "message_index": 745,
+        "image_ordinal": 181,
+        "source_path": "/tmp/work/S_080622_front.png",
+        "sha256": "17e88e376a5704e12ee22f2aa368b3682f5d9d098dd560c5d0eb8d4bb9d45dbe",
+        "bytes": 349347,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 746,
+        "image_ordinal": 182,
+        "source_path": "/tmp/work/S_080622_head.png",
+        "sha256": "4534592d4f83b1f24f9710dc78fbf4c6e0d5143fb38cc8f8d5b537cf789117d1",
+        "bytes": 340365,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 754,
+        "image_ordinal": 183,
+        "source_path": "/tmp/work/S_081226_front.png",
+        "sha256": "4a00dd48febb47d92fad9eb3d86ef65332a2f15c5d8885c3c8cb1aff08221f2c",
+        "bytes": 351807,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 755,
+        "image_ordinal": 184,
+        "source_path": "/tmp/work/S_081226_head.png",
+        "sha256": "1c410293682b90d5eaf8632e8a73769c520200ff1a0d38fe694f9ba797e4c9b1",
+        "bytes": 341803,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 769,
+        "image_ordinal": 185,
+        "source_path": "/tmp/work/S_081600_front.png",
+        "sha256": "93f0619998f0aa06e39565a5c0fbb241cb8d22fade12f1425b548aff6d432bee",
+        "bytes": 352577,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 770,
+        "image_ordinal": 186,
+        "source_path": "/tmp/work/S_081600_head.png",
+        "sha256": "095d79706b350b2b323691f7402fc6497f083333b830e49200679657962e18ad",
+        "bytes": 344155,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 776,
+        "image_ordinal": 187,
+        "source_path": "/tmp/work/S_081836_front.png",
+        "sha256": "ddcee8da0251b49eeeeadc5ce300df45f2df196218e783b881633ba47fbba0cd",
+        "bytes": 346689,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 777,
+        "image_ordinal": 188,
+        "source_path": "/tmp/work/S_081836_head.png",
+        "sha256": "c52d8d21cab0c1621a9a8982d90f690bc2835d6fa3244228812c6108d9520a64",
+        "bytes": 337375,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 791,
+        "image_ordinal": 189,
+        "source_path": "/tmp/work/S_082150_front.png",
+        "sha256": "a6f564f8948362286582b642803aeb40dcfb73fb87970836d71ea2a5bbe073fd",
+        "bytes": 349862,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 792,
+        "image_ordinal": 190,
+        "source_path": "/tmp/work/S_082150_head.png",
+        "sha256": "069e1568dfa7caee13bce95d17381ffc15b4b788cd89706e51cdc0648a029854",
+        "bytes": 347177,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 798,
+        "image_ordinal": 191,
+        "source_path": "/tmp/work/S_082607_front.png",
+        "sha256": "6f5821cbc50db2658c628841bb2113bf6c1b44ff1fb333ba3cf83a0a67ee3a67",
+        "bytes": 347043,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 799,
+        "image_ordinal": 192,
+        "source_path": "/tmp/work/S_082607_head.png",
+        "sha256": "65235dc5fc0b10e1dad90ef52e0cb9068297f4b013077ef2af180b191230e21a",
+        "bytes": 334545,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      }
+    ],
+    "sample_images": [
+      {
+        "message_index": 5,
+        "image_ordinal": 1,
+        "source_path": "/Volumes/Documents/设定/小麦/IMG_2696.png",
+        "sha256": "5a0f36d81da3b178d8fb95316a64f783f47e45878e194f5f5f8b10cb40e0c029",
+        "bytes": 705512,
+        "width": 2048,
+        "height": 1535,
+        "format": "PNG"
+      },
+      {
+        "message_index": 6,
+        "image_ordinal": 2,
+        "source_path": "/Volumes/Documents/设定/小麦/14B9B165229A30F9BC77CF0CC517EC0C.jpg",
+        "sha256": "4f29950b7feb2002abe84ece0f485da807440992b8baa40f58fb90d3930f2b5b",
+        "bytes": 91513,
+        "width": 473,
+        "height": 960,
+        "format": "JPEG"
+      },
+      {
+        "message_index": 798,
+        "image_ordinal": 191,
+        "source_path": "/tmp/work/S_082607_front.png",
+        "sha256": "6f5821cbc50db2658c628841bb2113bf6c1b44ff1fb333ba3cf83a0a67ee3a67",
+        "bytes": 347043,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      },
+      {
+        "message_index": 799,
+        "image_ordinal": 192,
+        "source_path": "/tmp/work/S_082607_head.png",
+        "sha256": "65235dc5fc0b10e1dad90ef52e0cb9068297f4b013077ef2af180b191230e21a",
+        "bytes": 334545,
+        "width": 560,
+        "height": 760,
+        "format": "PNG"
+      }
+    ],
+    "provider_attempts": 357,
+    "provider_attempt_limit_reached": true
+  },
+  "interpretation": {
+    "established": [
+      "All three routes identified an unprompted random six-character code, colors, shapes and arithmetic delivered as image tool results.",
+      "All three routes compared the saved reference and render in fresh sessions and identified missing dark fur and a symbol moved from lower abdomen to upper chest.",
+      "The final original context plan reports 180 images windowed, leaving the latest 12 of 192 occurrences. The latest reference read was occurrence 162, outside that window."
+    ],
+    "inference": "Reference eviction and accumulated long-session errors plausibly contributed to the inaccurate reskin; this test does not establish the sole historical cause.",
+    "limits": [
+      "A successful vision smoke test does not establish reliable Blender editing or perfect visual interpretation.",
+      "Historical raw HTTP request bodies were not retained; the original plan event is request-projection evidence rather than a byte-for-byte network recording.",
+      "selected-large is an endpoint alias; the upstream implementation may change.",
+      "The normal global profile/skill configuration was retained. Cases are route smoke tests, not a controlled model ranking."
+    ]
+  },
+  "automated_tests": [
+    {
+      "command": "cargo test -p smith-runtime --lib image_ -- --nocapture",
+      "passed": 24,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p smith-tools image_ -- --nocapture",
+      "passed": 28,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --manifest-path <pinned-agent-runtime-a5f1b17>/Cargo.toml --target-dir <sibling-agent-runtime>/target -p agent-runtime-provider --lib image -- --nocapture",
+      "passed": 9,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --manifest-path <pinned-agent-runtime-a5f1b17>/Cargo.toml --target-dir <sibling-agent-runtime>/target -p agent-runtime-context --lib image_projection -- --nocapture",
+      "passed": 9,
+      "failed": 0
+    }
+  ],
+  "recommendation": "Re-read the design references together with the latest render before every visual comparison. Increasing context.inline_images can delay reference eviction; a reference-pinning policy would be a separate behavior change."
+}

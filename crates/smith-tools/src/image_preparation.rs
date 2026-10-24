@@ -430,7 +430,14 @@ fn invalid_image(reason: impl fmt::Display) -> ImageInputError {
     }
 }
 
-fn fitted_dimensions(
+/// Fits pixel dimensions to the long-edge and tile-budget limits without decoding pixels.
+///
+/// Encoded-byte limits may require further resizing when preparing the image payload.
+///
+/// # Errors
+///
+/// Returns [`ImageInputError::CannotFitLimits`] for zero dimensions or zero limits.
+pub fn fitted_dimensions(
     width: u32,
     height: u32,
     limits: &ImageLimits,

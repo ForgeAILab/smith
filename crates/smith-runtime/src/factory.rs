@@ -1054,15 +1054,21 @@ use construction::prepare_prompt_stage;
 #[cfg(test)]
 mod tests;
 
-/// Image ingestion limits selected by the serving provider adapter kind.
-pub fn image_limits_for_provider_kind(kind: &str) -> smith_tools::ImageLimits {
+/// Image provider family selected by the serving adapter kind.
+///
+/// CLI agents, compatible adapters, and unknown kinds use the conservative fallback.
+pub fn image_provider_for_kind(kind: &str) -> smith_tools::ImageProvider {
     use smith_tools::ImageProvider;
-    let provider = match kind {
+    match kind {
         KIND_OPENAI_RESPONSES | KIND_CHATGPT_RESPONSES => ImageProvider::OpenAi,
         KIND_ANTHROPIC_MESSAGES => ImageProvider::Anthropic,
         KIND_GEMINI_INTERACTIONS => ImageProvider::Gemini,
         KIND_XAI_RESPONSES => ImageProvider::Xai,
         _ => ImageProvider::Other,
-    };
-    smith_tools::ImageLimits::for_provider(provider)
+    }
+}
+
+/// Image ingestion limits selected by the serving provider adapter kind.
+pub fn image_limits_for_provider_kind(kind: &str) -> smith_tools::ImageLimits {
+    smith_tools::ImageLimits::for_provider(image_provider_for_kind(kind))
 }

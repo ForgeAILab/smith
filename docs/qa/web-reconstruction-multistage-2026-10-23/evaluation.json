@@ -1,0 +1,5134 @@
+{
+  "browser_version": "155.0.8059.85",
+  "results": [
+    {
+      "case": "smith-sol",
+      "stage": 1,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.82644,
+        "blurred_ssim_radius_3": 0.91342
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nYour spaces, in sync.\nBOARD 7F2A9C\n\nA little room for everything you are building.\n\nMonthly revenue\n\n$24,580\n+12.8%\nthis month\n\nOccupancy\n\n84%\n+6.2%\nthis month\n\nActive members\n\n128\n+14\nthis month\n\nAvailable desks\n\n18\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n84%\n24 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nMake room\nfor ideas.\n\nYour next great project\nstarts here.\n\nExplore spaces\n\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Your spaces, in sync. BOARD 7F2A9C A little room for everything you are building. Monthly revenue $24,580 +12.8% this month Occupancy 84% +6.2% this month Active members 128 +14 this month Available desks 18 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 84% 24 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Make room for ideas. Your next great project starts here. Explore spaces Last updated just now ",
+        "title": "Wayfinder — Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Explore spaces",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Add booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Your spaces, in sync.",
+        "recognition_marker": "WAYFINDER · BOARD 7F2A9C",
+        "sidebar_labels": [
+          "Alder House",
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings",
+          "Alex Morgan"
+        ],
+        "metrics": [
+          {
+            "label": "Monthly revenue",
+            "value": "$24,580",
+            "detail": "+12.8% this month"
+          },
+          {
+            "label": "Occupancy",
+            "value": "84%",
+            "detail": "+6.2% this month"
+          },
+          {
+            "label": "Active members",
+            "value": "128",
+            "detail": "+14 this month"
+          },
+          {
+            "label": "Available desks",
+            "value": "18",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date",
+          "Status"
+        ],
+        "table_rows": [
+          [
+            "JC · Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "OR · Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "NW · Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "chart_labels": {
+          "activity_title": "Booking activity",
+          "periods": [
+            "Week",
+            "Month"
+          ],
+          "x_axis": [
+            "Mon",
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "y_axis": [
+            "0",
+            "20",
+            "40",
+            "60"
+          ],
+          "tooltip": "Fri · 42 bookings",
+          "approximate_values": [
+            11,
+            22,
+            34,
+            38,
+            42,
+            28,
+            13
+          ],
+          "utilization_title": "Space utilization",
+          "utilization_value": "84%",
+          "utilization_detail": "24 of 28 spaces active",
+          "legend": [
+            "Desks",
+            "Studios",
+            "Meeting rooms"
+          ]
+        },
+        "other_text": [
+          "Workspace / Overview",
+          "October 23, 2026",
+          "New booking",
+          "A little room for everything you are building.",
+          "Upcoming bookings",
+          "View all",
+          "Last updated just now",
+          "Make room for ideas.",
+          "Your next great project starts here.",
+          "Explore spaces"
+        ],
+        "dominant_colors": {
+          "sidebar": "#0c3326",
+          "background": "#faf9f5",
+          "panel": "#ffffff",
+          "ink": "#09131b",
+          "heading": "#0c3326",
+          "muted": "#666e77",
+          "border": "#d8dde0",
+          "lime": "#dbff96",
+          "ring": "#caff64",
+          "positive": "#087617",
+          "pending": "#ffd0c0"
+        },
+        "major_regions": [
+          {
+            "name": "sidebar",
+            "rect": [
+              0,
+              0,
+              0.174,
+              1
+            ]
+          },
+          {
+            "name": "header",
+            "rect": [
+              0.199,
+              0.018,
+              0.787,
+              0.135
+            ]
+          },
+          {
+            "name": "metric cards",
+            "rect": [
+              0.199,
+              0.176,
+              0.787,
+              0.144
+            ]
+          },
+          {
+            "name": "booking activity",
+            "rect": [
+              0.199,
+              0.347,
+              0.525,
+              0.321
+            ]
+          },
+          {
+            "name": "space utilization",
+            "rect": [
+              0.733,
+              0.348,
+              0.253,
+              0.321
+            ]
+          },
+          {
+            "name": "upcoming bookings",
+            "rect": [
+              0.199,
+              0.675,
+              0.475,
+              0.267
+            ]
+          },
+          {
+            "name": "promotional panel",
+            "rect": [
+              0.682,
+              0.674,
+              0.304,
+              0.271
+            ]
+          },
+          {
+            "name": "profile",
+            "rect": [
+              0.013,
+              0.879,
+              0.147,
+              0.101
+            ]
+          },
+          {
+            "name": "update note",
+            "rect": [
+              0.199,
+              0.954,
+              0.2,
+              0.023
+            ]
+          }
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$24,580": true,
+        "84%": true,
+        "128": true,
+        "18": true,
+        "BOARD 7F2A9C": true
+      },
+      "critical_values_visible": {
+        "$24,580": true,
+        "84%": true,
+        "128": true,
+        "18": true,
+        "BOARD 7F2A9C": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/smith-sol-stage-1-index-desktop.png",
+        "768": "screenshots/smith-sol-stage-1-index-768.png",
+        "375": "screenshots/smith-sol-stage-1-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "92d2ced59e70352d784f245ab9db417733e3e28508d9d90b090fa1c1a69c617c",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "smith-sol",
+      "stage": 2,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.83618,
+        "blurred_ssim_radius_3": 0.93542
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nGood things are taking shape.\nBOARD 9D3E6B\n\nA little room for everything you are building.\n\nRevenue\n\n$31,420\n+18.4%\nthis month\n\nOccupancy\n\n76%\n-8.0%\nthis month\n\nActive members\n\n146\n+18\nthis month\n\nAvailable desks\n\n24\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n76%\n21 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nRoom to\ngrow.\n\nYour next great project\nstarts here.\n\nFind your next space\n\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Good things are taking shape. BOARD 9D3E6B A little room for everything you are building. Revenue $31,420 +18.4% this month Occupancy 76% -8.0% this month Active members 146 +18 this month Available desks 24 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 76% 21 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Room to grow. Your next great project starts here. Find your next space Last updated just now ",
+        "title": "Wayfinder — Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Find your next space",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Add booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Good things are taking shape.",
+        "recognition_marker": "BOARD 9D3E6B",
+        "metrics": [
+          {
+            "label": "Revenue",
+            "value": "$31,420",
+            "trend": "+18.4%",
+            "detail": "this month",
+            "direction": "up"
+          },
+          {
+            "label": "Occupancy",
+            "value": "76%",
+            "trend": "-8.0%",
+            "detail": "this month",
+            "direction": "down"
+          },
+          {
+            "label": "Active members",
+            "value": "146",
+            "trend": "+18",
+            "detail": "this month",
+            "direction": "up"
+          },
+          {
+            "label": "Available desks",
+            "value": "24",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "utilization_text": {
+          "heading": "Space utilization",
+          "value": "76%",
+          "detail": "21 of 28 spaces active",
+          "legend": [
+            "Desks",
+            "Studios",
+            "Meeting rooms"
+          ]
+        },
+        "promo_heading": "Room to grow.",
+        "promo_cta": "Find your next space",
+        "table_rows": [
+          {
+            "initials": "JC",
+            "member": "Jamie Chen",
+            "space": "Studio 02",
+            "date": "Oct 24, 09:00",
+            "status": "Confirmed"
+          },
+          {
+            "initials": "OR",
+            "member": "Olivia Reed",
+            "space": "Meeting room A",
+            "date": "Oct 24, 11:30",
+            "status": "Pending"
+          },
+          {
+            "initials": "NW",
+            "member": "Noah Williams",
+            "space": "Desk 14",
+            "date": "Oct 24, 14:00",
+            "status": "Confirmed"
+          }
+        ],
+        "changes_from_previous": [
+          "Main heading changes from Your spaces, in sync. to Good things are taking shape.; it remains a single bold line at desktop, extending to approximately x=995.",
+          "Recognition badge changes from BOARD 7F2A9C to BOARD 9D3E6B and moves from approximately x=793 to x=1007 because of the longer heading; badge top remains around y=80.",
+          "Monthly revenue label becomes Revenue; $24,580 becomes $31,420; +12.8% becomes +18.4%.",
+          "Occupancy changes from 84% to 76%; the positive green +6.2% northeast arrow becomes a red -8.0% southeast arrow.",
+          "Active members changes from 128 to 146; monthly increase changes from +14 to +18.",
+          "Available desks changes from 18 to 24; Across 4 spaces is unchanged.",
+          "Utilization changes from 84% and 24 of 28 spaces active to 76% and 21 of 28 spaces active; the lime progress arc is shorter and ends at the upper left near the nine o'clock position.",
+          "Middle-row geometry remains consistent with the original images: activity card x=306, y=347, width=806, height=329; utilization card x=1126, y=348, width=388, height=329. Chart grid and line data retain their original positions, with grid y=439,501,563,624 and Friday tooltip Fri · 42 bookings. The earlier design notes incorrectly inferred the activity card top as y=355; this revision makes the correct y=347 alignment explicit.",
+          "The bottom row remains around y=691; the bookings card ends at y=964 and the promo panel at y=967. The revised middle-to-bottom gutter is approximately 14px.",
+          "Promotional heading changes from Make room for ideas. to Room to grow., split as Room to / grow.; the revised serif letters are larger, approximately 48px with a compact 42px line-height. CTA changes from Explore spaces to Find your next space.",
+          "Promo body Your next great project starts here., architectural artwork, all booking rows, sidebar, date, toolbar actions, subtitle and chart labels remain unchanged."
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "critical_values_visible": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/smith-sol-stage-2-index-desktop.png",
+        "768": "screenshots/smith-sol-stage-2-index-768.png",
+        "375": "screenshots/smith-sol-stage-2-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "d4da3654a6eadba934b054d91db8ddc97fa31951cfabd1784cabd270db117952",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "smith-sol",
+      "stage": 3,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.83618,
+        "blurred_ssim_radius_3": 0.93542
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nGood things are taking shape.\nBOARD 9D3E6B\n\nA little room for everything you are building.\n\nRevenue\n\n$31,420\n+18.4%\nthis month\n\nOccupancy\n\n76%\n-8.0%\nthis month\n\nActive members\n\n146\n+18\nthis month\n\nAvailable desks\n\n24\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n76%\n21 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nRoom to\ngrow.\n\nYour next great project\nstarts here.\n\nFind your next space\n\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Good things are taking shape. BOARD 9D3E6B A little room for everything you are building. Revenue $31,420 +18.4% this month Occupancy 76% -8.0% this month Active members 146 +18 this month Available desks 24 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 76% 21 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Room to grow. Your next great project starts here. Find your next space Last updated just now ",
+        "title": "Wayfinder — Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Find your next space",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Add booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Good things are taking shape.",
+        "recognition_marker": "BOARD 9D3E6B",
+        "metrics": [
+          {
+            "label": "Revenue",
+            "value": "$31,420",
+            "trend": "+18.4%",
+            "detail": "this month",
+            "direction": "up"
+          },
+          {
+            "label": "Occupancy",
+            "value": "76%",
+            "trend": "-8.0%",
+            "detail": "this month",
+            "direction": "down"
+          },
+          {
+            "label": "Active members",
+            "value": "146",
+            "trend": "+18",
+            "detail": "this month",
+            "direction": "up"
+          },
+          {
+            "label": "Available desks",
+            "value": "24",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "utilization_text": {
+          "heading": "Space utilization",
+          "value": "76%",
+          "detail": "21 of 28 spaces active",
+          "legend": [
+            "Desks",
+            "Studios",
+            "Meeting rooms"
+          ]
+        },
+        "promo_heading": "Room to grow.",
+        "promo_cta": "Find your next space",
+        "table_rows": [
+          {
+            "initials": "JC",
+            "member": "Jamie Chen",
+            "space": "Studio 02",
+            "date": "Oct 24, 09:00",
+            "status": "Confirmed"
+          },
+          {
+            "initials": "OR",
+            "member": "Olivia Reed",
+            "space": "Meeting room A",
+            "date": "Oct 24, 11:30",
+            "status": "Pending"
+          },
+          {
+            "initials": "NW",
+            "member": "Noah Williams",
+            "space": "Desk 14",
+            "date": "Oct 24, 14:00",
+            "status": "Confirmed"
+          }
+        ],
+        "changes_from_previous": [
+          "Main heading changes from Your spaces, in sync. to Good things are taking shape.; it remains a single bold line at desktop, extending to approximately x=995.",
+          "Recognition badge changes from BOARD 7F2A9C to BOARD 9D3E6B and moves from approximately x=793 to x=1007 because of the longer heading; badge top remains around y=80.",
+          "Monthly revenue label becomes Revenue; $24,580 becomes $31,420; +12.8% becomes +18.4%.",
+          "Occupancy changes from 84% to 76%; the positive green +6.2% northeast arrow becomes a red -8.0% southeast arrow.",
+          "Active members changes from 128 to 146; monthly increase changes from +14 to +18.",
+          "Available desks changes from 18 to 24; Across 4 spaces is unchanged.",
+          "Utilization changes from 84% and 24 of 28 spaces active to 76% and 21 of 28 spaces active; the lime progress arc is shorter and ends at the upper left near the nine o'clock position.",
+          "Middle-row geometry remains consistent with the original images: activity card x=306, y=347, width=806, height=329; utilization card x=1126, y=348, width=388, height=329. Chart grid and line data retain their original positions, with grid y=439,501,563,624 and Friday tooltip Fri · 42 bookings. The earlier design notes incorrectly inferred the activity card top as y=355; this revision makes the correct y=347 alignment explicit.",
+          "The bottom row remains around y=691; the bookings card ends at y=964 and the promo panel at y=967. The revised middle-to-bottom gutter is approximately 14px.",
+          "Promotional heading changes from Make room for ideas. to Room to grow., split as Room to / grow.; the revised serif letters are larger, approximately 48px with a compact 42px line-height. CTA changes from Explore spaces to Find your next space.",
+          "Promo body Your next great project starts here., architectural artwork, all booking rows, sidebar, date, toolbar actions, subtitle and chart labels remain unchanged."
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "critical_values_visible": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/smith-sol-stage-3-index-desktop.png",
+        "768": "screenshots/smith-sol-stage-3-index-768.png",
+        "375": "screenshots/smith-sol-stage-3-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "cross_page_navigation": {
+        "works": true,
+        "destination": "http://127.0.0.1:52026/outputs/smith-sol/stage-3/bookings.html"
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "4f37179869a4139127fc18d7333f265ce8a0349787f58171461c32be7a91766d",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "smith-sol",
+      "stage": 3,
+      "page": "bookings.html",
+      "status": "rendered",
+      "text_anchors_matched": 71,
+      "text_anchors_total": 71,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.83597,
+        "blurred_ssim_radius_3": 0.9454
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nBookings\nOct 23, 2026\nNew booking\nEvery booking, in view.\nBOOKINGS C6E2A8\n\nPlan the week. Keep everyone in sync.\n\nTotal bookings\n\n48\n+12%\nthis month\n\nRooms booked\n\n12\n+8%\nthis month\n\nPending approval\n\n6\n+50%\nthis month\nAll bookings\nConfirmed\nPending\nSearch member or space\nFilter by space\nAll spaces\nStudio 02\nMeeting room A\nDesk 14\nMeeting room B\nStudio 01\nDesk 08\nWorkspace bookings\nMember\tSpace\tDate & time\tStatus\t\nActions\n\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\t\n\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\t\n\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\t\n\n\nMP\nMaya Patel\n\tMeeting room B\tOct 25, 10:00\tConfirmed\t\n\n\nLB\nLucas Brown\n\tStudio 01\tOct 25, 13:00\tPending\t\n\n\nEW\nEmma Wilson\n\tDesk 08\tOct 26, 09:30\tConfirmed\t\n\nShowing 1–6 of 48 bookings\n\n1\n2\n3\n4\n5\nThis week\nOctober 2026\nMon\n19\nTue\n20\nWed\n21\nThu\n22\nFri\n23\nSat\n24\nSun\n25\nNext up\nJC\nJamie Chen\nStudio 02\nTomorrow at 09:00\nView calendar",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Bookings Oct 23, 2026 New booking Every booking, in view. BOOKINGS C6E2A8 Plan the week. Keep everyone in sync. Total bookings 48 +12% this month Rooms booked 12 +8% this month Pending approval 6 +50% this month All bookings Confirmed Pending Search member or space Filter by space Workspace bookings Member Space Date & time Status Actions JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed MP Maya Patel Meeting room B Oct 25, 10:00 Confirmed LB Lucas Brown Studio 01 Oct 25, 13:00 Pending EW Emma Wilson Desk 08 Oct 26, 09:30 Confirmed Showing 1–6 of 48 bookings 1 2 3 4 5 This week October 2026 Mon 19 Tue 20 Wed 21 Thu 22 Fri 23 Sat 24 Sun 25 Next up JC Jamie Chen Studio 02 Tomorrow at 09:00 View calendar All spaces Search bookings",
+        "title": "Wayfinder — Bookings",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 6,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "Oct 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "All bookings",
+            "disabled": false
+          },
+          {
+            "text": "Confirmed",
+            "disabled": false
+          },
+          {
+            "text": "Pending",
+            "disabled": false
+          },
+          {
+            "text": "Details for Jamie Chen",
+            "disabled": false
+          },
+          {
+            "text": "Details for Olivia Reed",
+            "disabled": false
+          },
+          {
+            "text": "Details for Noah Williams",
+            "disabled": false
+          },
+          {
+            "text": "Details for Maya Patel",
+            "disabled": false
+          },
+          {
+            "text": "Details for Lucas Brown",
+            "disabled": false
+          },
+          {
+            "text": "Details for Emma Wilson",
+            "disabled": false
+          },
+          {
+            "text": "Previous booking page",
+            "disabled": false
+          },
+          {
+            "text": "1",
+            "disabled": false
+          },
+          {
+            "text": "2",
+            "disabled": false
+          },
+          {
+            "text": "3",
+            "disabled": false
+          },
+          {
+            "text": "4",
+            "disabled": false
+          },
+          {
+            "text": "5",
+            "disabled": false
+          },
+          {
+            "text": "Next booking page",
+            "disabled": false
+          },
+          {
+            "text": "Previous week",
+            "disabled": false
+          },
+          {
+            "text": "Next week",
+            "disabled": false
+          },
+          {
+            "text": "Mon 19",
+            "disabled": false
+          },
+          {
+            "text": "Tue 20",
+            "disabled": false
+          },
+          {
+            "text": "Wed 21",
+            "disabled": false
+          },
+          {
+            "text": "Thu 22",
+            "disabled": false
+          },
+          {
+            "text": "Fri 23",
+            "disabled": false
+          },
+          {
+            "text": "Sat 24",
+            "disabled": false
+          },
+          {
+            "text": "Sun 25",
+            "disabled": false
+          },
+          {
+            "text": "JC Jamie Chen Studio 02 Tomorrow at 09:00",
+            "disabled": false
+          },
+          {
+            "text": "View calendar",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Add booking",
+            "disabled": false
+          },
+          {
+            "text": "Close",
+            "disabled": false
+          },
+          {
+            "text": "Change status",
+            "disabled": false
+          },
+          {
+            "text": "Previous month",
+            "disabled": false
+          },
+          {
+            "text": "Next month",
+            "disabled": false
+          },
+          {
+            "text": "Close",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Every booking, in view.",
+        "recognition_marker": "BOOKINGS C6E2A8",
+        "sidebar_labels": [
+          "Alder House",
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings",
+          "Alex Morgan"
+        ],
+        "metrics": [
+          {
+            "label": "Total bookings",
+            "value": "48",
+            "detail": "+12% this month"
+          },
+          {
+            "label": "Rooms booked",
+            "value": "12",
+            "detail": "+8% this month"
+          },
+          {
+            "label": "Pending approval",
+            "value": "6",
+            "detail": "+50% this month"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date & time",
+          "Status",
+          null
+        ],
+        "table_rows": [
+          [
+            "JC",
+            "Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "OR",
+            "Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "NW",
+            "Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ],
+          [
+            "MP",
+            "Maya Patel",
+            "Meeting room B",
+            "Oct 25, 10:00",
+            "Confirmed"
+          ],
+          [
+            "LB",
+            "Lucas Brown",
+            "Studio 01",
+            "Oct 25, 13:00",
+            "Pending"
+          ],
+          [
+            "EW",
+            "Emma Wilson",
+            "Desk 08",
+            "Oct 26, 09:30",
+            "Confirmed"
+          ]
+        ],
+        "tabs": [
+          "All bookings",
+          "Confirmed",
+          "Pending"
+        ],
+        "search_placeholder": "Search bookings",
+        "calendar_text": {
+          "heading": "This week",
+          "month": "October 2026",
+          "days": [
+            "Mon 19",
+            "Tue 20",
+            "Wed 21",
+            "Thu 22",
+            "Fri 23",
+            "Sat 24",
+            "Sun 25"
+          ],
+          "selected_day": "Fri 23",
+          "next_heading": "Next up",
+          "member": "Jamie Chen",
+          "initials": "JC",
+          "space": "Studio 02",
+          "time": "Tomorrow at 09:00",
+          "cta": "View calendar"
+        },
+        "dominant_colors": {
+          "canvas": "#faf9f5",
+          "sidebar": "#0c3326",
+          "heading": "#0c3326",
+          "text": "#09131b",
+          "muted": "#666e77",
+          "panels": "#ffffff",
+          "border": "#d8dde0",
+          "selected": "#dbff96",
+          "positive": "#087617",
+          "confirmed": "#d0f3c3",
+          "pending": "#ffd0c0",
+          "avatar_purple": "#e5caff",
+          "avatar_yellow": "#fcf0b1",
+          "avatar_mint": "#b8f0d6"
+        },
+        "major_regions": [
+          {
+            "name": "sidebar",
+            "rect": [
+              0,
+              0,
+              0.1738,
+              1
+            ]
+          },
+          {
+            "name": "toolbar",
+            "rect": [
+              0.1992,
+              0.0186,
+              0.7871,
+              0.0439
+            ]
+          },
+          {
+            "name": "heading and subtitle",
+            "rect": [
+              0.1992,
+              0.0674,
+              0.4486,
+              0.0801
+            ]
+          },
+          {
+            "name": "metric cards",
+            "rect": [
+              0.1992,
+              0.1758,
+              0.7865,
+              0.1445
+            ]
+          },
+          {
+            "name": "booking list panel",
+            "rect": [
+              0.1992,
+              0.3389,
+              0.5553,
+              0.6045
+            ]
+          },
+          {
+            "name": "filters and search",
+            "rect": [
+              0.2135,
+              0.3623,
+              0.5273,
+              0.043
+            ]
+          },
+          {
+            "name": "booking table",
+            "rect": [
+              0.2142,
+              0.4346,
+              0.5254,
+              0.418
+            ]
+          },
+          {
+            "name": "pagination",
+            "rect": [
+              0.2135,
+              0.8789,
+              0.5273,
+              0.043
+            ]
+          },
+          {
+            "name": "week and next booking panel",
+            "rect": [
+              0.7643,
+              0.3389,
+              0.2214,
+              0.6045
+            ]
+          },
+          {
+            "name": "week strip",
+            "rect": [
+              0.7773,
+              0.4082,
+              0.1947,
+              0.1221
+            ]
+          },
+          {
+            "name": "next booking card",
+            "rect": [
+              0.7773,
+              0.6143,
+              0.1947,
+              0.127
+            ]
+          },
+          {
+            "name": "calendar action",
+            "rect": [
+              0.7773,
+              0.8672,
+              0.1947,
+              0.0547
+            ]
+          },
+          {
+            "name": "profile",
+            "rect": [
+              0.013,
+              0.8936,
+              0.1471,
+              0.0732
+            ]
+          }
+        ],
+        "other_visible_text": [
+          "Workspace / Bookings",
+          "Plan the week. Keep everyone in sync.",
+          "Oct 23, 2026",
+          "New booking",
+          "All spaces",
+          "Showing 1–6 of 48 bookings",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+        ],
+        "geometry_notes": [
+          "Shared sidebar width 267px; content x=306 to x=1515.",
+          "Three metric cards at x=306,709,1114; y=180 to 327.",
+          "Booking list x=306 to1159 and calendar x=1174 to1514, both y=347 to966.",
+          "Booking filters at x=328 y=371; search x=754 width229; spaces x=994 width144.",
+          "Six booking rows have approximately65px height and44px avatars; headers are14px and body text15–16px.",
+          "Bookings is selected; New booking uses lime rather than the dashboard's forest button."
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "48": true,
+        "12": true,
+        "6": true,
+        "Jamie Chen": true,
+        "Maya Patel": true,
+        "Lucas Brown": true,
+        "Emma Wilson": true
+      },
+      "critical_values_visible": {
+        "48": true,
+        "12": true,
+        "6": true,
+        "Jamie Chen": true,
+        "Maya Patel": true,
+        "Lucas Brown": true,
+        "Emma Wilson": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/smith-sol-stage-3-bookings-desktop.png",
+        "768": "screenshots/smith-sol-stage-3-bookings-768.png",
+        "375": "screenshots/smith-sol-stage-3-bookings-375.png"
+      },
+      "booking_dialog": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "notes": []
+      },
+      "filters": {
+        "confirmed_filter": true,
+        "pending_filter": true,
+        "all_filter_restores_rows": true,
+        "search_matches_member": true,
+        "search_matches_space": true,
+        "search_is_case_insensitive": true,
+        "notes": []
+      },
+      "cross_page_navigation": {
+        "works": true,
+        "destination": "http://127.0.0.1:52026/outputs/smith-sol/stage-3/index.html"
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "4f37179869a4139127fc18d7333f265ce8a0349787f58171461c32be7a91766d",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "smith-astra",
+      "stage": 1,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.82293,
+        "blurred_ssim_radius_3": 0.93629
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nYour spaces, in sync.\nBOARD 7F2A9C\n\nA little room for everything you are building.\n\nMonthly revenue\n\n$24,580\n↗\n+12.8%\nthis month\n\nOccupancy\n\n84%\n↗\n+6.2%\nthis month\n\nActive members\n\n128\n↗\n+14\nthis month\n\nAvailable desks\n\n18\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n84%\n24 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\nStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\nMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\nDesk 14\tOct 24, 14:00\tConfirmed\nMake room\nfor ideas.\n\nYour next great project\nstarts here.\n\nExplore spaces\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Your spaces, in sync. BOARD 7F2A9C A little room for everything you are building. Monthly revenue $24,580 ↗ +12.8% this month Occupancy 84% ↗ +6.2% this month Active members 128 ↗ +14 this month Available desks 18 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 84% 24 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Make room for ideas. Your next great project starts here. Explore spaces Last updated just now ",
+        "title": "Wayfinder — Workspace overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Explore spaces",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "Create booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Your spaces, in sync.",
+        "recognition_marker": "BOARD 7F2A9C",
+        "sidebar_labels": [
+          "WAYFINDER",
+          "Alder House",
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings",
+          "Alex Morgan"
+        ],
+        "metrics": [
+          {
+            "label": "Monthly revenue",
+            "value": "$24,580",
+            "detail": "+12.8% this month"
+          },
+          {
+            "label": "Occupancy",
+            "value": "84%",
+            "detail": "+6.2% this month"
+          },
+          {
+            "label": "Active members",
+            "value": "128",
+            "detail": "+14 this month"
+          },
+          {
+            "label": "Available desks",
+            "value": "18",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date",
+          "Status"
+        ],
+        "table_rows": [
+          [
+            "JC · Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "OR · Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "NW · Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "chart_labels": [
+          "Booking activity",
+          "Week",
+          "Month",
+          "0",
+          "20",
+          "40",
+          "60",
+          "Mon",
+          "Tue",
+          "Wed",
+          "Thu",
+          "Fri",
+          "Sat",
+          "Sun",
+          "Fri · 42 bookings",
+          "Space utilization",
+          "84%",
+          "24 of 28 spaces active",
+          "Desks",
+          "Studios",
+          "Meeting rooms"
+        ],
+        "other_visible_text": [
+          "Workspace / Overview",
+          "A little room for everything you are building.",
+          "October 23, 2026",
+          "New booking",
+          "Upcoming bookings",
+          "View all",
+          "Make room for ideas.",
+          "Your next great project starts here.",
+          "Explore spaces",
+          "Last updated just now"
+        ],
+        "dominant_colors": {
+          "background": "#faf9f5",
+          "sidebar": "#0b3326",
+          "text": "#0a141b",
+          "heading": "#0a3327",
+          "muted": "#697078",
+          "border": "#d8dcde",
+          "lime": "#d8ff91",
+          "ring": "#c8ff60",
+          "promo": "#e2f8b7"
+        },
+        "major_regions": [
+          {
+            "name": "sidebar",
+            "rect": [
+              0,
+              0,
+              0.174,
+              1
+            ]
+          },
+          {
+            "name": "header",
+            "rect": [
+              0.199,
+              0.019,
+              0.787,
+              0.131
+            ]
+          },
+          {
+            "name": "metrics",
+            "rect": [
+              0.199,
+              0.175,
+              0.786,
+              0.145
+            ]
+          },
+          {
+            "name": "booking_activity",
+            "rect": [
+              0.199,
+              0.339,
+              0.525,
+              0.321
+            ]
+          },
+          {
+            "name": "space_utilization",
+            "rect": [
+              0.733,
+              0.339,
+              0.253,
+              0.322
+            ]
+          },
+          {
+            "name": "upcoming_bookings",
+            "rect": [
+              0.199,
+              0.675,
+              0.474,
+              0.267
+            ]
+          },
+          {
+            "name": "ideas_promotion",
+            "rect": [
+              0.682,
+              0.674,
+              0.304,
+              0.271
+            ]
+          },
+          {
+            "name": "account",
+            "rect": [
+              0.013,
+              0.879,
+              0.147,
+              0.092
+            ]
+          },
+          {
+            "name": "update_note",
+            "rect": [
+              0.199,
+              0.973,
+              0.15,
+              0.017
+            ]
+          }
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$24,580": true,
+        "84%": true,
+        "128": true,
+        "18": true,
+        "BOARD 7F2A9C": true
+      },
+      "critical_values_visible": {
+        "$24,580": true,
+        "84%": true,
+        "128": true,
+        "18": true,
+        "BOARD 7F2A9C": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/smith-astra-stage-1-index-desktop.png",
+        "768": "screenshots/smith-astra-stage-1-index-768.png",
+        "375": "screenshots/smith-astra-stage-1-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "51fd55ee6f761014eb17a407147b860d60b25309da38c94e5c1d2c090dcb32a3",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "smith-astra",
+      "stage": 2,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.84473,
+        "blurred_ssim_radius_3": 0.94413
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nGood things are taking shape.\nBOARD 9D3E6B\n\nA little room for everything you are building.\n\nRevenue\n\n$31,420\n↗\n+18.4%\nthis month\n\nOccupancy\n\n76%\n↘\n-8.0%\nthis month\n\nActive members\n\n146\n↗\n+18\nthis month\n\nAvailable desks\n\n24\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n76%\n21 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\nStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\nMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\nDesk 14\tOct 24, 14:00\tConfirmed\nRoom to\ngrow.\n\nYour next great project\nstarts here.\n\nFind your next space\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Good things are taking shape. BOARD 9D3E6B A little room for everything you are building. Revenue $31,420 ↗ +18.4% this month Occupancy 76% ↘ -8.0% this month Active members 146 ↗ +18 this month Available desks 24 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 76% 21 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Room to grow. Your next great project starts here. Find your next space Last updated just now ",
+        "title": "Wayfinder — Workspace overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Find your next space",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "Create booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Good things are taking shape.",
+        "recognition_marker": "BOARD 9D3E6B",
+        "metrics": [
+          {
+            "label": "Revenue",
+            "value": "$31,420",
+            "trend": "+18.4% this month",
+            "direction": "up",
+            "color": "green"
+          },
+          {
+            "label": "Occupancy",
+            "value": "76%",
+            "trend": "-8.0% this month",
+            "direction": "down",
+            "color": "red"
+          },
+          {
+            "label": "Active members",
+            "value": "146",
+            "trend": "+18 this month",
+            "direction": "up",
+            "color": "green"
+          },
+          {
+            "label": "Available desks",
+            "value": "24",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "utilization_text": {
+          "heading": "Space utilization",
+          "value": "76%",
+          "detail": "21 of 28 spaces active",
+          "legend": [
+            "Desks",
+            "Studios",
+            "Meeting rooms"
+          ]
+        },
+        "promo_heading": "Room to grow.",
+        "promo_cta": "Find your next space",
+        "table_rows": [
+          {
+            "member": "Jamie Chen",
+            "initials": "JC",
+            "space": "Studio 02",
+            "date": "Oct 24, 09:00",
+            "status": "Confirmed"
+          },
+          {
+            "member": "Olivia Reed",
+            "initials": "OR",
+            "space": "Meeting room A",
+            "date": "Oct 24, 11:30",
+            "status": "Pending"
+          },
+          {
+            "member": "Noah Williams",
+            "initials": "NW",
+            "space": "Desk 14",
+            "date": "Oct 24, 14:00",
+            "status": "Confirmed"
+          }
+        ],
+        "changes_from_previous": [
+          "Heading replaces Your spaces, in sync.; the longer heading ends near x996 and the board marker begins near x1007.",
+          "Board marker changes from BOARD 7F2A9C to BOARD 9D3E6B.",
+          "Monthly revenue becomes Revenue; $24,580 becomes $31,420; +12.8% becomes +18.4%.",
+          "Occupancy changes from 84% to 76%, with a red down-right arrow and -8.0% replacing the green upward +6.2% trend.",
+          "Active members changes from 128 to 146; +14 becomes +18. Available desks changes from 18 to 24.",
+          "Utilization changes from 84% / 24 of 28 spaces active to 76% / 21 of 28 spaces active. Lime arc now ends around the left-upper side, near 9:30, exposing a longer muted upper-left track.",
+          "Promotion heading becomes Room to on the first line and grow. on the second, with larger serif type; CTA becomes Find your next space. Supporting copy and architectural illustration remain.",
+          "Main sidebar and card columns remain anchored at x267, x306, x1126 (utilization), and x1048 (promotion). Metric cards remain y180–328; chart row y348–677; lower row approximately y691–967.",
+          "Account divider moves down from approximately y900 to y916; account avatar moves from y924 to y941. Footer update note moves from approximately y982 to y983; table rows and all chart labels and values remain unchanged."
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "critical_values_visible": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/smith-astra-stage-2-index-desktop.png",
+        "768": "screenshots/smith-astra-stage-2-index-768.png",
+        "375": "screenshots/smith-astra-stage-2-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "df1bfc34204d2828fda805428e8836e1a95555eb6e1b69e22da88e6a308ec266",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "smith-astra",
+      "stage": 3,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.84473,
+        "blurred_ssim_radius_3": 0.94413
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nGood things are taking shape.\nBOARD 9D3E6B\n\nA little room for everything you are building.\n\nRevenue\n\n$31,420\n↗\n+18.4%\nthis month\n\nOccupancy\n\n76%\n↘\n-8.0%\nthis month\n\nActive members\n\n146\n↗\n+18\nthis month\n\nAvailable desks\n\n24\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n76%\n21 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\nStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\nMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\nDesk 14\tOct 24, 14:00\tConfirmed\nRoom to\ngrow.\n\nYour next great project\nstarts here.\n\nFind your next space\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Good things are taking shape. BOARD 9D3E6B A little room for everything you are building. Revenue $31,420 ↗ +18.4% this month Occupancy 76% ↘ -8.0% this month Active members 146 ↗ +18 this month Available desks 24 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 76% 21 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Room to grow. Your next great project starts here. Find your next space Last updated just now ",
+        "title": "Wayfinder — Workspace overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Find your next space",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "Create booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Good things are taking shape.",
+        "recognition_marker": "BOARD 9D3E6B",
+        "metrics": [
+          {
+            "label": "Revenue",
+            "value": "$31,420",
+            "trend": "+18.4% this month",
+            "direction": "up",
+            "color": "green"
+          },
+          {
+            "label": "Occupancy",
+            "value": "76%",
+            "trend": "-8.0% this month",
+            "direction": "down",
+            "color": "red"
+          },
+          {
+            "label": "Active members",
+            "value": "146",
+            "trend": "+18 this month",
+            "direction": "up",
+            "color": "green"
+          },
+          {
+            "label": "Available desks",
+            "value": "24",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "utilization_text": {
+          "heading": "Space utilization",
+          "value": "76%",
+          "detail": "21 of 28 spaces active",
+          "legend": [
+            "Desks",
+            "Studios",
+            "Meeting rooms"
+          ]
+        },
+        "promo_heading": "Room to grow.",
+        "promo_cta": "Find your next space",
+        "table_rows": [
+          {
+            "member": "Jamie Chen",
+            "initials": "JC",
+            "space": "Studio 02",
+            "date": "Oct 24, 09:00",
+            "status": "Confirmed"
+          },
+          {
+            "member": "Olivia Reed",
+            "initials": "OR",
+            "space": "Meeting room A",
+            "date": "Oct 24, 11:30",
+            "status": "Pending"
+          },
+          {
+            "member": "Noah Williams",
+            "initials": "NW",
+            "space": "Desk 14",
+            "date": "Oct 24, 14:00",
+            "status": "Confirmed"
+          }
+        ],
+        "changes_from_previous": [
+          "Heading replaces Your spaces, in sync.; the longer heading ends near x996 and the board marker begins near x1007.",
+          "Board marker changes from BOARD 7F2A9C to BOARD 9D3E6B.",
+          "Monthly revenue becomes Revenue; $24,580 becomes $31,420; +12.8% becomes +18.4%.",
+          "Occupancy changes from 84% to 76%, with a red down-right arrow and -8.0% replacing the green upward +6.2% trend.",
+          "Active members changes from 128 to 146; +14 becomes +18. Available desks changes from 18 to 24.",
+          "Utilization changes from 84% / 24 of 28 spaces active to 76% / 21 of 28 spaces active. Lime arc now ends around the left-upper side, near 9:30, exposing a longer muted upper-left track.",
+          "Promotion heading becomes Room to on the first line and grow. on the second, with larger serif type; CTA becomes Find your next space. Supporting copy and architectural illustration remain.",
+          "Main sidebar and card columns remain anchored at x267, x306, x1126 (utilization), and x1048 (promotion). Metric cards remain y180–328; chart row y348–677; lower row approximately y691–967.",
+          "Account divider moves down from approximately y900 to y916; account avatar moves from y924 to y941. Footer update note moves from approximately y982 to y983; table rows and all chart labels and values remain unchanged."
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "critical_values_visible": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/smith-astra-stage-3-index-desktop.png",
+        "768": "screenshots/smith-astra-stage-3-index-768.png",
+        "375": "screenshots/smith-astra-stage-3-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "cross_page_navigation": {
+        "works": true,
+        "destination": "http://127.0.0.1:52026/outputs/smith-astra/stage-3/bookings.html"
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "3a80adaffc2ab8f072331d59ee2cdde5dfe1fa2125bcef89b0fcaa966e834199",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "smith-astra",
+      "stage": 3,
+      "page": "bookings.html",
+      "status": "rendered",
+      "text_anchors_matched": 71,
+      "text_anchors_total": 71,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.85043,
+        "blurred_ssim_radius_3": 0.95098
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nBookings\nOct 23, 2026\nNew booking\nEvery booking, in view.\nBOOKINGS C6E2A8\n\nPlan the week. Keep everyone in sync.\n\nTotal bookings\n\n48\n↗\n+12%\nthis month\n\nRooms booked\n\n12\n↗\n+8%\nthis month\n\nPending approval\n\n6\n↗\n+50%\nthis month\nAll bookings\nConfirmed\nPending\nSearch member or space\nFilter by space\nAll spaces\nStudio 02\nMeeting room A\nDesk 14\nMeeting room B\nStudio 01\nDesk 08\nMember\tSpace\tDate & time\tStatus\t\nActions\n\nJCJamie Chen\tStudio 02\tOct 24, 09:00\tConfirmed\t⋮\nOROlivia Reed\tMeeting room A\tOct 24, 11:30\tPending\t⋮\nNWNoah Williams\tDesk 14\tOct 24, 14:00\tConfirmed\t⋮\nMPMaya Patel\tMeeting room B\tOct 25, 10:00\tConfirmed\t⋮\nLBLucas Brown\tStudio 01\tOct 25, 13:00\tPending\t⋮\nEWEmma Wilson\tDesk 08\tOct 26, 09:30\tConfirmed\t⋮\n\nShowing 1–6 of 48 bookings\n\n‹\n1\n2\n3\n4\n5\n›\nThis week\nOctober 2026\n‹\n›\nMon\n19\nTue\n20\nWed\n21\nThu\n22\nFri\n23\nSat\n24\nSun\n25\nNext up\nJC\nJamie Chen\nStudio 02\nTomorrow at 09:00\n›\nView calendar",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Bookings Oct 23, 2026 New booking Every booking, in view. BOOKINGS C6E2A8 Plan the week. Keep everyone in sync. Total bookings 48 ↗ +12% this month Rooms booked 12 ↗ +8% this month Pending approval 6 ↗ +50% this month All bookings Confirmed Pending Search member or space Filter by space Member Space Date & time Status Actions JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed ⋮ OR Olivia Reed Meeting room A Oct 24, 11:30 Pending ⋮ NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed ⋮ MP Maya Patel Meeting room B Oct 25, 10:00 Confirmed ⋮ LB Lucas Brown Studio 01 Oct 25, 13:00 Pending ⋮ EW Emma Wilson Desk 08 Oct 26, 09:30 Confirmed ⋮ Showing 1–6 of 48 bookings ‹ 1 2 3 4 5 › This week October 2026 ‹ › Mon 19 Tue 20 Wed 21 Thu 22 Fri 23 Sat 24 Sun 25 Next up JC Jamie Chen Studio 02 Tomorrow at 09:00 › View calendar All spaces Search bookings",
+        "title": "Wayfinder — Bookings",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 6,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "Oct 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "All bookings",
+            "disabled": false
+          },
+          {
+            "text": "Confirmed",
+            "disabled": false
+          },
+          {
+            "text": "Pending",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "‹",
+            "disabled": false
+          },
+          {
+            "text": "1",
+            "disabled": false
+          },
+          {
+            "text": "2",
+            "disabled": false
+          },
+          {
+            "text": "3",
+            "disabled": false
+          },
+          {
+            "text": "4",
+            "disabled": false
+          },
+          {
+            "text": "5",
+            "disabled": false
+          },
+          {
+            "text": "›",
+            "disabled": false
+          },
+          {
+            "text": "‹",
+            "disabled": false
+          },
+          {
+            "text": "›",
+            "disabled": false
+          },
+          {
+            "text": "Mon 19",
+            "disabled": false
+          },
+          {
+            "text": "Tue 20",
+            "disabled": false
+          },
+          {
+            "text": "Wed 21",
+            "disabled": false
+          },
+          {
+            "text": "Thu 22",
+            "disabled": false
+          },
+          {
+            "text": "Fri 23",
+            "disabled": false
+          },
+          {
+            "text": "Sat 24",
+            "disabled": false
+          },
+          {
+            "text": "Sun 25",
+            "disabled": false
+          },
+          {
+            "text": "JC Jamie Chen Studio 02 Tomorrow at 09:00 ›",
+            "disabled": false
+          },
+          {
+            "text": "View calendar",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "Create booking",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "Save changes",
+            "disabled": false
+          },
+          {
+            "text": "Delete booking",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "‹",
+            "disabled": false
+          },
+          {
+            "text": "›",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Every booking, in view.",
+        "recognition_marker": "BOOKINGS C6E2A8",
+        "sidebar_labels": [
+          "WAYFINDER",
+          "Alder House",
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings",
+          "Alex Morgan"
+        ],
+        "selected_navigation": "Bookings",
+        "subtitle": "Plan the week. Keep everyone in sync.",
+        "metrics": [
+          {
+            "label": "Total bookings",
+            "value": "48",
+            "detail": "+12% this month"
+          },
+          {
+            "label": "Rooms booked",
+            "value": "12",
+            "detail": "+8% this month"
+          },
+          {
+            "label": "Pending approval",
+            "value": "6",
+            "detail": "+50% this month"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date & time",
+          "Status"
+        ],
+        "table_rows": [
+          {
+            "initials": "JC",
+            "member": "Jamie Chen",
+            "space": "Studio 02",
+            "date": "Oct 24, 09:00",
+            "status": "Confirmed"
+          },
+          {
+            "initials": "OR",
+            "member": "Olivia Reed",
+            "space": "Meeting room A",
+            "date": "Oct 24, 11:30",
+            "status": "Pending"
+          },
+          {
+            "initials": "NW",
+            "member": "Noah Williams",
+            "space": "Desk 14",
+            "date": "Oct 24, 14:00",
+            "status": "Confirmed"
+          },
+          {
+            "initials": "MP",
+            "member": "Maya Patel",
+            "space": "Meeting room B",
+            "date": "Oct 25, 10:00",
+            "status": "Confirmed"
+          },
+          {
+            "initials": "LB",
+            "member": "Lucas Brown",
+            "space": "Studio 01",
+            "date": "Oct 25, 13:00",
+            "status": "Pending"
+          },
+          {
+            "initials": "EW",
+            "member": "Emma Wilson",
+            "space": "Desk 08",
+            "date": "Oct 26, 09:30",
+            "status": "Confirmed"
+          }
+        ],
+        "tabs": [
+          "All bookings",
+          "Confirmed",
+          "Pending"
+        ],
+        "selected_tab": "All bookings",
+        "search_placeholder": "Search bookings",
+        "space_filter": "All spaces",
+        "pagination": {
+          "summary": "Showing 1–6 of 48 bookings",
+          "pages": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5"
+          ],
+          "selected": "1"
+        },
+        "calendar_text": {
+          "header_date": "Oct 23, 2026",
+          "heading": "This week",
+          "month": "October 2026",
+          "days": [
+            "Mon 19",
+            "Tue 20",
+            "Wed 21",
+            "Thu 22",
+            "Fri 23",
+            "Sat 24",
+            "Sun 25"
+          ],
+          "selected": "Fri 23",
+          "section": "Next up",
+          "member": "Jamie Chen",
+          "initials": "JC",
+          "space": "Studio 02",
+          "time": "Tomorrow at 09:00",
+          "cta": "View calendar"
+        },
+        "dominant_colors": {
+          "canvas": "#faf9f5",
+          "sidebar": "#0c3326",
+          "panel": "#ffffff",
+          "heading": "#0b3326",
+          "text": "#0b151e",
+          "muted": "#626d7e",
+          "border": "#dce0e2",
+          "active_lime": "#d8ff91",
+          "confirmed": "#d6f6c9",
+          "pending": "#ffcebf"
+        },
+        "major_regions": [
+          {
+            "name": "sidebar",
+            "rect": [
+              0,
+              0,
+              0.174,
+              1
+            ]
+          },
+          {
+            "name": "header",
+            "rect": [
+              0.199,
+              0.018,
+              0.787,
+              0.132
+            ]
+          },
+          {
+            "name": "metrics",
+            "rect": [
+              0.199,
+              0.176,
+              0.787,
+              0.145
+            ]
+          },
+          {
+            "name": "bookings_panel",
+            "rect": [
+              0.199,
+              0.339,
+              0.555,
+              0.604
+            ]
+          },
+          {
+            "name": "tabs_and_search",
+            "rect": [
+              0.214,
+              0.362,
+              0.527,
+              0.042
+            ]
+          },
+          {
+            "name": "booking_table",
+            "rect": [
+              0.214,
+              0.438,
+              0.527,
+              0.415
+            ]
+          },
+          {
+            "name": "pagination",
+            "rect": [
+              0.214,
+              0.879,
+              0.527,
+              0.042
+            ]
+          },
+          {
+            "name": "week_panel",
+            "rect": [
+              0.764,
+              0.339,
+              0.221,
+              0.604
+            ]
+          },
+          {
+            "name": "week_calendar",
+            "rect": [
+              0.777,
+              0.414,
+              0.195,
+              0.138
+            ]
+          },
+          {
+            "name": "next_up_card",
+            "rect": [
+              0.777,
+              0.614,
+              0.195,
+              0.128
+            ]
+          },
+          {
+            "name": "calendar_button",
+            "rect": [
+              0.777,
+              0.867,
+              0.195,
+              0.055
+            ]
+          },
+          {
+            "name": "account",
+            "rect": [
+              0.013,
+              0.895,
+              0.147,
+              0.072
+            ]
+          }
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "48": true,
+        "12": true,
+        "6": true,
+        "Jamie Chen": true,
+        "Maya Patel": true,
+        "Lucas Brown": true,
+        "Emma Wilson": true
+      },
+      "critical_values_visible": {
+        "48": true,
+        "12": true,
+        "6": true,
+        "Jamie Chen": true,
+        "Maya Patel": true,
+        "Lucas Brown": true,
+        "Emma Wilson": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/smith-astra-stage-3-bookings-desktop.png",
+        "768": "screenshots/smith-astra-stage-3-bookings-768.png",
+        "375": "screenshots/smith-astra-stage-3-bookings-375.png"
+      },
+      "booking_dialog": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "notes": []
+      },
+      "filters": {
+        "confirmed_filter": true,
+        "pending_filter": true,
+        "all_filter_restores_rows": true,
+        "search_matches_member": true,
+        "search_matches_space": true,
+        "search_is_case_insensitive": true,
+        "notes": []
+      },
+      "cross_page_navigation": {
+        "works": true,
+        "destination": "http://127.0.0.1:52026/outputs/smith-astra/stage-3/index.html"
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "3a80adaffc2ab8f072331d59ee2cdde5dfe1fa2125bcef89b0fcaa966e834199",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "codex-sol",
+      "stage": 1,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.83327,
+        "blurred_ssim_radius_3": 0.91922
+      },
+      "desktop_dom": {
+        "text": "Wayfinder\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nYour spaces, in sync.\nBOARD 7F2A9C\n\nA little room for everything you are building.\n\nMonthly revenue\n\n$24,580\n\n+12.8%\nthis month\nOccupancy\n\n84%\n\n+6.2%\nthis month\nActive members\n\n128\n\n+14\nthis month\nAvailable desks\n\n18\n\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n84%\n24 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nMake room\nfor ideas.\n\nYour next great project\nstarts here.\n\nExplore spaces\nLast updated just now",
+        "visibleText": "Wayfinder Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Your spaces, in sync. BOARD 7F2A9C A little room for everything you are building. Monthly revenue $24,580 +12.8% this month Occupancy 84% +6.2% this month Active members 128 +14 this month Available desks 18 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 84% 24 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Make room for ideas. Your next great project starts here. Explore spaces Last updated just now ",
+        "title": "Wayfinder — Workspace Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Explore spaces",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Create booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Your spaces, in sync.",
+        "recognition_marker": "BOARD 7F2A9C",
+        "sidebar_labels": [
+          "WAYFINDER",
+          "Alder House",
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings",
+          "Alex Morgan"
+        ],
+        "metrics": [
+          {
+            "label": "Monthly revenue",
+            "value": "$24,580",
+            "change": "+12.8% this month"
+          },
+          {
+            "label": "Occupancy",
+            "value": "84%",
+            "change": "+6.2% this month"
+          },
+          {
+            "label": "Active members",
+            "value": "128",
+            "change": "+14 this month"
+          },
+          {
+            "label": "Available desks",
+            "value": "18",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date",
+          "Status"
+        ],
+        "table_rows": [
+          [
+            "JC · Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "OR · Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "NW · Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "chart_labels": {
+          "activity_title": "Booking activity",
+          "periods": [
+            "Week",
+            "Month"
+          ],
+          "x_axis": [
+            "Mon",
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "y_axis": [
+            "0",
+            "20",
+            "40",
+            "60"
+          ],
+          "tooltip": "Fri · 42 bookings",
+          "utilization_title": "Space utilization",
+          "utilization_value": "84%",
+          "utilization_detail": "24 of 28 spaces active",
+          "legend": [
+            "Desks",
+            "Studios",
+            "Meeting rooms"
+          ]
+        },
+        "other_visible_text": [
+          "Workspace",
+          "Overview",
+          "October 23, 2026",
+          "New booking",
+          "A little room for everything you are building.",
+          "Upcoming bookings",
+          "View all",
+          "Make room for ideas.",
+          "Your next great project starts here.",
+          "Explore spaces",
+          "Last updated just now"
+        ],
+        "dominant_colors": {
+          "forest": "#0b3325",
+          "lime": "#d9ff96",
+          "ring_lime": "#cbff60",
+          "background": "#faf9f6",
+          "card": "#ffffff",
+          "ink": "#09131c",
+          "muted": "#687079",
+          "border": "#d7dce0",
+          "confirmed": "#daf6ce",
+          "pending": "#ffcfbf"
+        },
+        "major_regions": [
+          {
+            "name": "sidebar",
+            "rect": [
+              0,
+              0,
+              0.17383,
+              1
+            ]
+          },
+          {
+            "name": "top_controls",
+            "rect": [
+              0.19922,
+              0.01855,
+              0.78646,
+              0.04395
+            ]
+          },
+          {
+            "name": "page_heading",
+            "rect": [
+              0.19922,
+              0.06543,
+              0.405,
+              0.08691
+            ]
+          },
+          {
+            "name": "metrics",
+            "rect": [
+              0.19922,
+              0.17578,
+              0.78646,
+              0.14355
+            ]
+          },
+          {
+            "name": "booking_activity",
+            "rect": [
+              0.19922,
+              0.33984,
+              0.52474,
+              0.32031
+            ]
+          },
+          {
+            "name": "space_utilization",
+            "rect": [
+              0.73307,
+              0.33984,
+              0.2526,
+              0.32129
+            ]
+          },
+          {
+            "name": "upcoming_bookings",
+            "rect": [
+              0.19922,
+              0.6748,
+              0.47461,
+              0.2666
+            ]
+          },
+          {
+            "name": "ideas_promo",
+            "rect": [
+              0.68229,
+              0.6748,
+              0.30339,
+              0.26953
+            ]
+          },
+          {
+            "name": "account",
+            "rect": [
+              0.01302,
+              0.91016,
+              0.14714,
+              0.0625
+            ]
+          }
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$24,580": true,
+        "84%": true,
+        "128": true,
+        "18": true,
+        "BOARD 7F2A9C": true
+      },
+      "critical_values_visible": {
+        "$24,580": true,
+        "84%": true,
+        "128": true,
+        "18": true,
+        "BOARD 7F2A9C": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/codex-sol-stage-1-index-desktop.png",
+        "768": "screenshots/codex-sol-stage-1-index-768.png",
+        "375": "screenshots/codex-sol-stage-1-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "bdf34f093503d0838b7a7a1489a41d712427718e5bd567ecfc5939baba275a05",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "codex-sol",
+      "stage": 2,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.84371,
+        "blurred_ssim_radius_3": 0.9314
+      },
+      "desktop_dom": {
+        "text": "Wayfinder\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nGood things are taking shape.\nBOARD 9D3E6B\n\nA little room for everything you are building.\n\nRevenue\n\n$31,420\n\n+18.4%\nthis month\nOccupancy\n\n76%\n\n-8.0%\nthis month\nActive members\n\n146\n\n+18\nthis month\nAvailable desks\n\n24\n\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n76%\n21 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nRoom to\ngrow.\n\nYour next great project\nstarts here.\n\nFind your next space\nLast updated just now",
+        "visibleText": "Wayfinder Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Good things are taking shape. BOARD 9D3E6B A little room for everything you are building. Revenue $31,420 +18.4% this month Occupancy 76% -8.0% this month Active members 146 +18 this month Available desks 24 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 76% 21 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Room to grow. Your next great project starts here. Find your next space Last updated just now ",
+        "title": "Wayfinder — Workspace Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Find your next space",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Create booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Good things are taking shape.",
+        "recognition_marker": "BOARD 9D3E6B",
+        "metrics": [
+          {
+            "label": "Revenue",
+            "value": "$31,420",
+            "change": "+18.4% this month",
+            "direction": "up",
+            "change_color": "green"
+          },
+          {
+            "label": "Occupancy",
+            "value": "76%",
+            "change": "-8.0% this month",
+            "direction": "down",
+            "change_color": "red"
+          },
+          {
+            "label": "Active members",
+            "value": "146",
+            "change": "+18 this month",
+            "direction": "up",
+            "change_color": "green"
+          },
+          {
+            "label": "Available desks",
+            "value": "24",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "utilization_text": {
+          "title": "Space utilization",
+          "value": "76%",
+          "detail": "21 of 28 spaces active"
+        },
+        "promo_heading": "Room to grow.",
+        "promo_cta": "Find your next space",
+        "table_rows": [
+          [
+            "JC · Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "OR · Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "NW · Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "changes_from_previous": [
+          "Heading changes from Your spaces, in sync. to Good things are taking shape.; the marker moves right to approximately x=1006 because of the longer heading.",
+          "Recognition marker changes from BOARD 7F2A9C to BOARD 9D3E6B.",
+          "Monthly revenue becomes Revenue; $24,580 becomes $31,420 and +12.8% becomes +18.4%.",
+          "Occupancy changes from 84% to 76%; green upward +6.2% becomes red downward -8.0%.",
+          "Active members changes from 128 to 146 and +14 becomes +18.",
+          "Available desks changes from 18 to 24; Across 4 spaces remains unchanged.",
+          "Utilization changes from 84% and 24 of 28 spaces active to 76% and 21 of 28 spaces active. The lime arc ends farther down the upper-left quadrant, at approximately x=1227, y=492.",
+          "Promo heading changes from Make room / for ideas. to Room to / grow. and uses larger serif lettering (approximately 48px).",
+          "Promo CTA changes from Explore spaces to Find your next space; supporting text and doorway/plant illustration remain.",
+          "Sidebar account divider is at y=916 and account avatar at y=940, approximately 16px higher than in the original slices.",
+          "Major content geometry remains: 267px sidebar; main starts x=306; metrics y=180; charts y=348; bookings and promo y=691. Table content, chart data, Week selection, date, subtitle and navigation labels remain unchanged."
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "critical_values_visible": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/codex-sol-stage-2-index-desktop.png",
+        "768": "screenshots/codex-sol-stage-2-index-768.png",
+        "375": "screenshots/codex-sol-stage-2-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "6c4f0b98988043469ceb97666b421076b68a2c2dd12d4bebaa2102ad167d2102",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "codex-sol",
+      "stage": 3,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.84371,
+        "blurred_ssim_radius_3": 0.9314
+      },
+      "desktop_dom": {
+        "text": "Wayfinder\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nGood things are taking shape.\nBOARD 9D3E6B\n\nA little room for everything you are building.\n\nRevenue\n\n$31,420\n\n+18.4%\nthis month\nOccupancy\n\n76%\n\n-8.0%\nthis month\nActive members\n\n146\n\n+18\nthis month\nAvailable desks\n\n24\n\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n76%\n21 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nRoom to\ngrow.\n\nYour next great project\nstarts here.\n\nFind your next space\nLast updated just now",
+        "visibleText": "Wayfinder Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Good things are taking shape. BOARD 9D3E6B A little room for everything you are building. Revenue $31,420 +18.4% this month Occupancy 76% -8.0% this month Active members 146 +18 this month Available desks 24 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 76% 21 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Room to grow. Your next great project starts here. Find your next space Last updated just now ",
+        "title": "Wayfinder — Workspace Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Find your next space",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Create booking",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Good things are taking shape.",
+        "recognition_marker": "BOARD 9D3E6B",
+        "metrics": [
+          {
+            "label": "Revenue",
+            "value": "$31,420",
+            "change": "+18.4% this month",
+            "direction": "up",
+            "change_color": "green"
+          },
+          {
+            "label": "Occupancy",
+            "value": "76%",
+            "change": "-8.0% this month",
+            "direction": "down",
+            "change_color": "red"
+          },
+          {
+            "label": "Active members",
+            "value": "146",
+            "change": "+18 this month",
+            "direction": "up",
+            "change_color": "green"
+          },
+          {
+            "label": "Available desks",
+            "value": "24",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "utilization_text": {
+          "title": "Space utilization",
+          "value": "76%",
+          "detail": "21 of 28 spaces active"
+        },
+        "promo_heading": "Room to grow.",
+        "promo_cta": "Find your next space",
+        "table_rows": [
+          [
+            "JC · Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "OR · Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "NW · Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "changes_from_previous": [
+          "Heading changes from Your spaces, in sync. to Good things are taking shape.; the marker moves right to approximately x=1006 because of the longer heading.",
+          "Recognition marker changes from BOARD 7F2A9C to BOARD 9D3E6B.",
+          "Monthly revenue becomes Revenue; $24,580 becomes $31,420 and +12.8% becomes +18.4%.",
+          "Occupancy changes from 84% to 76%; green upward +6.2% becomes red downward -8.0%.",
+          "Active members changes from 128 to 146 and +14 becomes +18.",
+          "Available desks changes from 18 to 24; Across 4 spaces remains unchanged.",
+          "Utilization changes from 84% and 24 of 28 spaces active to 76% and 21 of 28 spaces active. The lime arc ends farther down the upper-left quadrant, at approximately x=1227, y=492.",
+          "Promo heading changes from Make room / for ideas. to Room to / grow. and uses larger serif lettering (approximately 48px).",
+          "Promo CTA changes from Explore spaces to Find your next space; supporting text and doorway/plant illustration remain.",
+          "Sidebar account divider is at y=916 and account avatar at y=940, approximately 16px higher than in the original slices.",
+          "Major content geometry remains: 267px sidebar; main starts x=306; metrics y=180; charts y=348; bookings and promo y=691. Table content, chart data, Week selection, date, subtitle and navigation labels remain unchanged."
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "critical_values_visible": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/codex-sol-stage-3-index-desktop.png",
+        "768": "screenshots/codex-sol-stage-3-index-768.png",
+        "375": "screenshots/codex-sol-stage-3-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "cross_page_navigation": {
+        "works": true,
+        "destination": "http://127.0.0.1:52026/outputs/codex-sol/stage-3/bookings.html"
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "405f2a94ca13d19835a797b922a41841e2af53294149a7352fdf20864c5d151e",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "codex-sol",
+      "stage": 3,
+      "page": "bookings.html",
+      "status": "rendered",
+      "text_anchors_matched": 71,
+      "text_anchors_total": 71,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.85001,
+        "blurred_ssim_radius_3": 0.95187
+      },
+      "desktop_dom": {
+        "text": "Wayfinder\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nBookings\nOct 23, 2026\nNew booking\nEvery booking, in view.\nBOOKINGS C6E2A8\n\nPlan the week. Keep everyone in sync.\n\nTotal bookings\n\n48\n\n+12%\nthis month\nRooms booked\n\n12\n\n+8%\nthis month\nPending approval\n\n6\n\n+50%\nthis month\nAll bookings\nConfirmed\nPending\nAll spaces\nStudio 02\nMeeting room A\nDesk 14\nMeeting room B\nStudio 01\nDesk 08\nMember\tSpace\tDate & time\tStatus\t\nActions\n\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\t\n\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\t\n\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\t\n\n\nMP\nMaya Patel\n\tMeeting room B\tOct 25, 10:00\tConfirmed\t\n\n\nLB\nLucas Brown\n\tStudio 01\tOct 25, 13:00\tPending\t\n\n\nEW\nEmma Wilson\n\tDesk 08\tOct 26, 09:30\tConfirmed\t\n\nShowing 1–6 of 48 bookings\n\n1\n2\n3\n4\n5\nThis week\nOctober 2026\nMon\n19\nTue\n20\nWed\n21\nThu\n22\nFri\n23\nSat\n24\nSun\n25\nNext up\nJC\nJamie Chen\nStudio 02\nTomorrow at 09:00\nView calendar",
+        "visibleText": "Wayfinder Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Bookings Oct 23, 2026 New booking Every booking, in view. BOOKINGS C6E2A8 Plan the week. Keep everyone in sync. Total bookings 48 +12% this month Rooms booked 12 +8% this month Pending approval 6 +50% this month All bookings Confirmed Pending Member Space Date & time Status Actions JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed MP Maya Patel Meeting room B Oct 25, 10:00 Confirmed LB Lucas Brown Studio 01 Oct 25, 13:00 Pending EW Emma Wilson Desk 08 Oct 26, 09:30 Confirmed Showing 1–6 of 48 bookings 1 2 3 4 5 This week October 2026 Mon 19 Tue 20 Wed 21 Thu 22 Fri 23 Sat 24 Sun 25 Next up JC Jamie Chen Studio 02 Tomorrow at 09:00 View calendar All spaces Search bookings",
+        "title": "Wayfinder — Bookings",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 6,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "Oct 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "All bookings",
+            "disabled": false
+          },
+          {
+            "text": "Confirmed",
+            "disabled": false
+          },
+          {
+            "text": "Pending",
+            "disabled": false
+          },
+          {
+            "text": "Booking details for Jamie Chen",
+            "disabled": false
+          },
+          {
+            "text": "Booking details for Olivia Reed",
+            "disabled": false
+          },
+          {
+            "text": "Booking details for Noah Williams",
+            "disabled": false
+          },
+          {
+            "text": "Booking details for Maya Patel",
+            "disabled": false
+          },
+          {
+            "text": "Booking details for Lucas Brown",
+            "disabled": false
+          },
+          {
+            "text": "Booking details for Emma Wilson",
+            "disabled": false
+          },
+          {
+            "text": "Previous page",
+            "disabled": false
+          },
+          {
+            "text": "1",
+            "disabled": false
+          },
+          {
+            "text": "2",
+            "disabled": false
+          },
+          {
+            "text": "3",
+            "disabled": false
+          },
+          {
+            "text": "4",
+            "disabled": false
+          },
+          {
+            "text": "5",
+            "disabled": false
+          },
+          {
+            "text": "Next page",
+            "disabled": false
+          },
+          {
+            "text": "Previous week",
+            "disabled": false
+          },
+          {
+            "text": "Next week",
+            "disabled": false
+          },
+          {
+            "text": "Mon 19",
+            "disabled": false
+          },
+          {
+            "text": "Tue 20",
+            "disabled": false
+          },
+          {
+            "text": "Wed 21",
+            "disabled": false
+          },
+          {
+            "text": "Thu 22",
+            "disabled": false
+          },
+          {
+            "text": "Fri 23",
+            "disabled": false
+          },
+          {
+            "text": "Sat 24",
+            "disabled": false
+          },
+          {
+            "text": "Sun 25",
+            "disabled": false
+          },
+          {
+            "text": "JC Jamie Chen Studio 02 Tomorrow at 09:00",
+            "disabled": false
+          },
+          {
+            "text": "View calendar",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Create booking",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "Close",
+            "disabled": false
+          },
+          {
+            "text": "×",
+            "disabled": false
+          },
+          {
+            "text": "Previous",
+            "disabled": false
+          },
+          {
+            "text": "Next",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Every booking, in view.",
+        "recognition_marker": "BOOKINGS C6E2A8",
+        "sidebar_labels": [
+          "WAYFINDER",
+          "Alder House",
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings",
+          "Alex Morgan"
+        ],
+        "metrics": [
+          {
+            "label": "Total bookings",
+            "value": "48",
+            "change": "+12% this month"
+          },
+          {
+            "label": "Rooms booked",
+            "value": "12",
+            "change": "+8% this month"
+          },
+          {
+            "label": "Pending approval",
+            "value": "6",
+            "change": "+50% this month"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date & time",
+          "Status",
+          null
+        ],
+        "table_rows": [
+          [
+            "JC · Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "OR · Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "NW · Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ],
+          [
+            "MP · Maya Patel",
+            "Meeting room B",
+            "Oct 25, 10:00",
+            "Confirmed"
+          ],
+          [
+            "LB · Lucas Brown",
+            "Studio 01",
+            "Oct 25, 13:00",
+            "Pending"
+          ],
+          [
+            "EW · Emma Wilson",
+            "Desk 08",
+            "Oct 26, 09:30",
+            "Confirmed"
+          ]
+        ],
+        "tabs": [
+          "All bookings",
+          "Confirmed",
+          "Pending"
+        ],
+        "search_placeholder": "Search bookings",
+        "calendar_text": {
+          "title": "This week",
+          "month": "October 2026",
+          "days": [
+            "Mon 19",
+            "Tue 20",
+            "Wed 21",
+            "Thu 22",
+            "Fri 23",
+            "Sat 24",
+            "Sun 25"
+          ],
+          "selected": "Fri 23",
+          "section": "Next up",
+          "member": "Jamie Chen",
+          "space": "Studio 02",
+          "time": "Tomorrow at 09:00",
+          "cta": "View calendar"
+        },
+        "other_visible_text": [
+          "Workspace / Bookings",
+          "Plan the week. Keep everyone in sync.",
+          "Oct 23, 2026",
+          "New booking",
+          "All spaces",
+          "Showing 1–6 of 48 bookings",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+        ],
+        "dominant_colors": {
+          "forest": "#0b3325",
+          "canvas": "#faf9f6",
+          "panel": "#ffffff",
+          "lime": "#d9ff96",
+          "ink": "#09131c",
+          "muted": "#687079",
+          "border": "#d7dce0",
+          "confirmed": "#daf6ce",
+          "pending": "#ffcfbf",
+          "purple_avatar": "#e7caff",
+          "yellow_avatar": "#fff0b3",
+          "mint_avatar": "#b9efd7"
+        },
+        "major_regions": [
+          {
+            "name": "sidebar",
+            "rect": [
+              0,
+              0,
+              0.17383,
+              1
+            ]
+          },
+          {
+            "name": "top_controls",
+            "rect": [
+              0.19922,
+              0.01855,
+              0.78711,
+              0.04395
+            ]
+          },
+          {
+            "name": "heading",
+            "rect": [
+              0.19922,
+              0.06543,
+              0.44922,
+              0.08594
+            ]
+          },
+          {
+            "name": "metrics",
+            "rect": [
+              0.19922,
+              0.17578,
+              0.78711,
+              0.14453
+            ]
+          },
+          {
+            "name": "booking_list_panel",
+            "rect": [
+              0.19922,
+              0.33887,
+              0.55534,
+              0.60352
+            ]
+          },
+          {
+            "name": "filters",
+            "rect": [
+              0.21354,
+              0.3623,
+              0.52734,
+              0.04297
+            ]
+          },
+          {
+            "name": "booking_table",
+            "rect": [
+              0.21419,
+              0.4375,
+              0.52539,
+              0.41504
+            ]
+          },
+          {
+            "name": "pagination",
+            "rect": [
+              0.21354,
+              0.87891,
+              0.52734,
+              0.04199
+            ]
+          },
+          {
+            "name": "week_panel",
+            "rect": [
+              0.76432,
+              0.33887,
+              0.22135,
+              0.60352
+            ]
+          },
+          {
+            "name": "next_booking",
+            "rect": [
+              0.77734,
+              0.61426,
+              0.19466,
+              0.12793
+            ]
+          },
+          {
+            "name": "calendar_button",
+            "rect": [
+              0.77734,
+              0.86621,
+              0.19466,
+              0.05566
+            ]
+          }
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "48": true,
+        "12": true,
+        "6": true,
+        "Jamie Chen": true,
+        "Maya Patel": true,
+        "Lucas Brown": true,
+        "Emma Wilson": true
+      },
+      "critical_values_visible": {
+        "48": true,
+        "12": true,
+        "6": true,
+        "Jamie Chen": true,
+        "Maya Patel": true,
+        "Lucas Brown": true,
+        "Emma Wilson": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/codex-sol-stage-3-bookings-desktop.png",
+        "768": "screenshots/codex-sol-stage-3-bookings-768.png",
+        "375": "screenshots/codex-sol-stage-3-bookings-375.png"
+      },
+      "booking_dialog": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "notes": []
+      },
+      "filters": {
+        "confirmed_filter": true,
+        "pending_filter": true,
+        "all_filter_restores_rows": true,
+        "search_matches_member": true,
+        "search_matches_space": true,
+        "search_is_case_insensitive": true,
+        "notes": []
+      },
+      "cross_page_navigation": {
+        "works": true,
+        "destination": "http://127.0.0.1:52026/outputs/codex-sol/stage-3/index.html"
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "405f2a94ca13d19835a797b922a41841e2af53294149a7352fdf20864c5d151e",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "codex-astra",
+      "stage": 1,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.83314,
+        "blurred_ssim_radius_3": 0.93281
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nYour spaces, in sync.\nBOARD 7F2A9C\n\nA little room for everything you are building.\n\nMonthly revenue\n$24,580\n↗\n+12.8%\nthis month\nOccupancy\n84%\n↗\n+6.2%\nthis month\nActive members\n128\n↗\n+14\nthis month\nAvailable desks\n18\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n84%\n24 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nMake room\nfor ideas.\n\nYour next great project\nstarts here.\n\nExplore spaces\n\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Your spaces, in sync. BOARD 7F2A9C A little room for everything you are building. Monthly revenue $24,580 ↗ +12.8% this month Occupancy 84% ↗ +6.2% this month Active members 128 ↗ +14 this month Available desks 18 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 84% 24 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Make room for ideas. Your next great project starts here. Explore spaces Last updated just now ",
+        "title": "Wayfinder — Workspace Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Explore spaces",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Add booking",
+            "disabled": false
+          },
+          {
+            "text": "Close",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Your spaces, in sync.",
+        "recognition_marker": "BOARD 7F2A9C",
+        "sidebar_labels": [
+          "WAYFINDER",
+          "Alder House",
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings",
+          "Alex Morgan"
+        ],
+        "metrics": [
+          {
+            "label": "Monthly revenue",
+            "value": "$24,580",
+            "change": "+12.8% this month"
+          },
+          {
+            "label": "Occupancy",
+            "value": "84%",
+            "change": "+6.2% this month"
+          },
+          {
+            "label": "Active members",
+            "value": "128",
+            "change": "+14 this month"
+          },
+          {
+            "label": "Available desks",
+            "value": "18",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date",
+          "Status"
+        ],
+        "table_rows": [
+          [
+            "Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "chart_labels": {
+          "title": "Booking activity",
+          "periods": [
+            "Week",
+            "Month"
+          ],
+          "x_axis": [
+            "Mon",
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "y_axis": [
+            0,
+            20,
+            40,
+            60
+          ],
+          "tooltip": "Fri · 42 bookings",
+          "utilization_title": "Space utilization",
+          "utilization": "84%",
+          "detail": "24 of 28 spaces active",
+          "legend": [
+            "Desks",
+            "Studios",
+            "Meeting rooms"
+          ]
+        },
+        "other_text": [
+          "Workspace / Overview",
+          "A little room for everything you are building.",
+          "October 23, 2026",
+          "New booking",
+          "Upcoming bookings",
+          "View all",
+          "Make room for ideas.",
+          "Your next great project starts here.",
+          "Explore spaces",
+          "Last updated just now"
+        ],
+        "dominant_colors": {
+          "forest": "#0c3225",
+          "cream": "#faf9f5",
+          "white": "#ffffff",
+          "lime": "#d9fc94",
+          "chart_lime": "#c9fc61",
+          "ink": "#09131b",
+          "muted": "#667079",
+          "border": "#d6dadd"
+        },
+        "major_regions": [
+          {
+            "name": "sidebar",
+            "rect": [
+              0,
+              0,
+              0.174,
+              1
+            ]
+          },
+          {
+            "name": "header",
+            "rect": [
+              0.199,
+              0.019,
+              0.787,
+              0.133
+            ]
+          },
+          {
+            "name": "metrics",
+            "rect": [
+              0.199,
+              0.176,
+              0.786,
+              0.144
+            ]
+          },
+          {
+            "name": "booking_chart",
+            "rect": [
+              0.199,
+              0.339,
+              0.525,
+              0.321
+            ]
+          },
+          {
+            "name": "utilization",
+            "rect": [
+              0.733,
+              0.34,
+              0.253,
+              0.321
+            ]
+          },
+          {
+            "name": "bookings_table",
+            "rect": [
+              0.199,
+              0.675,
+              0.475,
+              0.267
+            ]
+          },
+          {
+            "name": "promotion",
+            "rect": [
+              0.682,
+              0.674,
+              0.304,
+              0.271
+            ]
+          },
+          {
+            "name": "account",
+            "rect": [
+              0.013,
+              0.879,
+              0.147,
+              0.083
+            ]
+          }
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$24,580": true,
+        "84%": true,
+        "128": true,
+        "18": true,
+        "BOARD 7F2A9C": true
+      },
+      "critical_values_visible": {
+        "$24,580": true,
+        "84%": true,
+        "128": true,
+        "18": true,
+        "BOARD 7F2A9C": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/codex-astra-stage-1-index-desktop.png",
+        "768": "screenshots/codex-astra-stage-1-index-768.png",
+        "375": "screenshots/codex-astra-stage-1-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "559320f0237d96b37f28dbe7316fed93192692d1b7a7a1d66b248cb414ed958b",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "codex-astra",
+      "stage": 2,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.83579,
+        "blurred_ssim_radius_3": 0.93198
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nGood things are taking shape.\nBOARD 9D3E6B\n\nA little room for everything you are building.\n\nRevenue\n$31,420\n↗\n+18.4%\nthis month\nOccupancy\n76%\n↘\n-8.0%\nthis month\nActive members\n146\n↗\n+18\nthis month\nAvailable desks\n24\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n76%\n21 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nRoom to\ngrow.\n\nYour next great project\nstarts here.\n\nFind your next space\n\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Good things are taking shape. BOARD 9D3E6B A little room for everything you are building. Revenue $31,420 ↗ +18.4% this month Occupancy 76% ↘ -8.0% this month Active members 146 ↗ +18 this month Available desks 24 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 76% 21 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Room to grow. Your next great project starts here. Find your next space Last updated just now ",
+        "title": "Wayfinder — Workspace Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Overview",
+            "disabled": false
+          },
+          {
+            "text": "Bookings",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Find your next space",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Add booking",
+            "disabled": false
+          },
+          {
+            "text": "Close",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Good things are taking shape.",
+        "recognition_marker": "BOARD 9D3E6B",
+        "metrics": [
+          {
+            "label": "Revenue",
+            "value": "$31,420",
+            "change": "+18.4% this month",
+            "direction": "up"
+          },
+          {
+            "label": "Occupancy",
+            "value": "76%",
+            "change": "-8.0% this month",
+            "direction": "down"
+          },
+          {
+            "label": "Active members",
+            "value": "146",
+            "change": "+18 this month",
+            "direction": "up"
+          },
+          {
+            "label": "Available desks",
+            "value": "24",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "utilization_text": {
+          "heading": "Space utilization",
+          "value": "76%",
+          "detail": "21 of 28 spaces active"
+        },
+        "promo_heading": "Room to grow.",
+        "promo_cta": "Find your next space",
+        "table_rows": [
+          [
+            "Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "changes_from_previous": [
+          "Heading changes from Your spaces, in sync. to Good things are taking shape.; the longer heading moves the board marker to approximately x1007, y80.",
+          "Recognition marker changes from BOARD 7F2A9C to BOARD 9D3E6B.",
+          "Monthly revenue becomes Revenue; $24,580 becomes $31,420; +12.8% becomes +18.4%.",
+          "Occupancy changes from 84% to 76%; the green upward +6.2% change becomes a red downward -8.0% change.",
+          "Active members changes from 128 to 146; +14 becomes +18.",
+          "Available desks changes from 18 to 24.",
+          "Utilization changes from 84% and 24 of 28 spaces active to 76% and 21 of 28 spaces active. The lime arc is shorter and ends at approximately the left side of the ring, near y492.",
+          "Promotion heading becomes Room to / grow. in larger serif lettering; Explore spaces becomes Find your next space. Supporting text and architectural illustration remain.",
+          "Account divider is at y916 and avatar at y941, about 16px lower than the previous slices.",
+          "Main geometry remains: sidebar width267, content x306, metrics y180, chart row y347–677, bookings y691–964, promotion x1048 y691–967. Table rows and booking activity chart content remain unchanged."
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "critical_values_visible": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/codex-astra-stage-2-index-desktop.png",
+        "768": "screenshots/codex-astra-stage-2-index-768.png",
+        "375": "screenshots/codex-astra-stage-2-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "97308c56d5429c6cbb31824d29f365c6b8618a06f853a59ea3514d8f06bff110",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "codex-astra",
+      "stage": 3,
+      "page": "index.html",
+      "status": "rendered",
+      "text_anchors_matched": 64,
+      "text_anchors_total": 64,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.83579,
+        "blurred_ssim_radius_3": 0.93198
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nOverview\nOctober 23, 2026\nNew booking\nGood things are taking shape.\nBOARD 9D3E6B\n\nA little room for everything you are building.\n\nRevenue\n$31,420\n↗\n+18.4%\nthis month\nOccupancy\n76%\n↘\n-8.0%\nthis month\nActive members\n146\n↗\n+18\nthis month\nAvailable desks\n24\nAcross 4 spaces\nBooking activity\nWeek\nMonth\n60\n40\n20\n0\nFri · 42 bookings\nMon\nTue\nWed\nThu\nFri\nSat\nSun\nSpace utilization\n76%\n21 of 28 spaces active\nDesks\nStudios\nMeeting rooms\nUpcoming bookings\nView all\nMember\tSpace\tDate\tStatus\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\nRoom to\ngrow.\n\nYour next great project\nstarts here.\n\nFind your next space\n\nLast updated just now",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Overview October 23, 2026 New booking Good things are taking shape. BOARD 9D3E6B A little room for everything you are building. Revenue $31,420 ↗ +18.4% this month Occupancy 76% ↘ -8.0% this month Active members 146 ↗ +18 this month Available desks 24 Across 4 spaces Booking activity Week Month 60 40 20 0 Fri · 42 bookings Mon Tue Wed Thu Fri Sat Sun Space utilization 76% 21 of 28 spaces active Desks Studios Meeting rooms Upcoming bookings View all Member Space Date Status JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed OR Olivia Reed Meeting room A Oct 24, 11:30 Pending NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed Room to grow. Your next great project starts here. Find your next space Last updated just now ",
+        "title": "Wayfinder — Workspace Overview",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 3,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "October 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "Week",
+            "disabled": false
+          },
+          {
+            "text": "Month",
+            "disabled": false
+          },
+          {
+            "text": "View all",
+            "disabled": false
+          },
+          {
+            "text": "Find your next space",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Add booking",
+            "disabled": false
+          },
+          {
+            "text": "Close",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Good things are taking shape.",
+        "recognition_marker": "BOARD 9D3E6B",
+        "metrics": [
+          {
+            "label": "Revenue",
+            "value": "$31,420",
+            "change": "+18.4% this month",
+            "direction": "up"
+          },
+          {
+            "label": "Occupancy",
+            "value": "76%",
+            "change": "-8.0% this month",
+            "direction": "down"
+          },
+          {
+            "label": "Active members",
+            "value": "146",
+            "change": "+18 this month",
+            "direction": "up"
+          },
+          {
+            "label": "Available desks",
+            "value": "24",
+            "detail": "Across 4 spaces"
+          }
+        ],
+        "utilization_text": {
+          "heading": "Space utilization",
+          "value": "76%",
+          "detail": "21 of 28 spaces active"
+        },
+        "promo_heading": "Room to grow.",
+        "promo_cta": "Find your next space",
+        "table_rows": [
+          [
+            "Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ]
+        ],
+        "changes_from_previous": [
+          "Heading changes from Your spaces, in sync. to Good things are taking shape.; the longer heading moves the board marker to approximately x1007, y80.",
+          "Recognition marker changes from BOARD 7F2A9C to BOARD 9D3E6B.",
+          "Monthly revenue becomes Revenue; $24,580 becomes $31,420; +12.8% becomes +18.4%.",
+          "Occupancy changes from 84% to 76%; the green upward +6.2% change becomes a red downward -8.0% change.",
+          "Active members changes from 128 to 146; +14 becomes +18.",
+          "Available desks changes from 18 to 24.",
+          "Utilization changes from 84% and 24 of 28 spaces active to 76% and 21 of 28 spaces active. The lime arc is shorter and ends at approximately the left side of the ring, near y492.",
+          "Promotion heading becomes Room to / grow. in larger serif lettering; Explore spaces becomes Find your next space. Supporting text and architectural illustration remain.",
+          "Account divider is at y916 and avatar at y941, about 16px lower than the previous slices.",
+          "Main geometry remains: sidebar width267, content x306, metrics y180, chart row y347–677, bookings y691–964, promotion x1048 y691–967. Table rows and booking activity chart content remain unchanged."
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "critical_values_visible": {
+        "$31,420": true,
+        "76%": true,
+        "146": true,
+        "24": true,
+        "21 of 28 spaces active": true,
+        "Room to grow.": true,
+        "Find your next space": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/codex-astra-stage-3-index-desktop.png",
+        "768": "screenshots/codex-astra-stage-3-index-768.png",
+        "375": "screenshots/codex-astra-stage-3-index-375.png"
+      },
+      "interactions": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "chart_period_changes_state": true,
+        "sidebar_selection_changes": true,
+        "notes": []
+      },
+      "cross_page_navigation": {
+        "works": true,
+        "destination": "http://127.0.0.1:52026/outputs/codex-astra/stage-3/bookings.html"
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "2efd6fcbba6317d20d4634a569a6c51839420b55d6149fd43f9e4a5c93bbc712",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    },
+    {
+      "case": "codex-astra",
+      "stage": 3,
+      "page": "bookings.html",
+      "status": "rendered",
+      "text_anchors_matched": 71,
+      "text_anchors_total": 71,
+      "missing_text": [],
+      "marker_visible": true,
+      "pixel_metrics": {
+        "ssim": 0.85142,
+        "blurred_ssim_radius_3": 0.95549
+      },
+      "desktop_dom": {
+        "text": "WAYFINDER\nAlder House\nOverview\nBookings\nSpaces\nMembers\nReports\nSettings\nAM\nAlex Morgan\nWorkspace\n/\nBookings\nOct 23, 2026\nNew booking\nEvery booking, in view.\nBOOKINGS C6E2A8\n\nPlan the week. Keep everyone in sync.\n\nTotal bookings\n48\n↗\n+12%\nthis month\nRooms booked\n12\n↗\n+8%\nthis month\nPending approval\n6\n↗\n+50%\nthis month\nAll bookings\nConfirmed\nPending\nAll spaces\nStudio 02\nMeeting room A\nDesk 14\nMeeting room B\nStudio 01\nDesk 08\nMember\tSpace\tDate & time\tStatus\t\nActions\n\n\nJC\nJamie Chen\n\tStudio 02\tOct 24, 09:00\tConfirmed\t⋮\n\nOR\nOlivia Reed\n\tMeeting room A\tOct 24, 11:30\tPending\t⋮\n\nNW\nNoah Williams\n\tDesk 14\tOct 24, 14:00\tConfirmed\t⋮\n\nMP\nMaya Patel\n\tMeeting room B\tOct 25, 10:00\tConfirmed\t⋮\n\nLB\nLucas Brown\n\tStudio 01\tOct 25, 13:00\tPending\t⋮\n\nEW\nEmma Wilson\n\tDesk 08\tOct 26, 09:30\tConfirmed\t⋮\n\nShowing 1–6 of 48 bookings\n\n1\n2\n3\n4\n5\nThis week\nOctober 2026\nMon\n19\nTue\n20\nWed\n21\nThu\n22\nFri\n23\nSat\n24\nSun\n25\nNext up\nJC\nJamie Chen\nStudio 02\nTomorrow at 09:00\nView calendar",
+        "visibleText": "WAYFINDER Alder House Overview Bookings Spaces Members Reports Settings AM Alex Morgan Workspace / Bookings Oct 23, 2026 New booking Every booking, in view. BOOKINGS C6E2A8 Plan the week. Keep everyone in sync. Total bookings 48 ↗ +12% this month Rooms booked 12 ↗ +8% this month Pending approval 6 ↗ +50% this month All bookings Confirmed Pending Member Space Date & time Status Actions JC Jamie Chen Studio 02 Oct 24, 09:00 Confirmed ⋮ OR Olivia Reed Meeting room A Oct 24, 11:30 Pending ⋮ NW Noah Williams Desk 14 Oct 24, 14:00 Confirmed ⋮ MP Maya Patel Meeting room B Oct 25, 10:00 Confirmed ⋮ LB Lucas Brown Studio 01 Oct 25, 13:00 Pending ⋮ EW Emma Wilson Desk 08 Oct 26, 09:30 Confirmed ⋮ Showing 1–6 of 48 bookings 1 2 3 4 5 This week October 2026 Mon 19 Tue 20 Wed 21 Thu 22 Fri 23 Sat 24 Sun 25 Next up JC Jamie Chen Studio 02 Tomorrow at 09:00 View calendar All spaces Search bookings",
+        "title": "Wayfinder — Bookings",
+        "scrollWidth": 1536,
+        "viewportWidth": 1536,
+        "tableRows": 6,
+        "buttons": [
+          {
+            "text": "Alder House",
+            "disabled": false
+          },
+          {
+            "text": "Spaces",
+            "disabled": false
+          },
+          {
+            "text": "Members",
+            "disabled": false
+          },
+          {
+            "text": "Reports",
+            "disabled": false
+          },
+          {
+            "text": "Settings",
+            "disabled": false
+          },
+          {
+            "text": "AM Alex Morgan",
+            "disabled": false
+          },
+          {
+            "text": "Oct 23, 2026",
+            "disabled": false
+          },
+          {
+            "text": "Notifications",
+            "disabled": false
+          },
+          {
+            "text": "New booking",
+            "disabled": false
+          },
+          {
+            "text": "All bookings",
+            "disabled": false
+          },
+          {
+            "text": "Confirmed",
+            "disabled": false
+          },
+          {
+            "text": "Pending",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "⋮",
+            "disabled": false
+          },
+          {
+            "text": "Previous page",
+            "disabled": false
+          },
+          {
+            "text": "1",
+            "disabled": false
+          },
+          {
+            "text": "2",
+            "disabled": false
+          },
+          {
+            "text": "3",
+            "disabled": false
+          },
+          {
+            "text": "4",
+            "disabled": false
+          },
+          {
+            "text": "5",
+            "disabled": false
+          },
+          {
+            "text": "Next page",
+            "disabled": false
+          },
+          {
+            "text": "Previous week",
+            "disabled": false
+          },
+          {
+            "text": "Next week",
+            "disabled": false
+          },
+          {
+            "text": "Mon 19",
+            "disabled": false
+          },
+          {
+            "text": "Tue 20",
+            "disabled": false
+          },
+          {
+            "text": "Wed 21",
+            "disabled": false
+          },
+          {
+            "text": "Thu 22",
+            "disabled": false
+          },
+          {
+            "text": "Fri 23",
+            "disabled": false
+          },
+          {
+            "text": "Sat 24",
+            "disabled": false
+          },
+          {
+            "text": "Sun 25",
+            "disabled": false
+          },
+          {
+            "text": "JC Jamie Chen Studio 02 Tomorrow at 09:00",
+            "disabled": false
+          },
+          {
+            "text": "View calendar",
+            "disabled": false
+          },
+          {
+            "text": "Cancel",
+            "disabled": false
+          },
+          {
+            "text": "Add booking",
+            "disabled": false
+          },
+          {
+            "text": "Close",
+            "disabled": false
+          }
+        ],
+        "referenceAssetUsed": false
+      },
+      "observation": {
+        "page_title": "Every booking, in view.",
+        "recognition_marker": "BOOKINGS C6E2A8",
+        "sidebar_labels": [
+          "WAYFINDER",
+          "Alder House",
+          "Overview",
+          "Bookings",
+          "Spaces",
+          "Members",
+          "Reports",
+          "Settings",
+          "Alex Morgan"
+        ],
+        "metrics": [
+          {
+            "label": "Total bookings",
+            "value": "48",
+            "change": "+12% this month"
+          },
+          {
+            "label": "Rooms booked",
+            "value": "12",
+            "change": "+8% this month"
+          },
+          {
+            "label": "Pending approval",
+            "value": "6",
+            "change": "+50% this month"
+          }
+        ],
+        "table_headers": [
+          "Member",
+          "Space",
+          "Date & time",
+          "Status"
+        ],
+        "table_rows": [
+          [
+            "Jamie Chen",
+            "Studio 02",
+            "Oct 24, 09:00",
+            "Confirmed"
+          ],
+          [
+            "Olivia Reed",
+            "Meeting room A",
+            "Oct 24, 11:30",
+            "Pending"
+          ],
+          [
+            "Noah Williams",
+            "Desk 14",
+            "Oct 24, 14:00",
+            "Confirmed"
+          ],
+          [
+            "Maya Patel",
+            "Meeting room B",
+            "Oct 25, 10:00",
+            "Confirmed"
+          ],
+          [
+            "Lucas Brown",
+            "Studio 01",
+            "Oct 25, 13:00",
+            "Pending"
+          ],
+          [
+            "Emma Wilson",
+            "Desk 08",
+            "Oct 26, 09:30",
+            "Confirmed"
+          ]
+        ],
+        "tabs": [
+          "All bookings",
+          "Confirmed",
+          "Pending"
+        ],
+        "search_placeholder": "Search bookings",
+        "calendar_text": {
+          "heading": "This week",
+          "month": "October 2026",
+          "days": [
+            "Mon 19",
+            "Tue 20",
+            "Wed 21",
+            "Thu 22",
+            "Fri 23",
+            "Sat 24",
+            "Sun 25"
+          ],
+          "selected": "Fri 23",
+          "next_heading": "Next up",
+          "member": "Jamie Chen",
+          "space": "Studio 02",
+          "time": "Tomorrow at 09:00",
+          "cta": "View calendar"
+        },
+        "other_text": [
+          "Plan the week. Keep everyone in sync.",
+          "Oct 23, 2026",
+          "All spaces",
+          "Showing 1–6 of 48 bookings",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+        ],
+        "dominant_colors": {
+          "forest": "#0c3225",
+          "cream": "#faf9f5",
+          "white": "#ffffff",
+          "lime": "#d9fc94",
+          "ink": "#09131b",
+          "muted": "#667079",
+          "border": "#d6dadd"
+        },
+        "major_regions": [
+          {
+            "name": "sidebar",
+            "rect": [
+              0,
+              0,
+              0.174,
+              1
+            ]
+          },
+          {
+            "name": "header",
+            "rect": [
+              0.199,
+              0.019,
+              0.787,
+              0.133
+            ]
+          },
+          {
+            "name": "metrics",
+            "rect": [
+              0.199,
+              0.176,
+              0.786,
+              0.144
+            ]
+          },
+          {
+            "name": "bookings_panel",
+            "rect": [
+              0.199,
+              0.339,
+              0.555,
+              0.604
+            ]
+          },
+          {
+            "name": "filters",
+            "rect": [
+              0.214,
+              0.362,
+              0.527,
+              0.042
+            ]
+          },
+          {
+            "name": "table",
+            "rect": [
+              0.214,
+              0.437,
+              0.525,
+              0.416
+            ]
+          },
+          {
+            "name": "pagination",
+            "rect": [
+              0.214,
+              0.879,
+              0.527,
+              0.042
+            ]
+          },
+          {
+            "name": "calendar_panel",
+            "rect": [
+              0.764,
+              0.339,
+              0.222,
+              0.604
+            ]
+          },
+          {
+            "name": "next_booking",
+            "rect": [
+              0.777,
+              0.614,
+              0.195,
+              0.128
+            ]
+          },
+          {
+            "name": "account",
+            "rect": [
+              0.013,
+              0.895,
+              0.147,
+              0.071
+            ]
+          }
+        ]
+      },
+      "observation_marker_correct": true,
+      "observation_metrics": {
+        "48": true,
+        "12": true,
+        "6": true,
+        "Jamie Chen": true,
+        "Maya Patel": true,
+        "Lucas Brown": true,
+        "Emma Wilson": true
+      },
+      "critical_values_visible": {
+        "48": true,
+        "12": true,
+        "6": true,
+        "Jamie Chen": true,
+        "Maya Patel": true,
+        "Lucas Brown": true,
+        "Emma Wilson": true
+      },
+      "superseded_text_visible": [],
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "screenshots": {
+        "desktop": "screenshots/codex-astra-stage-3-bookings-desktop.png",
+        "768": "screenshots/codex-astra-stage-3-bookings-768.png",
+        "375": "screenshots/codex-astra-stage-3-bookings-375.png"
+      },
+      "booking_dialog": {
+        "new_booking_dialog_opens": true,
+        "escape_closes_dialog": true,
+        "booking_submission_adds_row": true,
+        "notes": []
+      },
+      "filters": {
+        "confirmed_filter": true,
+        "pending_filter": true,
+        "all_filter_restores_rows": true,
+        "search_matches_member": true,
+        "search_matches_space": true,
+        "search_is_case_insensitive": true,
+        "notes": []
+      },
+      "cross_page_navigation": {
+        "works": true,
+        "destination": "http://127.0.0.1:52026/outputs/codex-astra/stage-3/index.html"
+      },
+      "browser_errors": [],
+      "external_requests": [],
+      "failed_requests": [],
+      "html_unchanged_by_evaluation": true,
+      "source_tree_sha256": "2efd6fcbba6317d20d4634a569a6c51839420b55d6149fd43f9e4a5c93bbc712",
+      "evaluator_sha256": "1c0d2156f85f4d2d7f4f102fd93249e07462c7ec807aa50cc3caea5302a2080b"
+    }
+  ],
+  "dashboard_preservation": [
+    {
+      "case": "smith-sol",
+      "revision_retained": true,
+      "stage2_vs_stage3": {
+        "ssim": 1.0,
+        "blurred_ssim_radius_3": 1.0
+      },
+      "stage2_vs_stage3_visible_text_equal": true
+    },
+    {
+      "case": "smith-astra",
+      "revision_retained": true,
+      "stage2_vs_stage3": {
+        "ssim": 1.0,
+        "blurred_ssim_radius_3": 1.0
+      },
+      "stage2_vs_stage3_visible_text_equal": true
+    },
+    {
+      "case": "codex-sol",
+      "revision_retained": true,
+      "stage2_vs_stage3": {
+        "ssim": 1.0,
+        "blurred_ssim_radius_3": 1.0
+      },
+      "stage2_vs_stage3_visible_text_equal": true
+    },
+    {
+      "case": "codex-astra",
+      "revision_retained": true,
+      "stage2_vs_stage3": {
+        "ssim": 1.0,
+        "blurred_ssim_radius_3": 1.0
+      },
+      "stage2_vs_stage3_visible_text_equal": true
+    }
+  ]
+}

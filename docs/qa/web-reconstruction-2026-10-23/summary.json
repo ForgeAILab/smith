@@ -1,0 +1,276 @@
+{
+  "conclusion": "Both harnesses successfully read the generated screenshot and reconstructed its content and major geometry. Smith/Astra was closest by overall screenshot SSIM in this single trial. Cache reuse was substantially lower in the Smith runs.",
+  "reference_dimensions": [
+    1536,
+    1024
+  ],
+  "reference_sha256": "12c1ad4956cf811a994e330f977768b24319063bc7ef41191f8d2723637ed7f6",
+  "protocol": {
+    "models": [
+      "gpt-6.1-sol",
+      "gpt-6-astra"
+    ],
+    "harnesses": [
+      "Smith 0.7.13",
+      "Codex CLI 0.163.0"
+    ],
+    "reasoning_effort": "medium",
+    "time_limit_seconds_per_arm": 600,
+    "same_image_and_user_prompt": true,
+    "one_attempt_per_arm": true,
+    "generated_pages_manually_repaired": false,
+    "execution": "Two balanced waves with two concurrent runs per wave; elapsed times are descriptive, not a controlled latency ranking.",
+    "smith_configuration": "Temporary neutral build profile using existing ChatGPT provider credentials; advisor, vision delegate and delegation disabled.",
+    "codex_configuration": "Existing authentication, ignored user config/rules, workspace-write, ephemeral session. Native tools and base instructions differ between harnesses."
+  },
+  "rows": [
+    {
+      "case": "smith-sol",
+      "harness": "smith",
+      "model": "gpt-6.1-sol",
+      "elapsed_seconds": 362.58,
+      "text_anchors": "64/64",
+      "recognition_marker_correct": true,
+      "ssim": 0.85748,
+      "blurred_ssim_radius_3": 0.95771,
+      "mean_region_iou": 0.9897,
+      "interaction_checks_passed": 5,
+      "interaction_checks_total": 5,
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 804,
+          "horizontalOverflow": true
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "input_tokens_total": 340278,
+      "input_tokens_cached": 72448,
+      "input_tokens_uncached": 267830,
+      "cached_input_percent": 21.29,
+      "provider_attempts_smith_only": 18,
+      "tool_call_count": 17,
+      "raw_provider_reported_usage": {
+        "current_turn": {
+          "input_uncached": 267830,
+          "input_cached": 72448,
+          "output": 13922,
+          "reasoning": 811
+        },
+        "session": {
+          "input_uncached": 267830,
+          "input_cached": 72448,
+          "output": 13922,
+          "reasoning": 811
+        },
+        "current_turn_provenance": "provider_reported",
+        "session_provenance": "provider_reported"
+      },
+      "input_evidence": {
+        "source_image_sha256": "12c1ad4956cf811a994e330f977768b24319063bc7ef41191f8d2723637ed7f6",
+        "reference_file_unchanged": true,
+        "persisted_attached_image_sha256": "12c1ad4956cf811a994e330f977768b24319063bc7ef41191f8d2723637ed7f6",
+        "persisted_image_dimensions": [
+          1536,
+          1024
+        ]
+      },
+      "visible_issues": [
+        "Horizontal overflow at 768px: scroll width 804px."
+      ],
+      "output_html": "outputs/smith-sol/index.html",
+      "desktop_screenshot": "screenshots/smith-sol-desktop.png"
+    },
+    {
+      "case": "smith-astra",
+      "harness": "smith",
+      "model": "gpt-6-astra",
+      "elapsed_seconds": 438.33,
+      "text_anchors": "64/64",
+      "recognition_marker_correct": true,
+      "ssim": 0.86842,
+      "blurred_ssim_radius_3": 0.96496,
+      "mean_region_iou": 0.9914,
+      "interaction_checks_passed": 5,
+      "interaction_checks_total": 5,
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "input_tokens_total": 269711,
+      "input_tokens_cached": 63616,
+      "input_tokens_uncached": 206095,
+      "cached_input_percent": 23.59,
+      "provider_attempts_smith_only": 15,
+      "tool_call_count": 14,
+      "raw_provider_reported_usage": {
+        "current_turn": {
+          "input_uncached": 206095,
+          "input_cached": 63616,
+          "output": 16717,
+          "reasoning": 1969
+        },
+        "session": {
+          "input_uncached": 206095,
+          "input_cached": 63616,
+          "output": 16717,
+          "reasoning": 1969
+        },
+        "current_turn_provenance": "provider_reported",
+        "session_provenance": "provider_reported"
+      },
+      "input_evidence": {
+        "source_image_sha256": "12c1ad4956cf811a994e330f977768b24319063bc7ef41191f8d2723637ed7f6",
+        "reference_file_unchanged": true,
+        "persisted_attached_image_sha256": "12c1ad4956cf811a994e330f977768b24319063bc7ef41191f8d2723637ed7f6",
+        "persisted_image_dimensions": [
+          1536,
+          1024
+        ]
+      },
+      "visible_issues": [],
+      "output_html": "outputs/smith-astra/index.html",
+      "desktop_screenshot": "screenshots/smith-astra-desktop.png"
+    },
+    {
+      "case": "codex-sol",
+      "harness": "codex",
+      "model": "gpt-6.1-sol",
+      "elapsed_seconds": 407.06,
+      "text_anchors": "64/64",
+      "recognition_marker_correct": true,
+      "ssim": 0.83663,
+      "blurred_ssim_radius_3": 0.93154,
+      "mean_region_iou": 0.9915,
+      "interaction_checks_passed": 5,
+      "interaction_checks_total": 5,
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 375,
+          "horizontalOverflow": false
+        }
+      ],
+      "input_tokens_total": 603608,
+      "input_tokens_cached": 544640,
+      "input_tokens_uncached": 58968,
+      "cached_input_percent": 90.23,
+      "provider_attempts_smith_only": null,
+      "tool_call_count": 11,
+      "raw_provider_reported_usage": {
+        "input_tokens": 603608,
+        "cached_input_tokens": 544640,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 19693,
+        "reasoning_output_tokens": 3016
+      },
+      "input_evidence": {
+        "source_image_sha256": "12c1ad4956cf811a994e330f977768b24319063bc7ef41191f8d2723637ed7f6",
+        "reference_file_unchanged": true
+      },
+      "visible_issues": [
+        "Unwanted black triangular fill in the activity chart."
+      ],
+      "output_html": "outputs/codex-sol/index.html",
+      "desktop_screenshot": "screenshots/codex-sol-desktop.png"
+    },
+    {
+      "case": "codex-astra",
+      "harness": "codex",
+      "model": "gpt-6-astra",
+      "elapsed_seconds": 252.28,
+      "text_anchors": "64/64",
+      "recognition_marker_correct": true,
+      "ssim": 0.82927,
+      "blurred_ssim_radius_3": 0.91714,
+      "mean_region_iou": 0.9909,
+      "interaction_checks_passed": 5,
+      "interaction_checks_total": 5,
+      "responsive": [
+        {
+          "width": 768,
+          "scrollWidth": 768,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 375,
+          "scrollWidth": 656,
+          "horizontalOverflow": true
+        }
+      ],
+      "input_tokens_total": 184388,
+      "input_tokens_cached": 158720,
+      "input_tokens_uncached": 25668,
+      "cached_input_percent": 86.08,
+      "provider_attempts_smith_only": null,
+      "tool_call_count": 5,
+      "raw_provider_reported_usage": {
+        "input_tokens": 184388,
+        "cached_input_tokens": 158720,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 12826,
+        "reasoning_output_tokens": 634
+      },
+      "input_evidence": {
+        "source_image_sha256": "12c1ad4956cf811a994e330f977768b24319063bc7ef41191f8d2723637ed7f6",
+        "reference_file_unchanged": true
+      },
+      "visible_issues": [
+        "Unwanted black triangular fill in the activity chart.",
+        "Horizontal overflow at 375px: scroll width 656px."
+      ],
+      "output_html": "outputs/codex-astra/index.html",
+      "desktop_screenshot": "screenshots/codex-astra-desktop.png"
+    }
+  ],
+  "human_visual_review": {
+    "smith-sol": [
+      "Horizontal overflow at 768px: scroll width 804px."
+    ],
+    "smith-astra": [],
+    "codex-sol": [
+      "Unwanted black triangular fill in the activity chart."
+    ],
+    "codex-astra": [
+      "Unwanted black triangular fill in the activity chart.",
+      "Horizontal overflow at 375px: scroll width 656px."
+    ]
+  },
+  "interpretation": {
+    "vision": "All four implementations reproduced the unique recognition marker, all metric values and all 64 checked visible text anchors. This supports successful image delivery and fresh-session screenshot understanding.",
+    "implementation": "Both Codex outputs contain an unwanted black triangular chart fill. Responsive overflow was detected in two arms; outputs are preserved unchanged.",
+    "cache": "Provider-reported cached input was about 21–24% in Smith and 86–90% in Codex. Different tool-call sequences and native prompts prevent assigning this difference solely to image encoding.",
+    "limits": [
+      "One generated screenshot and one trial per arm; these results do not establish a general model or harness ranking.",
+      "Elapsed times include initialization, skill/context loading and tool use in two concurrent waves. They are descriptive rather than isolated latency measurements.",
+      "SSIM is pixel similarity, not an accuracy percentage or a complete quality score.",
+      "This is a fresh-session webpage recreation task. It does not test long-session image retention or Blender scene editing.",
+      "Token counters are normalized from each harness provider-reported input usage. Raw counters are preserved; no monetary cost is inferred."
+    ]
+  },
+  "artifacts": {
+    "viewer": "comparison.html",
+    "contact_sheet": "comparison.png",
+    "browser_evaluation": "evaluation.json",
+    "task": "prompt.txt",
+    "ground_truth": "ground-truth.json",
+    "run_records": "runs.json"
+  }
+}

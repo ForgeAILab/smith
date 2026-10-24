@@ -467,6 +467,12 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         provider.clone(),
     ));
     let mut builder = RuntimeBuilder::new(model.clone())
+        .request_sizer(Arc::new(
+            crate::image_sizing::SmithRequestSizer::for_provider_and_model(
+                &provider_kind,
+                model.as_str(),
+            ),
+        ))
         .provider(backoff.clone())
         .observer(backoff)
         .observer(request.web_search_session.clone())

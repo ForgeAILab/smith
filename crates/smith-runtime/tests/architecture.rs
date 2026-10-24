@@ -219,6 +219,7 @@ const PUBLIC_RUNTIME_MODULES: &[&str] = &[
     "factory",
     "harness",
     "host",
+    "image_sizing",
     "journal",
     "mcp",
     "memory",
@@ -266,6 +267,61 @@ fn smith_runtime_public_modules_match_the_allow_list() {
         "public runtime modules changed; unexpected: {:?}; missing: {:?}",
         actual.difference(&expected).collect::<Vec<_>>(),
         expected.difference(&actual).collect::<Vec<_>>(),
+    );
+}
+
+/// Child policy fingerprints gate resuming interrupted children, so they must
+/// not record the request sizer, whose revision moves with estimate formulas.
+#[test]
+fn child_policy_fingerprint_ignores_the_request_sizer() {
+    #[derive(Default)]
+    struct Fingerprint {
+        found: bool,
+        tokens: Vec<String>,
+    }
+    impl<'ast> Visit<'ast> for Fingerprint {
+        fn visit_impl_item_fn(&mut self, function: &'ast syn::ImplItemFn) {
+            if function.sig.ident == "policy_fingerprint" {
+                self.found = true;
+                let mut body = FingerprintBody(&mut self.tokens);
+                body.visit_block(&function.block);
+            }
+        }
+    }
+    struct FingerprintBody<'a>(&'a mut Vec<String>);
+    impl<'ast> Visit<'ast> for FingerprintBody<'_> {
+        fn visit_ident(&mut self, ident: &'ast syn::Ident) {
+            self.0.push(ident.to_string());
+        }
+        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+            self.0.push(mac.tokens.to_string());
+            visit::visit_macro(self, mac);
+        }
+    }
+
+    let path = workspace_root().join("crates/smith-runtime/src/delegation.rs");
+    let source = fs::read_to_string(&path).expect("delegation source");
+    let file = syn::parse_file(&source).expect("delegation syntax");
+    let mut fingerprint = Fingerprint::default();
+    fingerprint.visit_file(&file);
+    assert!(
+        fingerprint.found,
+        "SmithChildFactory::policy_fingerprint moved"
+    );
+    let sizer_terms = [
+        "request_sizer",
+        "SmithRequestSizer",
+        "image_sizing",
+        "RequestSizer",
+    ];
+    let offending: Vec<_> = fingerprint
+        .tokens
+        .iter()
+        .filter(|token| sizer_terms.iter().any(|term| token.contains(term)))
+        .collect();
+    assert!(
+        offending.is_empty(),
+        "policy_fingerprint must not include the request sizer: {offending:?}"
     );
 }
 

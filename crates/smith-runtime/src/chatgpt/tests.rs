@@ -13,6 +13,8 @@ use smith_config::credential::{CredentialEnrollmentBackend, KeychainError};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod image_cache;
+
 #[derive(Debug, Default)]
 struct MemoryEnrollment {
     value: Mutex<Option<Secret>>,
