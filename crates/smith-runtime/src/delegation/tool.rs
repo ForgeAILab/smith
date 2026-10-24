@@ -243,9 +243,9 @@ fn wait_status_json(
         if status.state == ChildState::Running {
             object.remove("result");
             let note = if monitor.is_some() {
-                "This call returned immediately. Continue independent work or end your turn to park. You will wake automatically when the child completes or the armed deadline expires. No polling is needed; the timer fires only once."
+                "This call returned immediately. The child's outcome, or a notice that the armed deadline expired, will arrive as a host message in a later turn; the deadline fires once. Do any independent work, then end your response. Do not predict, announce, or write the outcome yourself."
             } else {
-                "This call returned immediately and no deadline is armed. Continue independent work or end your turn to park. You will wake automatically when the child completes. No polling is needed."
+                "This call returned immediately and no deadline is armed. The child's outcome will arrive as a host message in a later turn. Do any independent work, then end your response. Do not predict, announce, or write the outcome yourself."
             };
             object.insert("note".to_owned(), Value::String(note.to_owned()));
         }

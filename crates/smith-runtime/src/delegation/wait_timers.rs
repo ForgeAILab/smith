@@ -223,7 +223,7 @@ impl AgentWaitTimers {
         }
         let input = InternalTurnInput::new(
             format!(
-                "The single-use agent wait deadline elapsed. These children are still running:\n{}\nCompletion will wake you automatically. Continue independent work or end your turn to park. Re-arm wait only if you need another deadline; inspect or stop a child only when useful. No partial child output is included.",
+                "The single-use agent wait deadline elapsed. These children are still running:\n{}\nEach child's outcome will arrive as a host message in a later turn. Do any independent work, then end your response; do not predict, announce, or write an outcome yourself. Arm wait again only if you need another deadline; inspect or stop a child only when useful. No partial child output is included.",
                 Value::Array(expired.clone())
             ),
             InternalTurnSource {

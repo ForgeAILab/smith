@@ -192,8 +192,9 @@ The numeric bounds and zero meanings are:
 `agent.wait` returns immediately, arming a single-use timer for a running child.
 It reports `armed`, `wake_after_ms`, `deadline` (Unix milliseconds), and `clamped`.
 The default is five minutes; positive durations have no minimum and are clamped
-to the configured maximum. Zero only checks status. Re-arming replaces the timer.
-End your turn to park: completion or expiry wakes you automatically. The panel
+to the configured maximum. Zero only checks status, including an armed timer.
+Re-arming replaces the timer. Completion or expiry starts a later turn
+automatically. The panel
 shows `monitor` with the wake time. Timers never repeat, survive restart, or
 extend headless process life; shutdown cancels them.
 
