@@ -1,5 +1,6 @@
 //! Compaction route selection and persistent setting preflight.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -11,10 +12,14 @@ use smith_runtime::model_catalog::runtime_catalog_source;
 use super::preflight_request;
 use crate::cli::Selection;
 
+/// `env` is the environment the running session was resolved from. Reading
+/// the process environment here instead would let an injected resolution and
+/// this preflight disagree, for example on an unrelated `SMITH_*` variable.
 pub(crate) fn prepare_compaction_change<'a>(
     host: &'a HostSession,
     project: &'a std::path::Path,
     selection: &'a Selection,
+    env: BTreeMap<String, String>,
     catalog: Arc<smith_config::catalog::CatalogSnapshot>,
     action: smith_client::commands::CompactAction,
 ) -> futures_util::future::BoxFuture<
@@ -22,7 +27,7 @@ pub(crate) fn prepare_compaction_change<'a>(
     Result<(smith_config::user_config::CommittedConfigEdit, String)>,
 > {
     Box::pin(prepare_compaction_change_inner(
-        host, project, selection, catalog, action,
+        host, project, selection, env, catalog, action,
     ))
 }
 
@@ -30,6 +35,7 @@ async fn prepare_compaction_change_inner(
     host: &HostSession,
     project: &std::path::Path,
     selection: &Selection,
+    env: BTreeMap<String, String>,
     catalog: Arc<smith_config::catalog::CatalogSnapshot>,
     action: smith_client::commands::CompactAction,
 ) -> Result<(smith_config::user_config::CommittedConfigEdit, String)> {
@@ -51,7 +57,7 @@ async fn prepare_compaction_change_inner(
     let edit = prepare_compaction_edit(&host.runtime().policy().user_dir, &setting)?;
     let mut request = smith_config::resolve::ResolveRequest::new(project)
         .with_known_modules(crate::modules::known_modules())
-        .with_env(std::env::vars())
+        .with_env(env)
         .with_cli(selection.overrides())
         .with_session(selection.session_overrides())
         .with_catalog(catalog.clone());

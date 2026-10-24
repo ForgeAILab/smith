@@ -72,12 +72,24 @@ pub enum IdleCompactionOutcome {
     Completed,
     /// The one attempt completed without a new summary (ineligible/fallback).
     NoSummary,
-    /// A real user/internal turn or another operation won the final boundary.
+    /// Runtime refused the boundary: a user/internal turn, recovery, or
+    /// another operation owned the session.
     Busy,
     /// Shutdown/cancellation won the final boundary.
     Shutdown,
     /// Persistence or another non-retryable operation failed.
     Failed,
+    /// Manual only: this idle interval's attempt already reached Runtime,
+    /// which admits one attempt until the next turn starts.
+    AlreadyAttempted,
+    /// Manual only: a parent turn or cache operation was still running, so
+    /// nothing was attempted.
+    NotIdle,
+    /// Manual only: the controller missed Runtime events in this process and
+    /// cannot prove a safe boundary until the session is resumed.
+    EventGap,
+    /// Manual only: another manual request was already queued.
+    RequestPending,
 }
 
 /// Provenance for one actual provider counter in a synthetic attempt.
@@ -229,6 +241,10 @@ struct ControllerState {
     parent_idle_interval: u64,
     boundary_evaluated: bool,
     event_gap: bool,
+    /// Interval whose attempt reached Runtime's in-memory once-per-interval
+    /// gate in this process. Unlike the durable gate, it does not survive a
+    /// restart, and only a new turn clears it.
+    runtime_attempted_interval: Option<String>,
     provider_rate_limits: Option<RateLimitSnapshot>,
     goal_remaining_tokens: Option<u64>,
 }
@@ -538,7 +554,7 @@ impl CacheLifecycleController {
                 reply,
             })
             .map_err(|error| match error {
-                mpsc::error::TrySendError::Full(_) => IdleCompactionOutcome::Busy,
+                mpsc::error::TrySendError::Full(_) => IdleCompactionOutcome::RequestPending,
                 mpsc::error::TrySendError::Closed(_) => IdleCompactionOutcome::Shutdown,
             })?;
         Ok(receiver)

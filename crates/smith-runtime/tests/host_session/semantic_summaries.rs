@@ -270,9 +270,46 @@ async fn default_persisted_sessions_compact_once_after_inactivity() {
         host.session().snapshot().extension_state["harness.semantic_summary"].value["summary"],
         "IDLE_SUMMARY"
     );
-    assert_eq!(host.compact().await.unwrap(), IdleCompactionOutcome::Busy);
+    assert_eq!(
+        host.compact().await.unwrap(),
+        IdleCompactionOutcome::AlreadyAttempted
+    );
     assert_eq!(provider.requests().len(), 5);
+    let session = host.session().id().clone();
     host.shutdown().await.expect("shutdown");
+
+    // The durable gate keeps the resumed automatic timer from spending again.
+    let resumed_provider = Arc::new(FakeProvider::text_reply("unused"));
+    let mut resume = fixture.request(HostSurface::Headless).resume(session);
+    resume.runtime.clock = Some(clock.clone());
+    resume.runtime.provider = Some(resumed_provider.clone());
+    let resumed = start(resume).await.expect("resume compacted session");
+    clock.advance(10_000);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        resumed_provider.requests().is_empty(),
+        "the resumed idle timer stays gated"
+    );
+    // An explicit request may retry after a restart, but the committed
+    // summary already covers this history: nothing failed and nothing is
+    // replaced.
+    assert_eq!(
+        resumed.compact().await.unwrap(),
+        IdleCompactionOutcome::NoSummary
+    );
+    assert!(resumed_provider.requests().is_empty());
+    assert_eq!(
+        resumed
+            .cache_lifecycle()
+            .unwrap()
+            .idle_compaction_reason
+            .as_deref(),
+        Some("not_eligible")
+    );
+    let capsule = resumed.resume_capsule().expect("capsule");
+    let summary = capsule.semantic_summary.expect("summary projection kept");
+    assert!(summary.provenance.summary_artifact.is_some());
+    resumed.shutdown().await.expect("resumed shutdown");
 }
 
 #[tokio::test]
@@ -318,6 +355,14 @@ async fn manual_compaction_bypasses_the_automatic_timer_and_persists_for_resume(
             .run(UserInput::text(format!("request {index}")))
             .await
             .expect("ordinary turn");
+        if index == 0 {
+            // Too little history is a no-op, not a failure.
+            assert_eq!(
+                host.compact().await.unwrap(),
+                IdleCompactionOutcome::NoSummary
+            );
+            assert!(host.resume_capsule().unwrap().semantic_summary.is_none());
+        }
     }
     assert_eq!(
         provider.requests().len(),
@@ -331,7 +376,10 @@ async fn manual_compaction_bypasses_the_automatic_timer_and_persists_for_resume(
     );
     assert_eq!(provider.requests().len(), 5);
     assert_eq!(host.session().history(), original);
-    assert_eq!(host.compact().await.unwrap(), IdleCompactionOutcome::Busy);
+    assert_eq!(
+        host.compact().await.unwrap(),
+        IdleCompactionOutcome::AlreadyAttempted
+    );
     assert_eq!(
         provider.requests().len(),
         5,
@@ -365,9 +413,14 @@ async fn manual_compaction_bypasses_the_automatic_timer_and_persists_for_resume(
         resumed.session().snapshot().extension_state["harness.semantic_summary"].value["summary"],
         "MANUAL_SUMMARY"
     );
+    // A resumed process may retry, and finds nothing new to summarize.
     assert_eq!(
         resumed.compact().await.unwrap(),
-        IdleCompactionOutcome::Busy
+        IdleCompactionOutcome::NoSummary
+    );
+    assert_eq!(
+        resumed.session().snapshot().extension_state["harness.semantic_summary"].value["summary"],
+        "MANUAL_SUMMARY"
     );
     resumed.shutdown().await.expect("resumed shutdown");
 }
@@ -407,9 +460,38 @@ async fn failed_manual_compaction_preserves_history_and_does_not_retry() {
             .extension_state
             .contains_key("harness.semantic_summary")
     );
-    assert_eq!(host.compact().await.unwrap(), IdleCompactionOutcome::Busy);
+    assert_eq!(
+        host.compact().await.unwrap(),
+        IdleCompactionOutcome::AlreadyAttempted
+    );
     assert_eq!(provider.requests().len(), 5);
+    let session = host.session().id().clone();
     host.shutdown().await.expect("shutdown");
+
+    // After a restart Runtime's in-memory gate is gone, so an explicit
+    // request retries the failed interval and the summary now commits.
+    let resumed_provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![compaction_reply("RETRIED_SUMMARY", 100)],
+    ));
+    let mut resume = fixture.request(HostSurface::Headless).resume(session);
+    resume.runtime.provider = Some(resumed_provider.clone());
+    let resumed = start(resume).await.expect("resume failed session");
+    assert_eq!(
+        resumed.compact().await.unwrap(),
+        IdleCompactionOutcome::Completed
+    );
+    assert_eq!(resumed_provider.requests().len(), 1);
+    assert_eq!(
+        resumed.session().snapshot().extension_state["harness.semantic_summary"].value["summary"],
+        "RETRIED_SUMMARY"
+    );
+    assert_eq!(
+        resumed.compact().await.unwrap(),
+        IdleCompactionOutcome::AlreadyAttempted
+    );
+    resumed.shutdown().await.expect("resumed shutdown");
 }
 
 #[tokio::test]

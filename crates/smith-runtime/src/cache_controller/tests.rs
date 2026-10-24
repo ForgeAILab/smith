@@ -509,3 +509,154 @@ fn duplicate_and_out_of_order_events_do_not_mutate_the_capsule_projection() {
     ));
     assert_eq!(capsule.snapshot(), accepted);
 }
+
+#[test]
+fn manual_refusals_name_each_suppression_cause() {
+    use crate::cache_lifecycle::CompactionSuppressionReason as Reason;
+
+    let refusal = |reason: Option<Reason>, event_gap: bool| {
+        let mut state = ControllerState {
+            event_gap,
+            ..ControllerState::default()
+        };
+        state.snapshot.idle_compaction_decision = reason.map(|reason| IdleCompactionDecision {
+            disposition: IdleCompactionDisposition::Suppressed,
+            reason: Some(reason),
+            purpose: agent_runtime_core::provider::ProviderAttemptPurpose::IdleCompaction,
+        });
+        manual_refusal(&state)
+    };
+    assert_eq!(
+        refusal(Some(Reason::UnsafeBoundary), false),
+        IdleCompactionOutcome::NotIdle
+    );
+    assert_eq!(
+        refusal(Some(Reason::UnsafeBoundary), true),
+        IdleCompactionOutcome::EventGap
+    );
+    assert_eq!(
+        refusal(Some(Reason::Shutdown), true),
+        IdleCompactionOutcome::Shutdown
+    );
+    assert_eq!(
+        refusal(Some(Reason::LifecycleInactive), false),
+        IdleCompactionOutcome::Shutdown
+    );
+    assert_eq!(
+        refusal(Some(Reason::NotDue), false),
+        IdleCompactionOutcome::NoSummary
+    );
+    assert_eq!(
+        refusal(Some(Reason::AlreadyAttempted), false),
+        IdleCompactionOutcome::AlreadyAttempted
+    );
+    assert_eq!(refusal(None, false), IdleCompactionOutcome::Failed);
+}
+
+#[derive(Debug)]
+struct UnusedArtifacts;
+
+#[async_trait::async_trait]
+impl ArtifactStore for UnusedArtifacts {
+    async fn put(
+        &self,
+        _: ArtifactWrite,
+    ) -> Result<
+        agent_runtime_core::artifact::ArtifactRef,
+        agent_runtime_core::artifact::ArtifactError,
+    > {
+        unreachable!("a refused manual compaction writes no artifact")
+    }
+
+    async fn read(
+        &self,
+        _: agent_runtime_core::artifact::ArtifactRead,
+    ) -> Result<
+        agent_runtime_core::artifact::ArtifactChunk,
+        agent_runtime_core::artifact::ArtifactError,
+    > {
+        unreachable!("a refused manual compaction reads no artifact")
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn manual_compaction_bypasses_only_a_gate_runtime_has_not_consumed() {
+    use agent_runtime::provider::fake::FakeProvider;
+    use agent_runtime::runtime::{RuntimeBuilder, StartSession};
+    use agent_runtime_core::provider::ModelId;
+    use agent_runtime_testkit::ManualClock;
+
+    let clock = ManualClock::shared(0);
+    let runtime = RuntimeBuilder::new(ModelId::new("fake"))
+        .model_profile(agent_runtime_testkit::scenarios::fake_model_profile())
+        .provider(Arc::new(FakeProvider::text_reply("unused")))
+        .clock(clock.clone())
+        .build()
+        .expect("runtime builds");
+    let session = runtime
+        .start_session(StartSession::new())
+        .await
+        .expect("session starts");
+    let capsule = ResumeCapsuleSlot::new(session.id().clone(), clock.now());
+    let config = test_config(CacheMaintenancePolicy::default());
+    let clock: Arc<dyn Clock> = clock;
+    let cancel = Cancellation::new();
+    let consumed_state = |runtime_attempted: bool, event_gap: bool| {
+        let mut state = ControllerState {
+            last_meaningful_activity_at: Some(Timestamp(0)),
+            // A turn is still running, so the idle gate refuses admission
+            // before any persistence or Runtime call.
+            parent_turn_active: true,
+            event_gap,
+            runtime_attempted_interval: runtime_attempted.then(|| "root-turn:1".to_owned()),
+            ..ControllerState::default()
+        };
+        state.snapshot.idle_compaction.interval_id = Some("root-turn:1".to_owned());
+        state.snapshot.idle_compaction.attempted = true;
+        Arc::new(Mutex::new(state))
+    };
+    let run = |state: Arc<Mutex<ControllerState>>| {
+        let (session, config, clock, capsule, cancel) =
+            (&session, &config, &clock, &capsule, &cancel);
+        async move {
+            let outcome = run_manual_compaction(
+                session,
+                config,
+                clock,
+                None,
+                Some(capsule),
+                Some(&UnusedArtifacts),
+                &state,
+                cancel,
+            )
+            .await;
+            let attempted = state
+                .lock()
+                .expect("cache controller state poisoned")
+                .snapshot
+                .idle_compaction
+                .attempted;
+            (outcome, attempted)
+        }
+    };
+
+    // Runtime already holds this interval's attempt: refuse without a call.
+    assert_eq!(
+        run(consumed_state(true, false)).await,
+        (IdleCompactionOutcome::AlreadyAttempted, true)
+    );
+    // A durable gate from an earlier process is bypassed, and restored when
+    // the request is not admitted, so automatic compaction stays gated.
+    assert_eq!(
+        run(consumed_state(false, false)).await,
+        (IdleCompactionOutcome::NotIdle, true)
+    );
+    assert_eq!(
+        run(consumed_state(false, true)).await,
+        (IdleCompactionOutcome::EventGap, true)
+    );
+    assert!(
+        !capsule.snapshot().cache.idle_compaction_attempted,
+        "a refused request persists no attempt marker"
+    );
+}

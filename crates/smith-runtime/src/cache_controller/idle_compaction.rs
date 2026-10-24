@@ -4,6 +4,7 @@ use super::synthetic_projection::{
     artifact_sensitivity, counter_provenance, push_synthetic_attempt, summary_usage,
 };
 use super::*;
+use crate::cache_lifecycle::CompactionSuppressionReason;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_manual_compaction(
@@ -22,17 +23,29 @@ pub(super) async fn run_manual_compaction(
     if config.semantic_summary_model.is_none() || capsule.is_none() || artifacts.is_none() {
         return IdleCompactionOutcome::Failed;
     }
-    {
-        let state = state.lock().expect("cache controller state poisoned");
-        if state.snapshot.idle_compaction.attempted {
-            return IdleCompactionOutcome::Busy;
-        }
-        if state.snapshot.idle_compaction.interval_id.is_none() {
+    let bypassed_gate = {
+        let mut state = state.lock().expect("cache controller state poisoned");
+        let Some(interval_id) = state.snapshot.idle_compaction.interval_id.clone() else {
             return IdleCompactionOutcome::NoSummary;
+        };
+        if state.snapshot.idle_compaction.attempted {
+            // Runtime keeps its own once-per-interval gate in memory, and only
+            // a new turn clears it; another call would just be refused.
+            if state.runtime_attempted_interval.as_deref() == Some(interval_id.as_str()) {
+                return IdleCompactionOutcome::AlreadyAttempted;
+            }
+            // The durable gate was consumed by an earlier process or by an
+            // attempt Runtime refused before admission. An explicit request
+            // may retry; automatic compaction keeps the gate (restored below
+            // when this request is not admitted either).
+            state.snapshot.idle_compaction.attempted = false;
+            true
+        } else {
+            false
         }
-    }
+    };
     // An explicit request bypasses the inactivity timer and automatic opt-out,
-    // while retaining safe-boundary, persistence, and once-only gates.
+    // while retaining safe-boundary and persistence gates.
     let mut manual_config = config.clone();
     manual_config.policy.idle_compaction = true;
     manual_config.policy.inactivity_limit_ms = 0;
@@ -47,21 +60,47 @@ pub(super) async fn run_manual_compaction(
         cancel,
     )
     .await;
-    let state = state.lock().expect("cache controller state poisoned");
-    if state.snapshot.idle_compaction.attempted {
-        let outcome = state
-            .snapshot
-            .idle_compaction_outcome
-            .unwrap_or(IdleCompactionOutcome::Failed);
-        if outcome == IdleCompactionOutcome::NoSummary
-            && state.snapshot.idle_compaction_reason.as_deref() != Some("not_eligible")
-        {
-            IdleCompactionOutcome::Failed
-        } else {
-            outcome
+    let mut state = state.lock().expect("cache controller state poisoned");
+    if !state.snapshot.idle_compaction.attempted {
+        if bypassed_gate {
+            state.snapshot.idle_compaction.attempted = true;
         }
+        return manual_refusal(&state);
+    }
+    let outcome = state
+        .snapshot
+        .idle_compaction_outcome
+        .unwrap_or(IdleCompactionOutcome::Failed);
+    if outcome == IdleCompactionOutcome::NoSummary
+        && state.snapshot.idle_compaction_reason.as_deref() != Some("not_eligible")
+    {
+        IdleCompactionOutcome::Failed
     } else {
-        IdleCompactionOutcome::Busy
+        outcome
+    }
+}
+
+/// Names why the idle gate did not admit a manual request.
+pub(super) fn manual_refusal(state: &ControllerState) -> IdleCompactionOutcome {
+    let reason = state
+        .snapshot
+        .idle_compaction_decision
+        .and_then(|decision| decision.reason);
+    match reason {
+        Some(
+            CompactionSuppressionReason::Shutdown | CompactionSuppressionReason::LifecycleInactive,
+        ) => IdleCompactionOutcome::Shutdown,
+        // An event gap never clears in this process, so name it first.
+        Some(CompactionSuppressionReason::UnsafeBoundary) if state.event_gap => {
+            IdleCompactionOutcome::EventGap
+        }
+        Some(CompactionSuppressionReason::UnsafeBoundary) => IdleCompactionOutcome::NotIdle,
+        // No recorded parent activity yet, so there is nothing to summarize.
+        Some(CompactionSuppressionReason::NotDue) => IdleCompactionOutcome::NoSummary,
+        Some(CompactionSuppressionReason::AlreadyAttempted) => {
+            IdleCompactionOutcome::AlreadyAttempted
+        }
+        Some(CompactionSuppressionReason::Disabled) | None => IdleCompactionOutcome::Failed,
     }
 }
 
@@ -174,7 +213,16 @@ pub(super) async fn run_idle_compaction(
         return;
     }
 
-    let admission = match session.try_idle_semantic_compaction().await {
+    let admission = session.try_idle_semantic_compaction().await;
+    // Runtime marks its own gate before any result other than Busy (an error
+    // is treated the same), so a manual retry in this interval cannot reach it.
+    if !matches!(admission, Ok(SemanticIdleCompactionAdmission::Busy)) {
+        state
+            .lock()
+            .expect("cache controller state poisoned")
+            .runtime_attempted_interval = Some(interval_id.clone());
+    }
+    let admission = match admission {
         Ok(admission) => admission,
         Err(_) => {
             let reason = "runtime_error";
@@ -290,6 +338,27 @@ pub(super) async fn run_idle_compaction(
                 summary,
             )
             .await;
+        }
+        SemanticIdleCompactionAdmission::Accepted {
+            summary: None,
+            fallback_reason: None,
+            usage,
+        } => {
+            // Runtime found nothing new to summarize: too few turns, or the
+            // committed summary already covers the history it would omit.
+            // Nothing failed, so the previous summary projection stays.
+            record_idle_outcome(
+                state,
+                IdleOutcomeRecord {
+                    outcome: IdleCompactionOutcome::NoSummary,
+                    reason: Some("not_eligible".to_owned()),
+                    started_at,
+                    finished_at: clock.now(),
+                    model: None,
+                    revision: None,
+                    usage: &usage,
+                },
+            );
         }
         SemanticIdleCompactionAdmission::Accepted {
             summary: None,

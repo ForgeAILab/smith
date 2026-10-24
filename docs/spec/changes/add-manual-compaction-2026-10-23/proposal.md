@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-23T00:00:00-04:00
-updated_at: 2026-10-23T09:47:45Z
+updated_at: 2026-10-24T10:33:43Z
 ---
 
 # Proposal: Add manual conversation compaction
@@ -20,6 +20,10 @@ older conversation history while retaining the recent turns.
 - Report completion, insufficient eligible history, an already attempted or
   busy interval, shutdown, or failure without submitting a user/model turn.
 - Preserve original canonical history and the last valid summary on failure.
+- Follow-up (2026-10-24): name each refusal cause and when retrying works;
+  let an explicit request retry a durable gate the runtime has not consumed
+  in this process (for example after a restart); report already-covered
+  history as no eligible history rather than a failure.
 
 Automatic summary enablement restores behavior already required by the
 runtime-integration and prompt-cache specs and is a separate bug fix.
