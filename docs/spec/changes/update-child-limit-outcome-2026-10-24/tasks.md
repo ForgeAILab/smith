@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-24T12:06:31Z
-updated_at: 2026-10-24T12:06:31Z
-completed_at:
+updated_at: 2026-10-24T13:06:37Z
+completed_at: 2026-10-24T13:06:37Z
 ---
 
 ## 1. Implementation
@@ -14,4 +14,5 @@ completed_at:
 
 - [x] 2.1 Cover automatic delivery and `wait` of a limit-stopped child end to end, the TUI row and notice, the capsule projection, the timeline line, and resume of a journal written at event schema 16.
 - [x] 2.2 Regenerate headless fixtures (schema 16 → 17 only) and run targeted tests, fmt, and Clippy.
-- [ ] 2.3 Run the full Smith gate and CI.
+- [x] 2.3 Run the full Smith gate (3,314 passed, 0 failed) and CI (run
+  40094931229).
