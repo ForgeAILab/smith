@@ -60,6 +60,7 @@ impl App {
             turn_summary: None,
             turn_summary_revision: None,
             turn_block_revision: 0,
+            fallback_origin: None,
             turn_usage: crate::status::TurnUsage::default(),
             last_ctrl_c: None,
             last_event_seq: None,

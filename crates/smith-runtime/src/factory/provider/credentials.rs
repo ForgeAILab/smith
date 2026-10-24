@@ -84,7 +84,7 @@ pub(in crate::factory) fn active_credential_reference(request: &RuntimeRequest) 
 }
 
 /// Builds the pool for this provider, or `None` when it declares one account.
-pub(super) fn credential_pool_for(request: &RuntimeRequest) -> Option<SharedPool> {
+pub(in crate::factory) fn credential_pool_for(request: &RuntimeRequest) -> Option<SharedPool> {
     if !request.config.provider.has_pool() {
         return None;
     }

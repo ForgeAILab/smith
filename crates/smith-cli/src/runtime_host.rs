@@ -452,6 +452,9 @@ async fn start_host_with_modules(
     // a single-credential provider gets no pool, no policy, and behaves
     // exactly as it did before pools existed.
     let accounts = ActiveAccounts::load(&resolution.layout.user_dir).await;
+    // Fallback models on another pooled provider start on that provider's
+    // remembered account too.
+    runtime.active_accounts = Some(accounts.clone());
     let mut credential_pool = None;
     let mut rotations = None;
     let mut headless_rotation = None;

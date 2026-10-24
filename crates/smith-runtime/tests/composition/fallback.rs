@@ -198,3 +198,69 @@ async fn unavailable_fallback_credential_source_advances_without_network_io() {
         }
     )));
 }
+
+/// Records which environment credentials were asked for and resolves none,
+/// so a fallback attempt reads its credential and stops without network IO.
+#[derive(Debug, Default)]
+struct RecordingEnvironment {
+    names: Mutex<Vec<String>>,
+}
+
+impl Environment for RecordingEnvironment {
+    fn value(&self, name: &str) -> Option<Secret> {
+        self.names
+            .lock()
+            .expect("recorded names poisoned")
+            .push(name.to_owned());
+        None
+    }
+}
+
+/// Runs one turn whose primary never responds, so the turn moves to a fallback
+/// on a pooled provider, and returns the credentials that fallback asked for.
+async fn pooled_fallback_credential_reads(
+    accounts: Option<smith_runtime::pool_state::ActiveAccounts>,
+) -> Vec<String> {
+    let config = FALLBACK_CONFIG.replace(
+        "[providers.backup]\nkind = \"fake\"",
+        "[providers.backup]\nkind = \"openai-compatible\"\nbase_url = \"https://never.example.test/v1\"\ncredentials = [\"env:BACKUP_FIRST\", \"env:BACKUP_SECOND\"]",
+    );
+    let fixture = Fixture::new(&config);
+    let environment = Arc::new(RecordingEnvironment::default());
+    let mut req = request(&fixture, HostSurface::Headless);
+    req.credentials =
+        Some(CredentialResolver::new("/unused").with_environment(environment.clone()));
+    req.provider = Some(Arc::new(NeverRespond));
+    req.active_accounts = accounts;
+    let runtime = factory::build_request(req).await.unwrap();
+    let session = runtime
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .unwrap();
+    // The only fallback cannot authenticate, so the turn fails; what matters
+    // is which account it tried.
+    let _ = session.run(UserInput::text("hello")).await;
+    environment
+        .names
+        .lock()
+        .expect("recorded names poisoned")
+        .clone()
+}
+
+#[tokio::test]
+async fn a_fallback_on_another_pooled_provider_starts_on_its_remembered_account() {
+    let mut accounts = smith_runtime::pool_state::ActiveAccounts::ephemeral();
+    accounts.remember("backup", "env:BACKUP_SECOND");
+    let remembered = pooled_fallback_credential_reads(Some(accounts)).await;
+    assert!(
+        remembered.iter().all(|name| name == "BACKUP_SECOND") && !remembered.is_empty(),
+        "the remembered account authenticates the fallback: {remembered:?}"
+    );
+
+    let fresh = pooled_fallback_credential_reads(None).await;
+    assert!(
+        fresh.iter().all(|name| name == "BACKUP_FIRST") && !fresh.is_empty(),
+        "with nothing remembered the pool starts on its first account: {fresh:?}"
+    );
+}

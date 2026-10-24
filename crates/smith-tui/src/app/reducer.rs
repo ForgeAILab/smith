@@ -413,10 +413,15 @@ impl App {
                 }
             }
             RuntimeEvent::ModelFallback {
+                from_provider,
+                from_model,
                 to_provider,
                 to_model,
                 ..
             } => {
+                // A chain of fallbacks keeps the binding the turn started on.
+                self.fallback_origin
+                    .get_or_insert_with(|| (from_provider.clone(), from_model.to_string()));
                 self.status
                     .switch_model(Some(to_provider.clone()), to_model.as_str());
             }
@@ -427,7 +432,20 @@ impl App {
                     || self.status.model != model.as_str();
                 let had_provider = self.status.provider.is_some();
                 if changed {
-                    if had_provider {
+                    let returning =
+                        self.fallback_origin
+                            .take()
+                            .is_some_and(|(from, from_model)| {
+                                from == provider.as_str() && from_model == model.as_str()
+                            });
+                    if returning {
+                        // A later turn starts on the profile's own model again,
+                        // whose cache was never this session's to lose.
+                        self.transcript.push_notice(
+                            NoticeKind::Provider,
+                            format!("back on {provider}/{model} after the fallback"),
+                        );
+                    } else if had_provider {
                         self.transcript.push_notice(
                             NoticeKind::Provider,
                             format!("changed to {provider}/{model} · prior cache not transferable"),

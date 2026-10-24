@@ -941,6 +941,10 @@ pub struct App {
     /// The turn's last block, rather than a later local result or notice.
     pub(super) turn_summary_revision: Option<u64>,
     pub(super) turn_block_revision: u64,
+    /// The provider and model a model fallback left, while the status shows
+    /// the fallback's binding. A later turn that starts on that binding again
+    /// is a return from the fallback, not a model change.
+    pub(super) fallback_origin: Option<(String, String)>,
     /// Client-neutral accounting for the active root turn's output flow.
     /// Retained after completion until the next turn or session starts.
     pub turn_usage: crate::status::TurnUsage,

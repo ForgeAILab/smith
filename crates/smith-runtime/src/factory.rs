@@ -371,6 +371,12 @@ pub struct RuntimeRequest {
     /// meters, and to persist a switch. Absent, the factory builds its own and
     /// the choice lasts only for the session.
     pub credential_pool: Option<SharedPool>,
+    /// Remembered active accounts, one per provider.
+    ///
+    /// A fallback model on another pooled provider starts on the account the
+    /// user last used there, as the primary route does through
+    /// `credential_pool`. Absent, such a route starts on its first account.
+    pub active_accounts: Option<crate::pool_state::ActiveAccounts>,
     /// Trusted in-process Rust contributions registered in addition to Smith's
     /// built-ins. This is an embedding API, not a sandboxed plugin surface.
     pub trusted_native: TrustedNativeModule,
@@ -484,6 +490,7 @@ impl RuntimeRequest {
             interaction: None,
             rotation: None,
             credential_pool: None,
+            active_accounts: None,
             trusted_native: TrustedNativeModule::default(),
             modules: smith_module::ModuleComposition::default(),
             mcp: None,

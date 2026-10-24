@@ -150,6 +150,27 @@ impl Provider for DeferredProvider {
     }
 }
 
+/// A pool for a fallback route on another provider, started on the account
+/// the user last used there. Without a remembered account the route builds
+/// its own pool from the first declared member.
+fn remembered_pool(
+    route: &RuntimeRequest,
+    accounts: Option<&crate::pool_state::ActiveAccounts>,
+) -> Option<SharedPool> {
+    let accounts = accounts?;
+    let pool = provider::credential_pool_for(route)?;
+    let references = route
+        .config
+        .provider
+        .credentials
+        .iter()
+        .map(|reference| reference.value.clone())
+        .collect::<Vec<_>>();
+    let position = accounts.position_in(&route.config.provider.name.value, &references)?;
+    pool.write(|pool| pool.set_active(position));
+    Some(pool)
+}
+
 pub(super) fn prepare(
     request: &RuntimeRequest,
 ) -> futures_util::future::BoxFuture<'_, Result<PreparedFallbacks, FactoryError>> {
@@ -175,10 +196,12 @@ async fn prepare_inner(request: &RuntimeRequest) -> Result<PreparedFallbacks, Fa
         route.clock = request.clock.clone();
         route.rotation = request.rotation.clone();
         route.defer_quota_rotation = true;
-        route.credential_pool = (route.config.provider.name.value
-            == request.config.provider.name.value)
-            .then(|| request.credential_pool.clone())
-            .flatten();
+        route.credential_pool =
+            if route.config.provider.name.value == request.config.provider.name.value {
+                request.credential_pool.clone()
+            } else {
+                remembered_pool(&route, request.active_accounts.as_ref())
+            };
         route.provider = request
             .fallback_providers
             .get(&(

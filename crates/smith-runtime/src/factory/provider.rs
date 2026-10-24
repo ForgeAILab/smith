@@ -12,7 +12,9 @@ pub(super) use children::{
     cache_endpoint_identity, prepare_advisor_route, prepare_child_profile_routes,
     prepare_vision_route,
 };
-pub(super) use credentials::{active_credential_reference, validate_pool_references};
+pub(super) use credentials::{
+    active_credential_reference, credential_pool_for, validate_pool_references,
+};
 pub(super) use resolution::prepare;
 pub(super) use resolution::prepare_metadata;
 

@@ -22,6 +22,63 @@ fn model_fallback_updates_the_visible_model_and_preserves_the_profile() {
 }
 
 #[test]
+fn the_turn_after_a_fallback_returns_to_the_profile_model_without_a_cache_warning() {
+    let mut app = app();
+    let resolved = |provider: &str, model: &str| {
+        event(RuntimeEvent::ModelProfileResolved {
+            provider: provider.into(),
+            model: ModelId::new(model),
+            profile: fingerprint("profile"),
+        })
+    };
+    app.apply(&resolved("first", "primary"));
+    app.apply(&event(RuntimeEvent::ModelFallback {
+        from_provider: "first".into(),
+        from_model: ModelId::new("primary"),
+        to_provider: "backup".into(),
+        to_model: ModelId::new("secondary"),
+        candidate_index: 1,
+        total_candidates: 2,
+        reason: smith_runtime::client::ModelFallbackReason::FirstResponseTimeout,
+        elapsed_ms: 30000,
+        first_response_timeout_ms: Some(30000),
+    }));
+    // The runtime resolves the fallback's profile right after switching.
+    app.apply(&resolved("backup", "secondary"));
+    // The next turn starts on the profile's own model again.
+    app.apply(&resolved("first", "primary"));
+
+    let notices = app
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::Notice { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        notices
+            .iter()
+            .any(|text| text == "back on first/primary after the fallback"),
+        "{notices:?}"
+    );
+    assert!(
+        !notices.iter().any(|text| text.contains("not transferable")),
+        "{notices:?}"
+    );
+    assert_eq!(app.status.provider.as_deref(), Some("first"));
+    assert_eq!(app.status.model, "primary");
+
+    // A real model change afterwards still warns about the cache.
+    app.apply(&resolved("other", "model"));
+    assert!(app.transcript.blocks().iter().any(|block| matches!(
+        block,
+        Block::Notice { text, .. } if text == "changed to other/model · prior cache not transferable"
+    )));
+}
+
+#[test]
 fn delegated_usage_from_a_live_child_stream_stays_separate_from_the_root_counters() {
     let mut app = app();
     app.apply(&event(RuntimeEvent::Usage {
