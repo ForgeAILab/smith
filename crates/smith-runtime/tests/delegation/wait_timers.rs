@@ -190,8 +190,14 @@ async fn zero_is_a_plain_status_check() {
     );
     f.advance(300_001).await;
     assert!(f.wakes("delegation.wait-timeout").is_empty());
-    f.wait(&child, 50).await;
-    assert_eq!(f.wait(&child, 0).await["armed"], false);
+    let armed = f.wait(&child, 50).await;
+    let status = f.wait(&child, 0).await;
+    assert_eq!(
+        status["armed"], true,
+        "a status check reports the earlier timer"
+    );
+    assert_eq!(status["deadline"], armed["deadline"]);
+    assert_eq!(status["wake_after_ms"], 50);
     assert_eq!(
         f.runtime
             .delegation()
