@@ -61,21 +61,19 @@ smith-tui = { path = "crates/smith-tui", version = "0.8.0" }
 # own 0.1.0, so the `git`/`rev` keys -- not the version -- are what identify
 # the dependency. Never relax them to a bare version requirement.
 #
-# This is Agent Runtime v0.7.0 with child-completion, session-journal,
-# malformed-tool-argument recovery, and retained child transcript fixes, plus
-# ordered model fallback with configurable first-response deadlines and a
-# distinct outcome for a child task that stops at a limit.
+# This is Agent Runtime v0.11.0, the merge commit of release PR #78 on
+# runtime `main`; the 0.7-line fixes Smith pinned before it all reached main.
 # Smith uses the opt-in flat semantic summary
 # (`RuntimeBuilder::semantic_summary`); LCM is not enabled.
-agent-runtime = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "046a942146efafb00f787e52f3df03ad90d67b4a", version = "=0.7.0" }
-agent-runtime-ability = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "046a942146efafb00f787e52f3df03ad90d67b4a", version = "=0.7.0" }
-agent-runtime-core = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "046a942146efafb00f787e52f3df03ad90d67b4a", version = "=0.7.0" }
+agent-runtime = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "9cdb356c45e87c3abc9e526f35e25540a64eb6dc", version = "=0.11.0" }
+agent-runtime-ability = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "9cdb356c45e87c3abc9e526f35e25540a64eb6dc", version = "=0.11.0" }
+agent-runtime-core = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "9cdb356c45e87c3abc9e526f35e25540a64eb6dc", version = "=0.11.0" }
 # The MCP client. `smith-runtime` adds the `http` transport on top of the
 # default `stdio` one; both land on the same `reqwest` Smith's own transport
 # uses, which is why the `reqwest` requirement below tracks `rmcp`'s.
-agent-runtime-mcp = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "046a942146efafb00f787e52f3df03ad90d67b4a", version = "=0.7.0" }
-agent-runtime-registry = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "046a942146efafb00f787e52f3df03ad90d67b4a", version = "=0.7.0" }
-agent-runtime-testkit = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "046a942146efafb00f787e52f3df03ad90d67b4a", version = "=0.7.0" }
+agent-runtime-mcp = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "9cdb356c45e87c3abc9e526f35e25540a64eb6dc", version = "=0.11.0" }
+agent-runtime-registry = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "9cdb356c45e87c3abc9e526f35e25540a64eb6dc", version = "=0.11.0" }
+agent-runtime-testkit = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "9cdb356c45e87c3abc9e526f35e25540a64eb6dc", version = "=0.11.0" }
 
 anyhow = "1"
 # Clipboard image capture for composer attachments. `arboard` reads the
