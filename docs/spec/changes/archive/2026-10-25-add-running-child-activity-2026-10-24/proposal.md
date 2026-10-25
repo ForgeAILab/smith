@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-24T12:19:37Z
-updated_at: 2026-10-24T12:19:37Z
+updated_at: 2026-10-25T07:44:59Z
 ---
 
 ## Why

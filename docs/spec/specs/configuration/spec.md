@@ -1154,10 +1154,10 @@ exact resolved plan/model budget), `max_maintenance_output_tokens: 1..=4096`,
 `keepalive_jitter_percent: 0..=50` (zero is deterministic). The wait default
 is `0..=300_000` milliseconds and the wait maximum is `1..=300_000`; their
 built-in defaults are 300,000 milliseconds, and the default MUST NOT exceed the
-maximum. `agent.wait.timeout_ms = 0` is an immediate status check; a requested
-timeout above the resolved maximum is rejected before waiting. When a wait
-reaches its foreground boundary, Smith returns a successful running result with
-`timed_out = true` and leaves the child running in the background for automatic
+maximum. `agent.wait.timeout_ms = 0` is an immediate status check that arms
+no timer; a requested timeout above the resolved maximum is clamped to it and
+reported as clamped. A wait on a running child returns immediately and arms a
+single-use wait timer; the child keeps running in the background for automatic
 terminal delivery.
 An unsupported provider SHALL remain usable for ordinary turns with cache
 status `unsupported`; it MUST NOT be made invalid solely because the requested
@@ -1758,12 +1758,13 @@ The resolved child-agent wait policy SHALL expose
 be `0..=300_000` and `1..=300_000` milliseconds respectively, with built-in
 defaults of 300,000 milliseconds for both values. The default SHALL NOT exceed
 the maximum. A zero default is an immediate status check when explicitly
-configured; omitted `agent.wait.timeout_ms` uses the resolved default
-foreground boundary.
+configured; omitted `agent.wait.timeout_ms` uses the resolved default wait
+timer duration, and a requested value above the maximum is clamped to it.
 
-The five-minute boundary limits only how long the parent model/tool call waits
-in the foreground. It MUST NOT grant a child lifetime, token, cancellation, or
-provider limit, and a timeout MUST leave the child running in the background.
+These values bound only the wait timer after which an idle parent is woken.
+They MUST NOT hold a parent tool call open, and MUST NOT grant a child
+lifetime, token, cancellation, or provider limit; timer expiry MUST leave the
+child running.
 
 #### Scenario: Default wait policy is five minutes
 
@@ -1772,13 +1773,13 @@ provider limit, and a timeout MUST leave the child running in the background.
 - **THEN** the default and maximum are each 300,000 milliseconds
 - **AND** the values retain built-in provenance
 
-#### Scenario: Repository narrows the foreground wait
+#### Scenario: Repository narrows the wait timer
 
 - **GIVEN** a profile sets `wait_max_timeout_ms = 10000` and a compatible
   default
 - **WHEN** Smith resolves the profile
-- **THEN** the configured value wins for the foreground wait only
-- **AND** it cannot stop or expire a child when the wait ends
+- **THEN** the configured value bounds the wait timer only
+- **AND** it cannot stop or expire a child when the timer fires
 
 ### Requirement: Layered command-provider declaration
 
@@ -2263,8 +2264,10 @@ configuration at the `vision` key before any credential or provider is
 constructed. This check SHALL run whatever the main model is. Whether the
 selection is used SHALL be decided when the runtime is composed, from the
 active model: it is used only while that model is text-only.
-`smith config explain vision` SHALL report the winner and every overridden
-source.
+Resolution SHALL keep three outcomes apart: unset, disabled by an explicit
+`false` (with that source), and a selection. `smith config explain vision`
+SHALL report the winner and every overridden source, and SHALL print `unset`
+or `disabled by <source>` when no model is selected.
 
 #### Scenario: Top-level model reference
 
@@ -2304,6 +2307,14 @@ source.
 - **AND** profile `glm` sets `vision = false`
 - **WHEN** profile `glm` starts
 - **THEN** no vision model is resolved
+- **AND** vision resolves as disabled, with the profile `glm` source
+
+#### Scenario: Vision left unset
+
+- **GIVEN** no `vision` key in any layer
+- **WHEN** `smith config explain vision` runs
+- **THEN** it reports `unset`
+- **AND** vision resolves as unset, which is distinct from disabled
 
 ### Requirement: Image window setting
 
@@ -2840,3 +2851,113 @@ project-controlled credential forwarding, endpoint changes, or model overrides.
 - **WHEN** Smith validates configuration
 - **THEN** it reports the offending key and source before scheduling refresh
 - **AND** no credential read or metadata request is triggered by that value
+
+### Requirement: Compaction defaults and model-specific inactivity
+
+Smith SHALL resolve optional `context.compaction.model` and
+`context.compaction.instructions` with ordinary configuration provenance.
+The model target SHALL accept a configured profile or `provider/model` and
+default to the conversation route. Model-specific
+`models."provider/model".cache.inactivity_limit_ms` SHALL use the existing
+inactivity bounds. Layer precedence SHALL apply, with model specificity
+breaking same-layer ties. These settings SHALL NOT claim to control provider
+cache retention.
+
+#### Scenario: A model overrides the shared cutoff
+
+- **WHEN** the selected model has an inactivity value in the same layer as the shared default
+- **THEN** Smith uses that model's value and exposes its actual source
+
+#### Scenario: A higher layer overrides a model default
+
+- **WHEN** a higher layer supplies a shared inactivity value
+- **THEN** that higher-layer value wins over a lower-layer model-specific value
+
+#### Scenario: Invalid settings are rejected before publication
+
+- **WHEN** a requested model route, instruction, or duration is invalid
+- **THEN** Smith rejects the candidate before provider execution or a configuration write
+
+### Requirement: Ordered model fallback within a profile
+
+Smith SHALL accept an optional `[profiles.<name>.fallback]` table whose
+`models` array contains ordered provider/model entries after the profile's
+primary `provider` and `model`. Each entry SHALL require a declared provider
+and model, and MAY override reasoning, context window, output request, and
+first-response timeout. The profile's instructions and authority policy SHALL
+remain the same for every candidate.
+
+#### Scenario: Cross-provider chain
+
+- **GIVEN** a profile selects `zai/glm-5.3` and lists ChatGPT and Anthropic model entries in `fallback.models`
+- **WHEN** Smith resolves the profile
+- **THEN** the primary remains first and the other bindings retain declaration order
+- **AND** each binding resolves its own model limits, capabilities, credential source, and reasoning dialect
+
+#### Scenario: No fallback configured
+
+- **WHEN** an existing profile has no fallback table
+- **THEN** it retains the current single-model retry and credential-rotation behavior
+
+#### Scenario: Candidate controls differ
+
+- **GIVEN** a fallback model requires different reasoning controls and a different named context window
+- **WHEN** its entry explicitly overrides those controls
+- **THEN** the candidate resolves using those values and its own catalog metadata
+- **AND** unsupported explicit controls fail preflight rather than being silently changed
+
+### Requirement: Configurable first-response budget
+
+Smith SHALL accept a positive `first_response_timeout_ms` in the profile's
+fallback table and an optional override on each fallback model entry. Omission
+SHALL add no latency cutoff. A configured budget SHALL apply to each logical
+provider request on that candidate, including retries and backoff, and SHALL
+remain bounded by the original turn deadline.
+
+#### Scenario: Explicit startup cutoff
+
+- **GIVEN** a profile enables fallbacks with `first_response_timeout_ms = 30000`
+- **WHEN** its primary has not started a meaningful response after 30 seconds
+- **THEN** the runtime applies the safe timeout fallback policy
+- **AND** retries or heartbeats cannot reset or satisfy the timer
+
+#### Scenario: Per-candidate cutoff
+
+- **GIVEN** the profile sets 30 seconds and one fallback entry sets 60 seconds
+- **WHEN** the runtime selects that entry
+- **THEN** its startup budget is 60 seconds, limited by the remaining turn deadline
+
+#### Scenario: Invalid timeout
+
+- **WHEN** a configured first-response timeout is zero, negative, or cannot be represented by the runtime
+- **THEN** preflight fails with the candidate/key and source location before provider I/O
+
+### Requirement: Explainable fallback inheritance and validation
+
+Fallback settings SHALL follow normal file/profile precedence and bounded
+profile inheritance. A higher-precedence model list SHALL replace the whole
+inherited list; an empty list SHALL disable fallback and its startup timer.
+Smith SHALL validate every candidate's metadata and credential-reference shape
+before provider I/O, retain source provenance, and reject duplicate bindings
+or installed-agent harness candidates. Secret-source acquisition MAY remain
+lazy until a candidate is selected.
+
+#### Scenario: Child profile disables the inherited chain
+
+- **GIVEN** `plan` extends `code`, which declares fallback models and a timeout
+- **WHEN** `plan` declares `fallback.models = []`
+- **THEN** the effective plan profile has no fallback or startup cutoff
+- **AND** config explanation identifies the inherited and winning sources
+
+#### Scenario: Invalid candidate
+
+- **WHEN** a fallback names an undeclared provider, unresolved model, duplicate binding, invalid explicit control, or `cli/...` harness
+- **THEN** preflight fails at the exact fallback entry with source provenance
+- **AND** no provider request is sent
+
+#### Scenario: Exact model selection
+
+- **GIVEN** a selected profile has a fallback chain
+- **WHEN** a CLI or session override explicitly selects a provider or model
+- **THEN** that explicit selection disables the profile chain until the profile is selected again
+- **AND** config explanation reports why fallback is inactive

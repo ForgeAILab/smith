@@ -3661,21 +3661,34 @@ existing file commands MUST retain name precedence, and `/skills use <name>
 - **THEN** `/rust-review` is discoverable with that description and its source
 - **AND** Tab completes the name without loading instructions or executing it
 
-#### Scenario: Activate without starting a model turn
+#### Scenario: Invoke a skill without task text
 
 - **GIVEN** an idle provider-backed session with an authorized `rust-review` skill
 - **WHEN** the user submits `/rust-review`
 - **THEN** Smith activates that exact skill before acknowledging success
-- **AND** the composer is ready for the next prompt
-- **AND** no provider request is issued
+- **AND** immediately starts an ordinary user turn with the verified skill
+  instructions as its prompt body
+- **AND** the invocation does not require a second user prompt
 
 #### Scenario: Invoke with a task
 
 - **GIVEN** an idle provider-backed session with an authorized `rust-review` skill
 - **WHEN** the user submits `/rust-review inspect these changes`
 - **THEN** Smith activates the skill before the task's first provider request
-- **AND** `inspect these changes` uses the ordinary prepared submission path
+- **AND** the prompt contains the verified skill instructions followed by a
+  blank line and `inspect these changes` through the ordinary prepared
+  submission path
 - **AND** typed history retains the invocation and attachments remain intact
+- **AND** only task text is parsed for composer references; the authored skill
+  instructions are preserved verbatim
+
+#### Scenario: Invoke an already active skill
+
+- **GIVEN** an idle provider-backed session where `rust-review` is already active
+- **WHEN** the user submits `/rust-review` or `/skills use rust-review`
+- **THEN** Smith verifies the selected skill and starts another user turn with
+  its instruction body
+- **AND** no duplicate active instruction fragment is appended to the session
 
 #### Scenario: A skill name collides with a command
 
@@ -3770,3 +3783,136 @@ lifecycle remains running. Provider-hidden content MUST NOT be fabricated.
 - **WHEN** time passes without additional visible events
 - **THEN** the view identifies the last observed activity and its progress age
 - **AND** it does not keep presenting a previous completed tool as active
+
+### Requirement: Compaction instructions and persistent controls
+
+Smith SHALL accept `/compact [instructions]` for an individual attempt and
+`/compact model`, `/compact instructions`, and `/compact idle` for persistent
+defaults. Setting commands SHALL run only at an idle boundary and SHALL
+preserve comments and unrelated user configuration through validated atomic
+publication. `default` SHALL remove the corresponding user-layer override.
+The active idle session SHALL adopt the committed selection safely.
+
+#### Scenario: A user customizes one summary
+
+- **WHEN** a user runs `/compact preserve the test results and next steps`
+- **THEN** those instructions apply only to that attempt and no config is written
+
+#### Scenario: A user changes the default summary model
+
+- **WHEN** a user runs `/compact model zai/glm-4.5-air`
+- **THEN** Smith validates and persists the default and applies it to subsequent compaction
+- **AND** canonical history and prior summary provenance remain recoverable
+
+#### Scenario: A user changes a model's idle cutoff
+
+- **WHEN** a user runs `/compact idle 15m`
+- **THEN** Smith persists 900000 milliseconds for the active provider/model
+- **AND** reports the effective value and its source
+
+### Requirement: Explicit conversation compaction command
+
+Smith SHALL expose `/compact` through the shared
+command registry. Running it without arguments SHALL request one
+protected semantic-compaction attempt at an idle session boundary. It SHALL
+reuse the existing summary policy, persistence, usage attribution, and
+safe-boundary admission, without submitting a conversational turn. An explicit
+request MAY retry an idle interval that already had an automatic or manual
+attempt, in this process or an earlier one; automatic idle compaction SHALL
+keep its once-per-interval gate. When compaction cannot run, Smith SHALL name
+the cause and when retrying can succeed.
+
+#### Scenario: A user compacts eligible history
+
+- **WHEN** an idle user runs `/compact` with eligible completed history
+- **THEN** Smith attempts semantic compaction and reports its outcome
+- **AND** recent canonical turns remain available under the existing retention policy
+- **AND** the command is discoverable in help, completion, and the command palette
+
+#### Scenario: Compaction cannot run
+
+- **WHEN** the session is busy, shutting down, or lacks eligible history
+- **THEN** Smith reports the condition without creating a conversation turn or automatically retrying
+- **AND** each cause has its own message: a running turn, a busy runtime, a pending request, missed session events, shutdown, or no eligible history
+- **AND** history that the committed summary already covers is reported as no eligible history, not as a failure, and leaves the previous summary in place
+
+#### Scenario: An explicit request retries within the interval
+
+- **WHEN** an earlier automatic or manual attempt in the current idle interval failed and the user runs `/compact` before another turn
+- **THEN** Smith makes a new attempt for that interval
+- **AND** a repeat with nothing new to summarize reports no eligible history and sends no summary request
+- **AND** the automatic idle timer still makes no further attempt in that interval
+
+#### Scenario: An explicit request retries after a restart
+
+- **WHEN** a resumed session's durable gate shows the interval was attempted in an earlier process and the user runs `/compact`
+- **THEN** Smith makes one new attempt for that interval
+- **AND** the resumed automatic idle timer still makes no attempt
+- **AND** a request that is refused at the boundary restores the gate, so automatic compaction stays gated
+
+#### Scenario: A summary attempt fails
+
+- **WHEN** manual semantic compaction fails
+- **THEN** Smith reports the failure and preserves original canonical history and the previously committed summary
+
+### Requirement: Wait-timeout continuations are visible
+
+Interactive and headless lifecycle output SHALL attribute a turn admitted by
+an expired wait timer to `delegation.wait-timeout`, distinct from
+`delegation.child-completion` and from user turns. The projection MUST NOT
+imply that the child stopped or finished when the timer fired.
+The delegated-work panel SHALL show a `monitor` tag and wake deadline for each
+armed child. The tag SHALL clear when the wake is admitted or cancelled and
+SHALL NOT be restored from historical tool results after restart.
+
+#### Scenario: Timer wakes the parent
+
+- **GIVEN** a `delegation.wait-timeout` turn is admitted
+- **WHEN** lifecycle and usage output are inspected
+- **THEN** the turn is attributed to `delegation.wait-timeout`
+- **AND** the child is still shown as running
+
+#### Scenario: Wait call no longer looks stalled
+
+- **GIVEN** the parent calls `agent.wait` on a running child
+- **WHEN** clients render the tool call
+- **THEN** the call completes immediately with the armed wake time
+- **AND** the session shows the parked state rather than an active tool call
+
+#### Scenario: Armed child is visible in the panel
+
+- **GIVEN** a running child has an armed wait timer
+- **WHEN** the delegated-work panel refreshes
+- **THEN** its row shows a `monitor` tag and the wake deadline
+- **AND** the tag clears after timer admission or cancellation
+
+### Requirement: Model fallback is visible and explainable
+
+Smith SHALL project canonical fallback decisions consistently to TUI and
+headless clients, including outgoing and incoming provider/model, ordered
+candidate position, reason, and elapsed/configured first-response budget when
+relevant. Active-model reporting SHALL reflect the actual binding while the
+selected profile name stays unchanged. Configuration explanation SHALL expose
+the ordered chain, timeout overrides, winning provenance, and that switching
+providers resends conversation context to a configured provider.
+
+#### Scenario: Startup timeout switch
+
+- **GIVEN** the configured 30-second first-response budget expires
+- **WHEN** the shared runtime switches to the next candidate
+- **THEN** the TUI shows a notice identifying the timed-out model and the model being tried
+- **AND** headless structured events carry the same identities, timeout reason, and threshold
+- **AND** active-model reporting follows the new candidate without renaming the profile
+
+#### Scenario: All candidates fail
+
+- **WHEN** the fallback chain is exhausted
+- **THEN** both surfaces report the attempted/skipped bindings and their redaction-safe reasons
+- **AND** failed-attempt latency and usage are not hidden by a final summary
+
+#### Scenario: Legacy session replay
+
+- **GIVEN** a saved session or event predates fallback metadata
+- **WHEN** a current client replays it
+- **THEN** deserialization succeeds without inventing fallback decisions
+- **AND** historical usage keeps its original binding attribution

@@ -855,7 +855,9 @@ authorizes, search them by name, summary, and description text, and activate
 chosen ones by registry id for the next provider request, within the
 capability budget. A search or listing SHALL return only authorized entries.
 A search with no match SHALL say so and report how many capabilities exist
-per domain.
+per domain. Every session SHALL be told, in one developer instruction, which
+registered tools outside its pinned core it may activate. Two registered tools
+SHALL NOT be treated as redundant only because they share permissions.
 
 #### Scenario: Browse without a query
 - **WHEN** the agent calls `registry.search` with an empty query
@@ -883,3 +885,67 @@ per domain.
 - **WHEN** the agent calls `registry.activate` with an id outside its
   authorized view
 - **THEN** the call returns an error and nothing is activated
+
+#### Scenario: Activatable tools are named up front
+- **GIVEN** a session that registers `agent` and `web_search` but does not
+  pin them, and whose limits deny `tool:web_search`
+- **WHEN** the first provider request is planned
+- **THEN** its instructions name `agent` as activatable
+- **AND** they do not name `web_search` or any pinned core tool
+
+#### Scenario: Web tools with equal permissions both stage
+- **GIVEN** `web_fetch` and `web_search` registered with the same permissions
+- **WHEN** the agent searches for "web search fetch"
+- **THEN** both tools can bind, and neither is rejected as redundant
+
+### Requirement: Independently selected compaction route and instruction
+
+Smith SHALL bind configured compaction targets through its normal credential,
+model-limit, and provider preflight. Custom instructions SHALL participate in
+summary adapter identity. Manual overrides SHALL remain attempt-local.
+Changing a summary route or instruction SHALL preserve canonical originals
+and provenance and SHALL NOT authorize fabricated state or discard prior
+exact persistence when a new summary cannot be produced.
+
+#### Scenario: A dedicated model produces a summary
+
+- **WHEN** the configured summary model differs from the conversation model
+- **THEN** only the summary request uses that route and its usage attribution
+- **AND** subsequent conversation turns keep the conversation route
+
+#### Scenario: A summary default changes during a session
+
+- **WHEN** an idle session adopts a new summary model or instruction
+- **THEN** exact canonical history remains recoverable and incompatible optional summary state cannot prevent startup
+
+#### Scenario: An overridden attempt fails
+
+- **WHEN** an attempt with custom instructions fails
+- **THEN** originals and the previous committed summary remain available
+- **AND** the override does not change later automatic summaries
+
+### Requirement: Wait timeout uses host internal-turn admission
+
+Smith SHALL admit `delegation.wait-timeout` continuations through the session's
+existing idle-only internal-turn admission with an `InternalTurnSource` of
+kind `delegation.wait-timeout`, and SHALL NOT require a new Agent Runtime
+primitive for the timer. Before admission Smith SHALL re-check the child's
+coordinator status and SHALL drop the wake when the child is terminal. An
+accepted turn SHALL use the parent runtime composition applicable at
+admission, including a harness backend when the session runs on one, and
+SHALL observe the same provider, context, tool, approval, workspace,
+checkpoint, cancellation, retry, and global-limit contracts as an ordinary
+turn.
+
+#### Scenario: Timeout wake on an idle parent
+
+- **GIVEN** a parked parent whose armed timer expired for a running child
+- **WHEN** Smith requests idle-only internal admission
+- **THEN** runtime accepts one turn attributed `delegation.wait-timeout`
+- **AND** no user-role message is appended
+
+#### Scenario: Timeout wake on a harness session
+
+- **GIVEN** a root session running on a harness with an expired wait timer
+- **WHEN** the wake is admitted
+- **THEN** the turn runs on the harness as other internal turns do
