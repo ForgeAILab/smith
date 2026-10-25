@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-25T20:16:29Z
-updated_at: 2026-10-25T20:16:29Z
-completed_at:
+updated_at: 2026-10-25T23:18:06Z
+completed_at: 2026-10-25T23:18:06Z
 ---
 
 ## 1. Output still held after the shell exits (shipped as a bug fix)
@@ -37,4 +37,4 @@ completed_at:
 
 ## 3. Verify
 
-- [ ] 3.1 Full gate, then push the branch for CI before main
+- [x] 3.1 Full gate, then push the branch for CI before main
