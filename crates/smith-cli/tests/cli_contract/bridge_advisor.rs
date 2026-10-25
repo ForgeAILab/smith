@@ -1,7 +1,6 @@
 //! Advisor requests, answers and usage through the real bridge.
 use super::bridge::{
-    BridgeFixture, argv, call_response, events, log_lines, ordinary_calls, response_value, result,
-    successful,
+    BridgeFixture, argv, events, log_lines, ordinary_calls, response_value, result, successful,
 };
 use serde_json::json;
 
@@ -61,15 +60,23 @@ cwd = "workspace"
                 json!({"call":{"tool":"advisor","arguments":{}}}),
                 json!({"say":"advice received"}),
             ]);
-            let run = fixture.run(json!(steps), None);
+            // A child still running at `wait` arms a wake timer, and its
+            // completion then resumes the root; that turn only replies.
+            let run = fixture.run(
+                json!({"initial": steps, "resumed": [{"say": "wake handled"}]}),
+                None,
+            );
             successful(&run);
+            let root = &run.invocations()[0];
             assert!(
-                run.record["tool_names"]
+                root["tool_names"]
                     .as_array()
                     .unwrap()
                     .contains(&json!("advisor"))
             );
-            assert_eq!(response_value(call_response(&run, "advisor")), answer);
+            let advice = super::bridge::responses(root, "advisor");
+            assert_eq!(advice.len(), 1, "one wire call to advisor");
+            assert_eq!(response_value(&advice[0]), answer);
             let observed = events(&run);
             let session = result(&run)["session_id"].as_str().unwrap();
             // Advisor usage is committed by its hook under the advisor purpose,
@@ -122,7 +129,7 @@ cwd = "workspace"
                     "missing {expected}: {transcript}"
                 );
             }
-            let spawn = super::bridge::responses(&run.record, "agent");
+            let spawn = super::bridge::responses(root, "agent");
             let spawn = response_value(&spawn[0]);
             assert!(
                 transcript.contains(spawn["spawned"].as_str().unwrap()),
