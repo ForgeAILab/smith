@@ -783,6 +783,42 @@ async fn stop_process_group(child: &mut Child, _group: Option<u32>) {
     let _ = child.kill().await;
 }
 
+/// Stops what is left of a task's group once its shell has been reaped.
+///
+/// The shell's exit can no longer show that the group is gone, so the spool
+/// writer finishing, every process holding the pipe gone, is what each signal
+/// waits for. A holder that left the group cannot be signalled; its output
+/// stops being spooled instead.
+#[cfg(unix)]
+async fn stop_lingering_group(group: Option<u32>, writer: &mut tokio::task::JoinHandle<()>) {
+    use nix::sys::signal::{Signal, killpg};
+    use nix::unistd::Pid;
+
+    if let Some(group) = group.and_then(|id| i32::try_from(id).ok()) {
+        for signal in [Signal::SIGTERM, Signal::SIGKILL] {
+            let _ = killpg(Pid::from_raw(group), signal);
+            if tokio::time::timeout(GRACE, &mut *writer).await.is_ok() {
+                return;
+            }
+        }
+    }
+    writer.abort();
+}
+
+#[cfg(not(unix))]
+async fn stop_lingering_group(_group: Option<u32>, writer: &mut tokio::task::JoinHandle<()>) {
+    writer.abort();
+}
+
+fn stopped(
+    request: Result<StopRequest, oneshot::error::RecvError>,
+) -> (TaskStatus, Option<oneshot::Sender<TaskStatus>>) {
+    match request {
+        Ok(request) => (request.reason, Some(request.completed)),
+        Err(_) => (TaskStatus::Stopped, None),
+    }
+}
+
 /// Where a task worker's output comes from.
 ///
 /// `spawn_background_task` owns a freshly spawned child whose stdout/stderr
@@ -849,7 +885,7 @@ async fn run_task_worker_append(
     };
 
     let spool_path_clone = spool_path.clone();
-    let writer_handle = tokio::spawn(async move {
+    let mut writer = tokio::spawn(async move {
         let mut bytes_written = initial_bytes;
         let mut truncated = false;
         let mut file = tokio::fs::OpenOptions::new()
@@ -887,25 +923,42 @@ async fn run_task_worker_append(
         }
     };
 
+    tokio::pin!(timeout_fut);
+
+    let mut writer_finished = false;
     let (terminal_status, stop_acknowledgement) = tokio::select! {
         status = child.wait() => {
             let code = status.ok().and_then(|s| s.code());
-            (TaskStatus::Exited { code }, None)
+            // The shell is gone, but a process it started with `&` can hold
+            // its output open for as long as it runs. Until the spool closes
+            // the task is still running, so it must stay stoppable.
+            let ended = tokio::select! {
+                _ = &mut writer => (TaskStatus::Exited { code }, None),
+                request = &mut stop_rx => {
+                    stop_lingering_group(group_pid, &mut writer).await;
+                    stopped(request)
+                }
+                _ = &mut timeout_fut => {
+                    stop_lingering_group(group_pid, &mut writer).await;
+                    (TaskStatus::DeadlineKill, None)
+                }
+            };
+            writer_finished = true;
+            ended
         }
         request = &mut stop_rx => {
             stop_process_group(&mut child, group_pid).await;
-            match request {
-                Ok(request) => (request.reason, Some(request.completed)),
-                Err(_) => (TaskStatus::Stopped, None),
-            }
+            stopped(request)
         }
-        _ = timeout_fut => {
+        _ = &mut timeout_fut => {
             stop_process_group(&mut child, group_pid).await;
             (TaskStatus::DeadlineKill, None)
         }
     };
 
-    let _ = writer_handle.await;
+    if !writer_finished {
+        let _ = writer.await;
+    }
 
     // Record terminal state in registry
     {
@@ -1299,6 +1352,59 @@ mod tests {
             "spool grew past its cap: {} bytes",
             result.output.len()
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_task_whose_shell_exits_first_stays_stoppable() {
+        let registry = BackgroundTaskRegistry::new();
+        let session = unique_session();
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("orphan.txt");
+
+        // `sh` exits at once; the `&` subshell keeps the spool open until it
+        // finishes, and `task_stop` must still reach it.
+        let command = format!(
+            "( sleep 2; echo orphaned > {} ) & echo started",
+            marker.display()
+        );
+        let (task_id, _) = registry
+            .spawn_background_task(&session, command, std::env::temp_dir(), None)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            registry
+                .running_tasks(&session)
+                .iter()
+                .any(|task| task.task_id == task_id),
+            "the task must stay running while its spool is open"
+        );
+
+        let status = registry.stop_task(&session, &task_id).await.unwrap();
+        assert_eq!(status, TaskStatus::Stopped);
+
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(!marker.exists(), "the stopped task's process survived");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_deadline_reaches_a_task_whose_shell_exited_first() {
+        let registry = BackgroundTaskRegistry::new();
+        let session = unique_session();
+        let (task_id, _) = registry
+            .spawn_background_task(
+                &session,
+                "sleep 30 & echo started".into(),
+                std::env::temp_dir(),
+                Some(300),
+            )
+            .await
+            .unwrap();
+
+        let status = wait_for_terminal(&registry, &session, &task_id).await;
+        assert_eq!(status, TaskStatus::DeadlineKill);
     }
 
     #[tokio::test]

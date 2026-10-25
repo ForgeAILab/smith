@@ -25,6 +25,7 @@ const KNOWN_TASK_ID: &str = "task:1";
 #[derive(Debug, Default)]
 struct FakeHost {
     spawn_calls: Mutex<Vec<(String, Option<u64>)>>,
+    adopt_calls: Mutex<Vec<(String, String)>>,
     stop_calls: Mutex<Vec<String>>,
 }
 
@@ -57,14 +58,21 @@ impl BackgroundTaskHost for FakeHost {
     async fn adopt(
         &self,
         _session: SessionId,
-        _command: String,
+        command: String,
         _cwd: PathBuf,
         _child: Child,
         _group_pid: Option<u32>,
-        _captured_so_far: String,
+        captured_so_far: String,
         _lines: mpsc::Receiver<String>,
     ) -> Result<SpawnedTask, RuntimeError> {
-        unimplemented!("manual backgrounding is exercised at the registry level, not here")
+        self.adopt_calls
+            .lock()
+            .unwrap()
+            .push((command, captured_so_far));
+        Ok(SpawnedTask {
+            task_id: KNOWN_TASK_ID.to_owned(),
+            spool_ref: "tasks/task_1.log".to_owned(),
+        })
     }
 
     async fn output(
@@ -225,4 +233,30 @@ async fn run_in_background_returns_promptly_with_the_hosts_task_id() {
     assert!(!outcome.is_error);
     assert_eq!(outcome.value["task_id"], KNOWN_TASK_ID);
     assert_eq!(outcome.value["running"], true);
+}
+
+#[tokio::test]
+async fn a_process_left_holding_the_output_is_handed_to_the_host() {
+    let host = Arc::new(FakeHost::default());
+    let tool = ShellTool::new(host.clone());
+    let project = Project::new();
+
+    let started = std::time::Instant::now();
+    let outcome = project
+        .invoke(&tool, json!({"command": "sleep 3 & echo started"}))
+        .await
+        .expect("the call returns once the shell exits");
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(2800),
+        "{:?}",
+        started.elapsed()
+    );
+
+    assert!(!outcome.is_error);
+    assert_eq!(outcome.value["exit_code"], 0);
+    assert_eq!(outcome.value["task_id"], KNOWN_TASK_ID);
+    assert_eq!(outcome.value["running"], true);
+    let adopted = host.adopt_calls.lock().unwrap().clone();
+    assert_eq!(adopted.len(), 1, "{adopted:?}");
+    assert!(adopted[0].1.contains("started"), "{adopted:?}");
 }

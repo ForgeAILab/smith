@@ -13,11 +13,16 @@
 //! is what lets this crate keep `unsafe_code = "forbid"`.
 //!
 //! `run_in_background` and manual backgrounding (ctrl+b in the TUI) are the
-//! two ways ownership of that process group moves from this invocation to the
-//! session's background task registry, through the [`crate::background`]
-//! seam. Neither path exists without an injected host service: without it, an
-//! explicit `run_in_background` request fails clearly, and a foreground call
-//! simply has nothing to hand off to, so it runs exactly as it always has.
+//! two ways a caller moves ownership of that process group from this
+//! invocation to the session's background task registry, through the
+//! [`crate::background`] seam. The third is not asked for: a process the
+//! command started with `&` inherits the output pipe unless it redirects it,
+//! and holds it open for as long as it runs, so a call that waited for the
+//! pipe to close would wait just as long. When the pipe outlives the shell by
+//! [`DRAIN_GRACE`], whatever holds it is handed off the same way. None of
+//! these paths exists without an injected host service: without it, an
+//! explicit `run_in_background` request fails clearly, and a process left
+//! holding the pipe is stopped with its group.
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -35,7 +40,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::background;
 use crate::support::{
@@ -58,6 +63,13 @@ const MAX_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 
 /// How long a signalled process group gets to exit before it is killed.
 const GRACE: Duration = Duration::from_millis(500);
+
+/// How long the output pipe may stay open after the shell exits.
+///
+/// Anything the shell wrote is already in the pipe when it exits, so reading
+/// it takes milliseconds; a pipe still open after this is held by a process
+/// the command left running.
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 /// Resource kind used for the deliberately unsandboxed same-user host shell.
 ///
@@ -98,7 +110,8 @@ impl Tool for ShellTool {
              egress outside the project. Returns combined stdout/stderr and the exit \
              status; killed at the timeout along with anything it \
              spawned. Set `run_in_background` for a long command and poll it with \
-             `task_output` instead of blocking the turn.",
+             `task_output` instead of blocking the turn. Start servers and watchers \
+             that way too, not with `&`.",
             json!({
                 "type": "object",
                 "properties": {
@@ -306,13 +319,33 @@ impl Tool for ShellTool {
             }
         };
 
-        if !matches!(status, Outcome::Backgrounded) {
-            // The process is done (or killed); drain whatever its readers
-            // still had buffered so the captured output matches exactly what
-            // the old detached-collector shape produced.
-            while let Some(line) = lines_rx.recv().await {
-                accumulate(&mut output, &mut truncated, line);
+        // Unless the call was backgrounded, the shell is reaped; collect what
+        // its readers still had buffered. That is bounded rather than read to
+        // the end, because the end only comes once every process holding the
+        // pipe has exited.
+        let mut status = status;
+        let mut lingering = false;
+        match status {
+            Outcome::Exited(_) => {
+                let rest = drain(&mut lines_rx, &mut output, &mut truncated, DRAIN_GRACE);
+                let drained = tokio::select! {
+                    closed = rest => Some(closed),
+                    () = ctx.cancel.cancelled() => None,
+                };
+                match drained {
+                    Some(closed) => lingering = !closed,
+                    None => {
+                        stop_lingering(group, &mut lines_rx, &mut output, &mut truncated).await;
+                        status = Outcome::Cancelled;
+                    }
+                }
             }
+            Outcome::TimedOut | Outcome::Cancelled => {
+                if !drain(&mut lines_rx, &mut output, &mut truncated, GRACE).await {
+                    stop_lingering(group, &mut lines_rx, &mut output, &mut truncated).await;
+                }
+            }
+            Outcome::Backgrounded => {}
         }
 
         match status {
@@ -354,14 +387,53 @@ impl Tool for ShellTool {
                         None => "\n[terminated by a signal]".to_owned(),
                     });
                 }
+                let mut value = json!({
+                    "command": command,
+                    "exit_code": code,
+                    "success": success,
+                    "timed_out": false,
+                    "truncated": truncated,
+                });
+                if lingering {
+                    match self
+                        .background
+                        .adopt(
+                            ctx.session.clone(),
+                            command.to_owned(),
+                            cwd,
+                            child,
+                            group,
+                            output.clone(),
+                            lines_rx,
+                        )
+                        .await
+                    {
+                        Ok(spawned) => {
+                            rendered.push_str(&format!(
+                                "\n[the shell exited, but a process it started in the background \
+                                 still holds its output, so it continues as background task {}. \
+                                 Read its output with `task_output` and stop it with `task_stop`. \
+                                 Start a long-running process with `run_in_background: true` \
+                                 instead of `&`.]",
+                                spawned.task_id
+                            ));
+                            value["task_id"] = json!(spawned.task_id);
+                            value["spool_ref"] = json!(spawned.spool_ref);
+                            value["running"] = json!(true);
+                        }
+                        Err(error) => {
+                            stop_detached(group).await;
+                            rendered.push_str(&format!(
+                                "\n[the shell exited, but a process it started in the background \
+                                 still held its output and could not be moved to the background \
+                                 ({}), so it was stopped with its process group.]",
+                                error.message
+                            ));
+                        }
+                    }
+                }
                 Ok(ToolOutcome {
-                    value: json!({
-                        "command": command,
-                        "exit_code": code,
-                        "success": success,
-                        "timed_out": false,
-                        "truncated": truncated,
-                    }),
+                    value,
                     content: vec![agent_runtime_core::content::ContentPart::text(rendered)].into(),
                     is_error: !success,
                 })
@@ -564,6 +636,75 @@ async fn stop_group(child: &mut tokio::process::Child, _group: Option<u32>) {
     let _ = child.kill().await;
 }
 
+/// Collects output until every process holding the pipe has closed it, or
+/// `limit` passes. Returns whether the pipe closed.
+async fn drain(
+    lines: &mut mpsc::Receiver<String>,
+    output: &mut String,
+    truncated: &mut bool,
+    limit: Duration,
+) -> bool {
+    tokio::time::timeout(limit, async {
+        while let Some(line) = lines.recv().await {
+            accumulate(output, truncated, line);
+        }
+    })
+    .await
+    .is_ok()
+}
+
+/// Stops what is left of the group once its shell has been reaped.
+///
+/// The shell's exit can no longer show that the group is gone, so the pipe
+/// closing, every process holding it gone, is what each signal waits for.
+#[cfg(unix)]
+async fn stop_lingering(
+    group: Option<u32>,
+    lines: &mut mpsc::Receiver<String>,
+    output: &mut String,
+    truncated: &mut bool,
+) {
+    use nix::sys::signal::{Signal, killpg};
+    use nix::unistd::Pid;
+
+    let Some(group) = group.and_then(|id| i32::try_from(id).ok()) else {
+        return;
+    };
+    for signal in [Signal::SIGTERM, Signal::SIGKILL] {
+        let _ = killpg(Pid::from_raw(group), signal);
+        if drain(lines, output, truncated, GRACE).await {
+            return;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn stop_lingering(
+    _group: Option<u32>,
+    lines: &mut mpsc::Receiver<String>,
+    output: &mut String,
+    truncated: &mut bool,
+) {
+    drain(lines, output, truncated, GRACE).await;
+}
+
+/// Stops the rest of the group once its output is no longer read.
+#[cfg(unix)]
+async fn stop_detached(group: Option<u32>) {
+    use nix::sys::signal::{Signal, killpg};
+    use nix::unistd::Pid;
+
+    let Some(group) = group.and_then(|id| i32::try_from(id).ok()) else {
+        return;
+    };
+    let _ = killpg(Pid::from_raw(group), Signal::SIGTERM);
+    tokio::time::sleep(GRACE).await;
+    let _ = killpg(Pid::from_raw(group), Signal::SIGKILL);
+}
+
+#[cfg(not(unix))]
+async fn stop_detached(_group: Option<u32>) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,6 +889,72 @@ mod tests {
             !marker.exists(),
             "a spawned descendant outlived the invocation"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_process_left_holding_the_output_does_not_hold_the_call() {
+        let (dir, ctx) = project();
+        let marker = dir.path().join("orphan.txt");
+
+        // `sh` exits at once, but the `&` subshell keeps the output pipe open
+        // until it finishes; without a host to adopt it, it is stopped.
+        let command = format!(
+            "( sleep 4; echo orphaned > {} ) & echo started",
+            marker.display()
+        );
+        let started = std::time::Instant::now();
+        let outcome = ShellTool::default()
+            .invoke(json!({"command": command}), &ctx)
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() < DRAIN_GRACE + Duration::from_millis(1500),
+            "{:?}",
+            started.elapsed()
+        );
+
+        let text = text_of(&outcome);
+        assert_eq!(outcome.value["exit_code"], 0, "{text}");
+        assert!(text.contains("started"), "{text}");
+        assert!(text.contains("stopped with its process group"), "{text}");
+
+        tokio::time::sleep(Duration::from_secs(5).saturating_sub(started.elapsed())).await;
+        assert!(
+            !marker.exists(),
+            "the process left holding the pipe survived"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_reaches_a_process_left_holding_the_output() {
+        let (dir, ctx) = project();
+        let marker = dir.path().join("orphan.txt");
+        let cancel = ctx.cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            cancel.cancel(agent_runtime_core::cancel::CancelReason::UserRequested);
+        });
+
+        let command = format!(
+            "( sleep 2; echo orphaned > {} ) & echo started",
+            marker.display()
+        );
+        let started = std::time::Instant::now();
+        let err = ShellTool::default()
+            .invoke(json!({"command": command}), &ctx)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Cancelled);
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "{:?}",
+            started.elapsed()
+        );
+
+        tokio::time::sleep(Duration::from_millis(2500).saturating_sub(started.elapsed())).await;
+        assert!(!marker.exists(), "cancellation left a process running");
     }
 
     #[tokio::test]
