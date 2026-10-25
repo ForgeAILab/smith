@@ -228,7 +228,9 @@ fn render(
         "URL: {url} | Status: {status} | Content-Type: {content_type} | Title: {title}\n\nContent from {url} (external, untrusted):\n"
     );
     let text = format!("{header}{body}{note}");
-    let value = serde_json::json!({"url":url.as_str(), "status":status, "content_type":content_type, "title":title, "truncated":truncated, "text":text});
+    // The page is carried once, as content. A second copy in `value` doubled
+    // every stored artifact and pushed half-size pages over the inline bound.
+    let value = serde_json::json!({"url":url.as_str(), "status":status, "content_type":content_type, "title":title, "truncated":truncated});
     let mut content = vec![ContentPart::text(text)];
     if is_image {
         content.push(ContentPart::Image {

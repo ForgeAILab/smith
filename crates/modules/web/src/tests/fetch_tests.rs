@@ -150,6 +150,21 @@ async fn plain_text_json_and_xml_pass_through_even_on_http_errors() {
     }
 }
 
+#[tokio::test]
+async fn the_page_body_is_carried_once() {
+    let server = Fixture::new(vec![("/", Reply::new("text/plain", "only-once-marker"))]).await;
+    let outcome = fetch::fetch(&server.url("/"), true).await.unwrap();
+    let serialized = serde_json::to_string(&outcome).unwrap();
+    assert_eq!(
+        serialized.matches("only-once-marker").count(),
+        1,
+        "{serialized}"
+    );
+    assert_eq!(outcome.value["url"], server.url("/"));
+    assert_eq!(outcome.value["status"], 200);
+    assert_eq!(outcome.value["truncated"], false);
+}
+
 #[test]
 fn url_validation_and_private_guard_cover_literal_and_mixed_dns_answers() {
     for url in [
