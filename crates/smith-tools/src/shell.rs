@@ -127,9 +127,8 @@ impl Tool for ShellTool {
              environment and credentials, child processes, the network, and data \
              egress outside the project. Returns combined stdout/stderr and the exit \
              status; killed at the timeout along with anything it \
-             spawned. Set `run_in_background` for a long command and poll it with \
-             `task_output` instead of blocking the turn. Start servers and watchers \
-             that way too, not with `&`.",
+             spawned. Use `run_in_background` for long commands, servers, and \
+             watchers (not `&`), and poll them with `task_output`.",
             json!({
                 "type": "object",
                 "properties": {
@@ -144,11 +143,11 @@ impl Tool for ShellTool {
                     "timeout_ms": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Time limit in milliseconds; the command is killed at it. Defaults to 120000, max 600000. A call still running after 300000 moves to the background and keeps this limit. Optional for a background task; if omitted, it has no deadline."
+                        "description": "Kill deadline in milliseconds. Defaults to 120000, max 600000; a call still running at 300000 moves to the background and keeps it. A background task without it has no deadline."
                     },
                     "run_in_background": {
                         "type": "boolean",
-                        "description": "Run in the background instead of waiting. Returns immediately with a task ID; the process keeps running. Poll output with `task_output`, stop early with `task_stop`. No deadline unless `timeout_ms` is set. Use it for anything that may take over 5 minutes. Defaults to false."
+                        "description": "Run in the background instead of waiting. Returns immediately with a task ID; the process keeps running. Poll output with `task_output`, stop early with `task_stop`. No deadline unless `timeout_ms` is set. Defaults to false."
                     }
                 },
                 "required": ["command"],
