@@ -243,11 +243,11 @@ async fn a_process_left_holding_the_output_is_handed_to_the_host() {
 
     let started = std::time::Instant::now();
     let outcome = project
-        .invoke(&tool, json!({"command": "sleep 3 & echo started"}))
+        .invoke(&tool, json!({"command": "sleep 10 & echo started"}))
         .await
         .expect("the call returns once the shell exits");
     assert!(
-        started.elapsed() < std::time::Duration::from_millis(2800),
+        started.elapsed() < std::time::Duration::from_secs(4),
         "{:?}",
         started.elapsed()
     );

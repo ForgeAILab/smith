@@ -898,9 +898,9 @@ mod tests {
         let marker = dir.path().join("orphan.txt");
 
         // `sh` exits at once, but the `&` subshell keeps the output pipe open
-        // until it finishes; without a host to adopt it, it is stopped.
+        // for 10 s while it ticks; without a host to adopt it, it is stopped.
         let command = format!(
-            "( sleep 4; echo orphaned > {} ) & echo started",
+            "( i=0; while [ $i -lt 50 ]; do sleep 0.2; echo tick >> {}; i=$((i+1)); done ) & echo started",
             marker.display()
         );
         let started = std::time::Instant::now();
@@ -909,7 +909,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            started.elapsed() < DRAIN_GRACE + Duration::from_millis(1500),
+            started.elapsed() < DRAIN_GRACE * 2,
             "{:?}",
             started.elapsed()
         );
@@ -919,9 +919,11 @@ mod tests {
         assert!(text.contains("started"), "{text}");
         assert!(text.contains("stopped with its process group"), "{text}");
 
-        tokio::time::sleep(Duration::from_secs(5).saturating_sub(started.elapsed())).await;
-        assert!(
-            !marker.exists(),
+        let ticks = std::fs::read_to_string(&marker).unwrap_or_default();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap_or_default(),
+            ticks,
             "the process left holding the pipe survived"
         );
     }
@@ -953,7 +955,7 @@ mod tests {
             started.elapsed()
         );
 
-        tokio::time::sleep(Duration::from_millis(2500).saturating_sub(started.elapsed())).await;
+        tokio::time::sleep(Duration::from_secs(3).saturating_sub(started.elapsed())).await;
         assert!(!marker.exists(), "cancellation left a process running");
     }
 

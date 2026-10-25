@@ -1390,6 +1390,72 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn a_foreground_call_hands_a_process_holding_its_output_to_the_registry() {
+        use agent_runtime_core::cancel::Cancellation;
+        use agent_runtime_core::clock::{Deadline, SystemClock};
+        use agent_runtime_core::ids::{RequestId, ToolCallId};
+        use agent_runtime_core::tool::{InvocationContext, PreparationContext, Tool};
+
+        let services = BackgroundServices::new();
+        let session = unique_session();
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Arc::new(smith_host::workspace::ProjectWorkspace::new(dir.path()).unwrap());
+        let invocation = InvocationContext {
+            session: session.clone(),
+            turn: None,
+            call_id: ToolCallId::new("call-1"),
+            request: RequestId::new("request-1"),
+            workspace: workspace.clone(),
+            clock: Arc::new(SystemClock),
+            cancel: Cancellation::new(),
+            deadline: Deadline::never(),
+            output_limit: 32_000,
+        };
+        let preparation = PreparationContext {
+            session: session.clone(),
+            turn: None,
+            call_id: invocation.call_id.clone(),
+            request: invocation.request.clone(),
+            workspace,
+            clock: invocation.clock.clone(),
+            cancel: invocation.cancel.clone(),
+            deadline: invocation.deadline,
+        };
+
+        // The shell is reaped before the registry adopts what it left
+        // running, so the worker starts from an exited child.
+        let tool = smith_tools::ShellTool::new(services.host());
+        let prepared = tool
+            .prepare(
+                serde_json::json!({"command": "sleep 10 & echo started"}),
+                &preparation,
+            )
+            .await
+            .unwrap();
+        let outcome = tool.invoke(prepared, &invocation).await.unwrap();
+        assert!(!outcome.is_error);
+        assert_eq!(outcome.value["exit_code"], 0);
+        let task_id = outcome.value["task_id"]
+            .as_str()
+            .expect("the leftover process became a task")
+            .to_owned();
+
+        let status = services
+            .registry()
+            .stop_task(&session, &task_id)
+            .await
+            .unwrap();
+        assert_eq!(status, TaskStatus::Stopped);
+        let result = services
+            .registry()
+            .get_task_output(&session, &task_id, 0, 65536)
+            .await
+            .unwrap();
+        assert!(result.output.contains("started"), "{}", result.output);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn a_deadline_reaches_a_task_whose_shell_exited_first() {
         let registry = BackgroundTaskRegistry::new();
         let session = unique_session();
