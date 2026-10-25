@@ -109,6 +109,23 @@ impl ScreenSession<'static> {
 }
 
 impl<'a> ScreenSession<'a> {
+    #[cfg(test)]
+    pub(crate) fn testing(
+        terminal: &'a mut ratatui::Terminal<ratatui::backend::TestBackend>,
+        events: impl futures_util::Stream<Item = std::io::Result<TermEvent>> + Unpin + Send + 'a,
+    ) -> Self {
+        Self::new(
+            Surface::Testing {
+                terminal,
+                app: None,
+                repaints: 0,
+            },
+            Box::new(events),
+            true,
+            true,
+        )
+    }
+
     /// Borrows the idle session's terminal and backdrop without changing terminal modes.
     pub(crate) fn embedded(
         terminal: &'a mut Terminal,

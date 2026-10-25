@@ -471,13 +471,18 @@ impl XaiOAuthClient {
             .send()
             .await
             .map_err(|_| XaiAuthError::Transport)?;
-        if response.status() == StatusCode::UNAUTHORIZED
-            || response.status() == StatusCode::FORBIDDEN
-        {
-            return Err(XaiAuthError::InvalidBundle);
-        }
-        if !response.status().is_success() {
-            return Err(XaiAuthError::Rejected);
+        let status = response.status();
+        if !status.is_success() {
+            // OAuth reports an expired, revoked, or already-consumed refresh
+            // token as HTTP 400 `invalid_grant`, not necessarily HTTP 401.
+            let code = error_code(response).await;
+            return Err(
+                if status == StatusCode::UNAUTHORIZED || code.as_deref() == Some("invalid_grant") {
+                    XaiAuthError::InvalidBundle
+                } else {
+                    XaiAuthError::Rejected
+                },
+            );
         }
         let mut refreshed = decode_token(response, now_ms).await?;
         // An issuer may rotate the refresh token or omit it on refresh; keeping
@@ -601,8 +606,17 @@ impl BundleRefresher<XaiTokenBundle> for XaiOAuthClient {
         bundle: &XaiTokenBundle,
         now_ms: u64,
     ) -> Result<XaiTokenBundle, XaiAuthError> {
-        let endpoints = self.endpoints().await?.clone();
-        XaiOAuthClient::refresh(self, &endpoints, bundle, now_ms).await
+        let result = async {
+            let endpoints = self.endpoints().await?.clone();
+            XaiOAuthClient::refresh(self, &endpoints, bundle, now_ms).await
+        }
+        .await;
+        if let Err(error) = &result {
+            // The shared credential source exposes a fixed RefreshFailed error;
+            // retain the safe provider-specific cause in Smith's session log.
+            tracing::warn!(error = %error, "xAI OAuth refresh failed");
+        }
+        result
     }
 }
 
@@ -655,6 +669,7 @@ mod tests {
     };
     use smith_config::auth_file::{AuthFileBackend, AuthFileError};
     use smith_config::credential::{CredentialEnrollmentBackend, KeychainError};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
 
@@ -663,6 +678,118 @@ mod tests {
             access_token: "token".into(),
             refresh_token: refresh.into(),
             expires_at_ms,
+        }
+    }
+
+    async fn token_endpoint(
+        status: &str,
+        body: &str,
+    ) -> (XaiEndpoints, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("token endpoint");
+        let url = format!("http://{}/token", listener.local_addr().unwrap());
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut chunk = [0; 4096];
+                let read = socket.read(&mut chunk).await.unwrap();
+                assert_ne!(read, 0, "refresh request ended early");
+                bytes.extend_from_slice(&chunk[..read]);
+                let Some(boundary) = bytes.windows(4).position(|part| part == b"\r\n\r\n") else {
+                    continue;
+                };
+                let headers = std::str::from_utf8(&bytes[..boundary]).unwrap();
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().unwrap())
+                    })
+                    .expect("form content length");
+                let start = boundary + 4;
+                if bytes.len() >= start + length {
+                    let form = url::form_urlencoded::parse(&bytes[start..start + length])
+                        .into_owned()
+                        .collect::<std::collections::BTreeMap<_, _>>();
+                    assert_eq!(form.get("grant_type").unwrap(), "refresh_token");
+                    assert_eq!(form.get("refresh_token").unwrap(), "refresh-old");
+                    assert_eq!(form.get("client_id").unwrap(), XAI_CLIENT_ID);
+                    break;
+                }
+            }
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        (
+            XaiEndpoints {
+                device_authorization: url.clone(),
+                token: url,
+            },
+            server,
+        )
+    }
+
+    #[tokio::test]
+    async fn refresh_rejections_distinguish_invalid_grants_from_other_failures() {
+        for (status, body, expected) in [
+            (
+                "400 Bad Request",
+                r#"{"error":"invalid_grant","error_description":"secret-canary"}"#,
+                XaiAuthError::InvalidBundle,
+            ),
+            ("401 Unauthorized", "{}", XaiAuthError::InvalidBundle),
+            (
+                "400 Bad Request",
+                r#"{"error":"invalid_request"}"#,
+                XaiAuthError::Rejected,
+            ),
+            ("403 Forbidden", "{}", XaiAuthError::Rejected),
+            (
+                "503 Service Unavailable",
+                "unavailable",
+                XaiAuthError::Rejected,
+            ),
+        ] {
+            let (endpoints, server) = token_endpoint(status, body).await;
+            let oauth = XaiOAuthClient::new().unwrap();
+            let error = oauth
+                .refresh(&endpoints, &bundle(1, "refresh-old"), 1_000)
+                .await
+                .expect_err("the token endpoint rejected renewal");
+            assert_eq!(error, expected);
+            assert!(!error.to_string().contains("secret-canary"));
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_accepts_rotated_or_omitted_refresh_tokens() {
+        for (body, expected_refresh) in [
+            (
+                r#"{"access_token":"access-new","refresh_token":"refresh-new","expires_in":3600}"#,
+                "refresh-new",
+            ),
+            (
+                r#"{"access_token":"access-new","expires_in":3600}"#,
+                "refresh-old",
+            ),
+        ] {
+            let (endpoints, server) = token_endpoint("200 OK", body).await;
+            let oauth = XaiOAuthClient::new().unwrap();
+            let refreshed = oauth
+                .refresh(&endpoints, &bundle(1, "refresh-old"), 1_000)
+                .await
+                .expect("a renewed session");
+            assert_eq!(refreshed.access_token(), "access-new");
+            assert_eq!(refreshed.refresh_secret().expose(), expected_refresh);
+            assert_eq!(refreshed.expires_at(), Timestamp(3_601_000));
+            server.await.unwrap();
         }
     }
 

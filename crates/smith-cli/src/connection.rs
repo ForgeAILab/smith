@@ -18,7 +18,8 @@ use smith_config::setup::{
     connectable_provider_descriptors,
 };
 use smith_config::user_config::{
-    CommittedConfigEdit, prepare_provider_credential_removal, prepare_user_config_edit,
+    CommittedConfigEdit, PreparedConfigEdit, prepare_provider_credential_removal,
+    prepare_user_config_edit,
 };
 use smith_runtime::factory::{self, AVAILABLE_ADAPTER_KINDS, HostSurface};
 use smith_tui::setup::SetupMode;
@@ -138,6 +139,12 @@ struct PublishedLogin {
     preview: String,
 }
 
+struct ReviewedLogin {
+    prepared: PreparedConfigEdit,
+    review: crate::connection_review::ConnectionReview,
+    enroller: CredentialEnroller,
+}
+
 /// Publishes one login connection: the stored credential and the published
 /// configuration commit together, or the whole edit unwinds.
 ///
@@ -151,6 +158,20 @@ async fn publish_login(
     patch: &ConfigFile,
     session: &mut ScreenSession<'_>,
 ) -> Result<FlowOutcome<PublishedLogin>> {
+    let reviewed = match review_login(user_dir, display, patch, session).await? {
+        FlowOutcome::Completed(reviewed) => reviewed,
+        FlowOutcome::Back => return Ok(FlowOutcome::Back),
+        FlowOutcome::Cancelled => return Ok(FlowOutcome::Cancelled),
+    };
+    publish_reviewed_login(reviewed, display, reference, secret, session).await
+}
+
+async fn review_login(
+    user_dir: &Path,
+    display: &str,
+    patch: &ConfigFile,
+    session: &mut ScreenSession<'_>,
+) -> Result<FlowOutcome<ReviewedLogin>> {
     let prepared = prepare_user_config_edit(user_dir, patch)
         .with_context(|| format!("preparing the {display} connection configuration"))?;
     let preview = prepared.preview();
@@ -177,16 +198,32 @@ async fn publish_login(
         }
         ScreenResult::Effect(never) | ScreenResult::Completed(never) => match never {},
     }
-    // The preview is also returned for standalone stdout after terminal restoration.
-    // Inside a session it has already been reviewed and needs no transcript dump.
+    Ok(FlowOutcome::Completed(ReviewedLogin {
+        prepared,
+        review,
+        enroller: CredentialEnroller::new(),
+    }))
+}
 
+async fn publish_reviewed_login(
+    reviewed: ReviewedLogin,
+    display: &str,
+    reference: &CredentialRef,
+    secret: Secret,
+    session: &mut ScreenSession<'_>,
+) -> Result<FlowOutcome<PublishedLogin>> {
+    let ReviewedLogin {
+        prepared,
+        mut review,
+        enroller,
+    } = reviewed;
+    let preview = prepared.preview();
     review.saving();
     let cancellation = EffectCancellation::default();
     let publication = async {
         if cancellation.requested() {
             return Ok(FlowOutcome::Cancelled);
         }
-        let enroller = CredentialEnroller::new();
         let enrollment_enroller = enroller.clone();
         let enrollment_reference = reference.clone();
         let receipt = tokio::task::spawn_blocking(move || {
@@ -483,31 +520,14 @@ async fn connect_xai(
         .any(|model| model.provider == XAI_PROVIDER);
     let user_dir = before.resolution.layout.user_dir.clone();
     let existing = existing_login_references(&user_dir, XAI_PROVIDER, KIND_XAI_RESPONSES);
-    let mut previous_mode = None;
     loop {
-        let mode = match previous_mode.take() {
-            Some(mode) => mode,
-            None => match &existing {
-                Some(existing) => match choose_connect_mode("xAI", existing, session).await? {
-                    FlowOutcome::Completed(mode) => mode,
-                    FlowOutcome::Back | FlowOutcome::Cancelled => {
-                        return Ok(FlowOutcome::Cancelled);
-                    }
-                },
-                None => ConnectMode::Replace,
+        let mode = match &existing {
+            Some(existing) => match choose_connect_mode("xAI", existing, session).await? {
+                FlowOutcome::Completed(mode) => mode,
+                FlowOutcome::Back | FlowOutcome::Cancelled => return Ok(FlowOutcome::Cancelled),
             },
+            None => ConnectMode::Replace,
         };
-        let bundle = match crate::xai::login(session, no_motion).await? {
-            FlowOutcome::Completed(bundle) => bundle,
-            FlowOutcome::Back | FlowOutcome::Cancelled => return Ok(FlowOutcome::Cancelled),
-        };
-        let secret = bundle
-            .to_secret()
-            .context("encoding the protected xAI credential bundle")?;
-        // The bundle that was just earned must round-trip through protected
-        // storage before anything is committed on its behalf.
-        smith_runtime::xai::XaiTokenBundle::from_secret(&secret)
-            .context("the completed xAI login did not produce a storable bundle")?;
         let (reference, section) = login_patch_section(
             &mode,
             KIND_XAI_RESPONSES,
@@ -529,18 +549,30 @@ async fn connect_xai(
                 ModelSection::default(),
             );
         }
+        // Review before OAuth so browser approval cannot leave a new token
+        // waiting in memory for an easily missed second confirmation.
+        let reviewed = match review_login(&user_dir, "xAI", &patch, session).await? {
+            FlowOutcome::Completed(reviewed) => reviewed,
+            FlowOutcome::Back if existing.is_some() => continue,
+            FlowOutcome::Back | FlowOutcome::Cancelled => return Ok(FlowOutcome::Cancelled),
+        };
+        let bundle = match crate::xai::login(session, no_motion).await? {
+            FlowOutcome::Completed(bundle) => bundle,
+            FlowOutcome::Back | FlowOutcome::Cancelled => return Ok(FlowOutcome::Cancelled),
+        };
+        let secret = bundle
+            .to_secret()
+            .context("encoding the protected xAI credential bundle")?;
+        smith_runtime::xai::XaiTokenBundle::from_secret(&secret)
+            .context("the completed xAI login did not produce a storable bundle")?;
         let PublishedLogin {
             committed,
             enroller: _enroller,
             receipt,
             preview,
-        } = match publish_login(&user_dir, "xAI", &reference, secret, &patch, session).await? {
+        } = match publish_reviewed_login(reviewed, "xAI", &reference, secret, session).await? {
             FlowOutcome::Completed(published) => published,
-            FlowOutcome::Back => {
-                previous_mode = Some(mode);
-                continue;
-            }
-            FlowOutcome::Cancelled => return Ok(FlowOutcome::Cancelled),
+            FlowOutcome::Back | FlowOutcome::Cancelled => return Ok(FlowOutcome::Cancelled),
         };
         committed.accept();
         drop(receipt);
@@ -803,9 +835,116 @@ pub(super) async fn connect_chatgpt_from_setup(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use futures_util::StreamExt;
     use smith_client::NoticeKind;
+    use smith_config::auth_file::{AuthFileBackend, OwnerOnlyAuthFile};
+    use smith_config::credential::{CredentialEnrollmentBackend, KeychainError};
     use smith_tui::App;
     use smith_tui::transcript::Block;
+
+    use super::*;
+
+    struct NoKeychain;
+
+    impl CredentialEnrollmentBackend for NoKeychain {
+        fn prior(&self, _: &str, _: &str) -> Result<Option<Secret>, KeychainError> {
+            panic!("OAuth publication must not read the keychain")
+        }
+
+        fn store(&self, _: &str, _: &str, _: &Secret) -> Result<(), KeychainError> {
+            panic!("OAuth publication must not write the keychain")
+        }
+
+        fn remove(&self, _: &str, _: &str) -> Result<(), KeychainError> {
+            panic!("OAuth publication must not remove a keychain entry")
+        }
+    }
+
+    #[tokio::test]
+    async fn reviewed_login_saves_replacement_without_post_login_input() {
+        check_login_publication(false).await;
+    }
+
+    #[tokio::test]
+    async fn a_config_change_during_login_restores_the_prior_credential() {
+        check_login_publication(true).await;
+    }
+
+    async fn check_login_publication(change_config: bool) {
+        let root = tempfile::tempdir().unwrap();
+        let user_dir = root.path().join(".smith");
+        let auth = Arc::new(OwnerOnlyAuthFile::new(&user_dir));
+        let prior = Secret::new("prior-login");
+        auth.store("xai", &prior).unwrap();
+        auth.store("unrelated", &Secret::new("other-login"))
+            .unwrap();
+        let config_path = user_dir.join("config.toml");
+        let original = "# retain my settings\n[providers.xai]\nkind = \"xai-responses\"\nbase_url = \"https://api.x.ai/v1\"\ncredential = \"authfile:xai\"\n";
+        fs::write(&config_path, original).unwrap();
+        let patch = ConfigFile::parse(original).unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 32)).unwrap();
+        // Only the pre-login review receives Enter. Any second confirmation
+        // would leave publication pending until the test's timeout expires.
+        let events = futures_util::stream::iter([Ok(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))])
+        .chain(futures_util::stream::pending());
+        let mut session = ScreenSession::testing(&mut terminal, events);
+        let FlowOutcome::Completed(mut reviewed) =
+            review_login(&user_dir, "xAI", &patch, &mut session)
+                .await
+                .unwrap()
+        else {
+            panic!("the pre-login review was confirmed");
+        };
+        assert_eq!(auth.read("xai").unwrap().as_ref(), Some(&prior));
+        reviewed.enroller = CredentialEnroller::with_backends(Arc::new(NoKeychain), auth.clone());
+        let concurrent = format!("{original}\n# edited while the browser was open\n");
+        if change_config {
+            fs::write(&config_path, &concurrent).unwrap();
+        }
+        let replacement = Secret::new("replacement-login");
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            publish_reviewed_login(
+                reviewed,
+                "xAI",
+                &CredentialRef::parse("authfile:xai").unwrap(),
+                replacement.clone(),
+                &mut session,
+            ),
+        )
+        .await
+        .expect("saving after login must not require another keypress");
+        if change_config {
+            assert!(
+                result.is_err(),
+                "a concurrent config edit must fail publication"
+            );
+            assert_eq!(auth.read("xai").unwrap().as_ref(), Some(&prior));
+            assert_eq!(fs::read_to_string(&config_path).unwrap(), concurrent);
+        } else {
+            let Ok(FlowOutcome::Completed(published)) = result else {
+                panic!("the replacement login must be saved");
+            };
+            published.committed.accept();
+            assert_eq!(auth.read("xai").unwrap().as_ref(), Some(&replacement));
+            assert!(
+                fs::read_to_string(&config_path)
+                    .unwrap()
+                    .contains("# retain my settings")
+            );
+        }
+        assert_eq!(
+            auth.read("unrelated").unwrap().unwrap().expose(),
+            "other-login"
+        );
+    }
 
     #[test]
     fn connection_and_disconnection_outcomes_are_retained_notices() {
