@@ -266,8 +266,66 @@ impl Tool for ContextArtifactReader {
         self.inner
             .invoke(prepared, ctx)
             .await
+            .map(text_page)
             .map_err(|error| self.explain_missing(error))
     }
+}
+
+/// Runtime pages artifacts by raw bytes and returns any page that is not
+/// valid UTF-8 as an array of byte values, which is every text page whose edge
+/// splits a multi-byte character. Trimming the partial characters keeps a text
+/// artifact readable as text; a page that is invalid inside stays bytes.
+fn text_page(mut outcome: ToolOutcome) -> ToolOutcome {
+    if outcome.value.get("encoding").and_then(Value::as_str) != Some("bytes") {
+        return outcome;
+    }
+    let (Some(offset), Some(values)) = (
+        outcome.value.get("offset").and_then(Value::as_u64),
+        outcome.value.get("content").and_then(Value::as_array),
+    ) else {
+        return outcome;
+    };
+    let Some(bytes) = values
+        .iter()
+        .map(|value| value.as_u64().and_then(|byte| u8::try_from(byte).ok()))
+        .collect::<Option<Vec<u8>>>()
+    else {
+        return outcome;
+    };
+    // An offset inside a character starts with at most three continuation bytes.
+    let lead = bytes
+        .iter()
+        .take(3)
+        .take_while(|byte| (0x80..0xC0).contains(*byte))
+        .count();
+    let rest = &bytes[lead..];
+    let text = match std::str::from_utf8(rest) {
+        Ok(text) => text,
+        // No error length: the bytes end partway through one character.
+        Err(error) if error.error_len().is_none() => {
+            std::str::from_utf8(&rest[..error.valid_up_to()]).expect("validated prefix")
+        }
+        Err(_) => return outcome,
+    };
+    // A page shorter than one character keeps its bytes so reading still advances.
+    if text.is_empty() {
+        return outcome;
+    }
+    let consumed = lead + text.len();
+    let next_offset = if consumed < bytes.len() {
+        json!(offset + consumed as u64)
+    } else {
+        outcome.value["next_offset"].clone()
+    };
+    outcome.value = json!({
+        "artifact": outcome.value["artifact"].clone(),
+        "offset": offset + lead as u64,
+        "next_offset": next_offset,
+        "encoding": "utf8",
+        "content": text,
+    });
+    outcome.content = ToolContent::inline(vec![ContentPart::text(outcome.value.to_string())]);
+    outcome
 }
 
 /// Metadata-only inventory of the invoking session's artifacts.
@@ -839,6 +897,74 @@ mod tests {
             serde_json::to_value(result.outcome).unwrap(),
             serde_json::to_value(raw).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn pages_that_split_a_character_still_read_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(dir.path());
+        let put = |bytes: Vec<u8>, key: &str| ArtifactWrite {
+            bytes,
+            media_type: "text/plain".into(),
+            sensitivity: agent_runtime_core::artifact::ArtifactSensitivity::Sensitive,
+            retention: agent_runtime_core::artifact::ArtifactRetention::Session,
+            provenance: agent_runtime_core::artifact::ArtifactProvenance::new(
+                SessionId::new("owner"),
+                "test",
+            ),
+            idempotency_key: key.into(),
+        };
+        // Every character is two bytes, so any odd page edge splits one.
+        let text = store
+            .put(put("é".repeat(2000).into_bytes(), "text"))
+            .await
+            .unwrap();
+        let binary = store
+            .put(put(vec![0xFF, 0xFE, 0x00, 0x41], "binary"))
+            .await
+            .unwrap();
+        let reader = policy().reader(store);
+        let prep = preparation();
+        let read = |id: &str, offset: u64, limit: u64| {
+            let args = json!({"id": id, "offset": offset, "limit": limit});
+            let (reader, prep) = (&reader, &prep);
+            async move {
+                let prepared = reader.prepare(args, prep).await.unwrap();
+                reader.invoke(prepared, &invocation(prep)).await.unwrap()
+            }
+        };
+
+        // The page ends on a character's first byte.
+        let page = read(text.id.as_str(), 0, 2047).await;
+        assert_eq!(page.value["encoding"], "utf8");
+        assert_eq!(page.value["content"], "é".repeat(1023));
+        assert_eq!(page.value["offset"], 0);
+        assert_eq!(page.value["next_offset"], 2046);
+        let model_facing = match &page.content.as_inline().unwrap()[0] {
+            ContentPart::Text { text } => text.clone(),
+            other => panic!("expected text, got {other:?}"),
+        };
+        assert_eq!(
+            serde_json::from_str::<Value>(&model_facing).unwrap(),
+            page.value
+        );
+
+        // A chosen offset inside a character skips the partial leading bytes.
+        let page = read(text.id.as_str(), 1, 2048).await;
+        assert_eq!(page.value["encoding"], "utf8");
+        assert_eq!(page.value["offset"], 2);
+        assert_eq!(page.value["content"], "é".repeat(1023));
+        assert_eq!(page.value["next_offset"], 2048);
+
+        // Shorter than one character: the bytes stay, and reading advances.
+        let page = read(text.id.as_str(), 0, 1).await;
+        assert_eq!(page.value["encoding"], "bytes");
+        assert_eq!(page.value["next_offset"], 1);
+
+        // Bytes that are not UTF-8 inside the page are left alone.
+        let page = read(binary.id.as_str(), 0, 2048).await;
+        assert_eq!(page.value["encoding"], "bytes");
+        assert_eq!(page.value["content"], json!([0xFF, 0xFE, 0x00, 0x41]));
     }
     async fn put(
         store: &SmithArtifactStore,
