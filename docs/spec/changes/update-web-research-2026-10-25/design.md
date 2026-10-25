@@ -7,44 +7,60 @@ spot-checked against the cited blog posts and source files and held in every
 case; every problem below is cost, latency, or lost sources.
 
 The read-only child filter lives in Agent Runtime
-(`delegation/lifecycle.rs`): a `ToolViewScope::ReadOnly` spec and any
-`WorkspacePolicy::ReadOnlyView` both apply `tool_is_read_only`, which admits
-only tools whose permission upper bound is within `FsRead`, `ClockRead`, and
-`RandomRead`. `web_fetch` and backend `web_search` declare network and
-data-egress permissions, so they never reach a read-only child. Hosted search
-is a provider capability rather than a tool and does reach children, which is
-why the `research` children still answered.
+(`delegation/lifecycle.rs`, predicate in `delegation/persistence.rs`): a
+`ToolViewScope::ReadOnly` spec and any `WorkspacePolicy::ReadOnlyView` both
+apply `tool_is_read_only`, which admits only tools whose permission upper
+bound is within `FsRead`, `ClockRead`, and `RandomRead`. That drops
+`web_fetch` and backend `web_search` (network, data egress), and also
+`artifact.read` and `artifact.list` (host-defined `artifact.read` permission).
+Hosted search is a provider capability rather than a tool and does reach
+children, which is why the `research` children still answered.
+
+## Owner decisions (2026-10-25)
+
+1. A child should not lose tools it needs; it has every necessary tool unless
+   configuration says otherwise.
+2. Reports should come back as text, not through pages; only extra data or
+   sources warrant artifacts. The proposed 16 KiB page change is dropped.
+3. Resolving citation redirects is fine.
 
 ## Goals / Non-Goals
 
-- Goals: research children can fetch and search; offloaded results are read
-  back in a few calls; citations name real pages without dominating the text;
-  agents are told to research from primary sources and report concisely.
+- Goals: research children can fetch, search, and read their own artifacts;
+  child reports reach the parent as text in one step; citations name real pages
+  without dominating the text; agents research from primary sources and report
+  concisely.
 - Non-Goals: a new deep-research mode or tool, provider deep-research models,
-  JavaScript rendering, PDF extraction, raising the default inline threshold,
-  or changing which tools the root's read-only posture admits.
+  JavaScript rendering, PDF extraction, changing the default inline threshold
+  or artifact page size, or granting write access by default.
 
 ## Decisions
 
-- **Allowlist in the runtime, filled by the host.** `DelegationConfig` gains
+- **Read-only means no writes, decided by the host.** `DelegationConfig` gains
   `read_only_tool_names: Vec<String>`, a sibling of `delegation_tool_names`.
-  Both read-only filters admit a tool that is in this list or passes
-  `tool_is_read_only`. The runtime does not decide what is safe to admit; Smith
-  passes exactly the tools its existing `read_only_network_modules` review
-  admits to a read-only posture, so the root and children apply one rule. The
-  neutral runtime default is an empty list, so other hosts are unaffected.
-  - Alternative considered (works today, no release): spawn a read-only-posture
-    profile with `tools: "all"` and `workspace: "shared"`. Verified live: the
-    child gets `web_fetch` and no `edit` or `shell`. Rejected as the fix
-    because it depends on the model choosing a shared workspace, gives up the
-    runtime's read-only view, and leaves build-posture children with a
-    read-only scope unable to fetch. It remains the interim workaround.
-- **Page bound from the output ceiling.** Artifact reads are already exempt
-  from offloading, so the inline threshold is the wrong reference. A quarter
-  of `limits.tool_output_limit_bytes` keeps the old headroom for JSON escaping
-  and byte arrays (up to four characters per byte) and gives 16 KiB at
-  defaults, under the runtime's 64 KiB `MAX_ARTIFACT_READ_BYTES`. A 35 KB
-  report becomes 3 reads instead of 18. Models may still request less.
+  Both read-only filters admit a tool that passes `tool_is_read_only`, or that
+  is listed and whose permission bound has no `FsWrite`, `HostFsWrite`,
+  `ExternalWrite`, or `ProcessSpawn`. The guard keeps a mistaken list from
+  granting a write. Smith fills the list with the names a read-only-posture
+  session holds on each child route, so the root and children apply one rule
+  and the owner's existing settings narrow both. The neutral runtime default is
+  an empty list, so other hosts are unaffected.
+  - Alternative considered: invert the runtime predicate to deny only write
+    permissions. Rejected because host-defined permissions (for example
+    `artifact.read`) cannot be classified by the runtime, and Smith's
+    `read_only_network_modules` setting would not be honored.
+  - Interim workaround, verified live: spawn a read-only-posture profile with
+    `tools: "all"` and `workspace: "shared"`; the child gets `web_fetch` and no
+    `edit` or `shell`. Applied to the owner's orchestrator instructions until
+    this ships.
+- **Reports inline up to the output ceiling.** Smith sets the runtime's
+  `delivery_inline_bytes` from `limits.tool_output_limit_bytes` (64 KiB, below
+  the runtime's 1 MiB maximum) instead of the inline threshold, and its output
+  offloader passes an `agent` outcome that carries a completed child's reply
+  through up to the same ceiling. Both are Smith-only. In the measured run all
+  three child reports (20–35 KB) would have arrived whole, removing the 45
+  reads spent on them; a batch of several long replies still falls back to
+  excerpts for the ones that do not fit.
 - **Resolve redirects in the adapter.** Gemini's `url_citation` annotations
   and grounding chunks carry only `url` (the redirect) and `title` (usually the
   domain); the search-result step carries no URLs (checked with one direct
@@ -66,10 +82,10 @@ why the `research` children still answered.
 
 - Admitting `web_fetch` to read-only children widens what a prompt-injected
   child can send out (URL parameters). The same exposure already exists for a
-  read-only root, approvals still apply to the child's calls, and the owner's
-  existing switch (`read_only_network_modules = []`) turns it off for both.
-- Larger pages put more bytes in each request; total bytes read are the same
-  or lower because fewer requests resend the conversation.
+  read-only root, approvals still apply to the child's calls, and
+  `read_only_network_modules = []` turns it off for both.
+- Inline reports put up to 64 KiB of reply in one parent request. The parent
+  read those bytes anyway; it now does so in one request instead of dozens.
 - Redirect resolution adds latency at the end of a cited response (bounded by
   the total budget) and depends on Google's redirect service behaving as
   measured. Failure degrades to today's output.
@@ -77,17 +93,16 @@ why the `research` children still answered.
 ## Migration Plan
 
 1. Land the prerequisite fixes on `fix/web-research-reads` (done in Smith).
-2. Agent Runtime branch: allowlist, redirect resolution, once-per-message
-   rendering, and the upstream page-edge fix; release one version.
-3. Smith: pin that release, wire the allowlist, change the page bound, add the
-   guidance; gate, push a branch for CI, then merge to main.
+2. Agent Runtime branch: read-only allowlist with write guard, redirect
+   resolution, once-per-message rendering, and the upstream page-edge fix;
+   release one version.
+3. Smith: pin that release, fill the allowlist, raise the delivery budget and
+   pass `agent` replies through, add the guidance; gate, push a branch for CI,
+   then merge to main.
 4. Runtime work merges to runtime main in the same cycle.
 
 ## Open Questions
 
-- Should the child allowlist default to the root's list (proposed) or require
-  a separate opt-in?
-- Is 16 KiB the right default page, or should the research profile also raise
-  `tool_output_inline_bytes` in the owner's configuration?
-- Is a request to Google's redirect host per cited source acceptable, or
-  should resolution be opt-in?
+- None blocking. Whether write access should also be granted by default
+  (today it needs a write posture, `tools` of `all`, and a writable workspace)
+  is out of scope unless the owner asks for it.

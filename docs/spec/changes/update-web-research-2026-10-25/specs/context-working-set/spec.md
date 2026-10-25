@@ -1,28 +1,3 @@
-## MODIFIED Requirements
-
-### Requirement: Artifact retrieval is bounded and authorized
-The effective raw page bound SHALL be one quarter of the resolved
-`limits.tool_output_limit_bytes`, at least 1 byte and at most the runtime's
-maximum artifact read. It SHALL NOT derive from the inline threshold, because
-artifact pages are never offloaded. Missing limits SHALL use that bound; valid
-larger limits SHALL be clamped during preparation. Source schemas SHALL permit
-the accepted input before normalization. Invocation SHALL refuse a prepared
-limit outside the current bound and delegate all session-ownership and
-source-integrity validation to the existing runtime.
-
-#### Scenario: A saved artifact is read after reopening a session
-- GIVEN a valid session-owned artifact retained on disk
-- WHEN its owner requests a large page after restart
-- THEN the tool returns a bounded page and accurate continuation offset; a
-  different session cannot read it and no original tool effect is replayed.
-
-#### Scenario: Default pages fit a long report in a few reads
-- **GIVEN** default limits and a 35,000-byte child reply stored as an artifact
-- **WHEN** the parent reads it with `artifact.read` from offset zero, following
-  each `next_offset`
-- **THEN** each page holds up to 16,384 bytes and three reads return the whole
-  reply
-
 ## ADDED Requirements
 
 ### Requirement: Text artifact pages never split a character
