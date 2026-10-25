@@ -3,12 +3,13 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use agent_runtime_core::cancel::Cancellation;
 use agent_runtime_core::clock::{Deadline, SystemClock};
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::ids::{RequestId, SessionId, ToolCallId, TurnId};
-use agent_runtime_core::tool::{InvocationContext, PreparationContext, Tool};
+use agent_runtime_core::tool::{InvocationContext, PreparationContext, Tool, ToolContent};
 use async_trait::async_trait;
 use serde_json::json;
 use smith_host::workspace::ProjectWorkspace;
@@ -25,7 +26,7 @@ const KNOWN_TASK_ID: &str = "task:1";
 #[derive(Debug, Default)]
 struct FakeHost {
     spawn_calls: Mutex<Vec<(String, Option<u64>)>>,
-    adopt_calls: Mutex<Vec<(String, String)>>,
+    adopt_calls: Mutex<Vec<(String, String, Option<u64>)>>,
     stop_calls: Mutex<Vec<String>>,
 }
 
@@ -64,11 +65,12 @@ impl BackgroundTaskHost for FakeHost {
         _group_pid: Option<u32>,
         captured_so_far: String,
         _lines: mpsc::Receiver<String>,
+        timeout_ms: Option<u64>,
     ) -> Result<SpawnedTask, RuntimeError> {
         self.adopt_calls
             .lock()
             .unwrap()
-            .push((command, captured_so_far));
+            .push((command, captured_so_far, timeout_ms));
         Ok(SpawnedTask {
             task_id: KNOWN_TASK_ID.to_owned(),
             spool_ref: "tasks/task_1.log".to_owned(),
@@ -110,6 +112,21 @@ impl BackgroundTaskHost for FakeHost {
     fn register_foreground_signal(&self, _session: SessionId) -> Option<oneshot::Receiver<()>> {
         None
     }
+}
+
+fn text_of(outcome: &agent_runtime_core::tool::ToolOutcome) -> String {
+    let parts = match &outcome.content {
+        ToolContent::Inline(parts) => parts,
+        ToolContent::Artifact { preview, .. } => preview,
+    };
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            agent_runtime_core::content::ContentPart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 struct Project {
@@ -259,4 +276,72 @@ async fn a_process_left_holding_the_output_is_handed_to_the_host() {
     let adopted = host.adopt_calls.lock().unwrap().clone();
     assert_eq!(adopted.len(), 1, "{adopted:?}");
     assert!(adopted[0].1.contains("started"), "{adopted:?}");
+    assert_eq!(adopted[0].2, None, "a leftover process has no deadline");
+}
+
+#[tokio::test]
+async fn a_call_still_running_at_the_threshold_moves_to_the_host() {
+    let host = Arc::new(FakeHost::default());
+    let tool = ShellTool::new(host.clone()).with_auto_background_after(Duration::from_millis(300));
+    let project = Project::new();
+
+    let started = std::time::Instant::now();
+    let outcome = project
+        .invoke(
+            &tool,
+            json!({"command": "echo started; sleep 3", "timeout_ms": 5000}),
+        )
+        .await
+        .expect("the call returns at the threshold");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+
+    let text = text_of(&outcome);
+    assert!(!outcome.is_error, "{text}");
+    assert_eq!(outcome.value["task_id"], KNOWN_TASK_ID);
+    assert_eq!(outcome.value["running"], true);
+    assert_eq!(outcome.value["backgrounded_automatically"], true);
+    assert!(outcome.value.get("backgrounded_by_user").is_none());
+    assert!(text.contains("started"), "{text}");
+    assert!(text.contains("NOT completed"), "{text}");
+    assert!(text.contains("5000ms timeout"), "{text}");
+
+    let adopted = host.adopt_calls.lock().unwrap().clone();
+    assert_eq!(adopted.len(), 1, "{adopted:?}");
+    // What is left of the timeout, not all of it again.
+    let deadline = adopted[0].2.expect("the call keeps its deadline");
+    assert!((3500..=4700).contains(&deadline), "{deadline}");
+}
+
+#[tokio::test]
+async fn a_timeout_at_the_threshold_still_kills_in_the_foreground() {
+    let host = Arc::new(FakeHost::default());
+    let tool = ShellTool::new(host.clone()).with_auto_background_after(Duration::from_millis(300));
+    let project = Project::new();
+
+    let outcome = project
+        .invoke(&tool, json!({"command": "sleep 3", "timeout_ms": 300}))
+        .await
+        .unwrap();
+    assert_eq!(outcome.value["timed_out"], true);
+    assert!(outcome.value.get("task_id").is_none());
+    assert!(host.adopt_calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_call_that_finishes_before_the_threshold_stays_in_the_foreground() {
+    let host = Arc::new(FakeHost::default());
+    let tool = ShellTool::new(host.clone()).with_auto_background_after(Duration::from_secs(2));
+    let project = Project::new();
+
+    let outcome = project
+        .invoke(&tool, json!({"command": "echo hi", "timeout_ms": 5000}))
+        .await
+        .unwrap();
+    assert_eq!(outcome.value["exit_code"], 0);
+    assert!(outcome.value.get("task_id").is_none());
+    assert!(host.adopt_calls.lock().unwrap().is_empty());
 }

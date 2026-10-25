@@ -137,7 +137,9 @@ pub trait BackgroundTaskHost: Send + Sync + std::fmt::Debug {
     /// signal fires, `child`'s stdout/stderr have already been taken, so the
     /// host must keep draining `lines` rather than taking the child's streams
     /// a second time. `captured_so_far` is the output collected before the
-    /// handoff and becomes the spool's opening content.
+    /// handoff and becomes the spool's opening content. `timeout_ms` is the
+    /// deadline from adoption: what is left of the call's timeout when it
+    /// moved on its own, `None` when the user moved it or the shell exited.
     // Every parameter here is independently meaningful to the handoff; a
     // wrapper struct would just relocate the same fields, not simplify them.
     #[allow(clippy::too_many_arguments)]
@@ -150,6 +152,7 @@ pub trait BackgroundTaskHost: Send + Sync + std::fmt::Debug {
         group_pid: Option<u32>,
         captured_so_far: String,
         lines: mpsc::Receiver<String>,
+        timeout_ms: Option<u64>,
     ) -> Result<SpawnedTask, RuntimeError>;
 
     /// Reads a bounded, offset-addressed slice of a task's spooled output.
@@ -218,6 +221,7 @@ impl BackgroundTaskHost for UnavailableBackgroundTaskHost {
         _group_pid: Option<u32>,
         _captured_so_far: String,
         _lines: mpsc::Receiver<String>,
+        _timeout_ms: Option<u64>,
     ) -> Result<SpawnedTask, RuntimeError> {
         Err(host_unavailable())
     }

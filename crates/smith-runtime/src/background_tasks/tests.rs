@@ -365,16 +365,17 @@ async fn a_task_whose_shell_exits_first_stays_stoppable() {
     assert!(!marker.exists(), "the stopped task's process survived");
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn a_foreground_call_hands_a_process_holding_its_output_to_the_registry() {
+/// Runs one `shell` call through `prepare` and `invoke`, as the runtime does.
+async fn run_shell(
+    tool: &smith_tools::ShellTool,
+    session: &SessionId,
+    arguments: serde_json::Value,
+) -> agent_runtime_core::tool::ToolOutcome {
     use agent_runtime_core::cancel::Cancellation;
     use agent_runtime_core::clock::{Deadline, SystemClock};
     use agent_runtime_core::ids::{RequestId, ToolCallId};
     use agent_runtime_core::tool::{InvocationContext, PreparationContext, Tool};
 
-    let services = BackgroundServices::new();
-    let session = unique_session();
     let dir = tempfile::tempdir().unwrap();
     let workspace = Arc::new(smith_host::workspace::ProjectWorkspace::new(dir.path()).unwrap());
     let invocation = InvocationContext {
@@ -398,18 +399,25 @@ async fn a_foreground_call_hands_a_process_holding_its_output_to_the_registry() 
         cancel: invocation.cancel.clone(),
         deadline: invocation.deadline,
     };
+    let prepared = tool.prepare(arguments, &preparation).await.unwrap();
+    tool.invoke(prepared, &invocation).await.unwrap()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_foreground_call_hands_a_process_holding_its_output_to_the_registry() {
+    let services = BackgroundServices::new();
+    let session = unique_session();
 
     // The shell is reaped before the registry adopts what it left
     // running, so the worker starts from an exited child.
     let tool = smith_tools::ShellTool::new(services.host());
-    let prepared = tool
-        .prepare(
-            serde_json::json!({"command": "sleep 10 & echo started"}),
-            &preparation,
-        )
-        .await
-        .unwrap();
-    let outcome = tool.invoke(prepared, &invocation).await.unwrap();
+    let outcome = run_shell(
+        &tool,
+        &session,
+        serde_json::json!({"command": "sleep 10 & echo started"}),
+    )
+    .await;
     assert!(!outcome.is_error);
     assert_eq!(outcome.value["exit_code"], 0);
     let task_id = outcome.value["task_id"]
@@ -423,6 +431,51 @@ async fn a_foreground_call_hands_a_process_holding_its_output_to_the_registry() 
         .await
         .unwrap();
     assert_eq!(status, TaskStatus::Stopped);
+    let result = services
+        .registry()
+        .get_task_output(&session, &task_id, 0, 65536)
+        .await
+        .unwrap();
+    assert!(result.output.contains("started"), "{}", result.output);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_call_moved_at_the_threshold_is_still_killed_at_its_timeout() {
+    let services = BackgroundServices::new();
+    let session = unique_session();
+    let tool = smith_tools::ShellTool::new(services.host())
+        .with_auto_background_after(Duration::from_millis(300));
+
+    let started = std::time::Instant::now();
+    let outcome = run_shell(
+        &tool,
+        &session,
+        serde_json::json!({"command": "echo started; sleep 30", "timeout_ms": 1500}),
+    )
+    .await;
+    assert!(!outcome.is_error);
+    assert_eq!(outcome.value["backgrounded_automatically"], true);
+    let task_id = outcome.value["task_id"]
+        .as_str()
+        .expect("the call moved to the background")
+        .to_owned();
+    let deadline = services
+        .registry()
+        .running_tasks(&session)
+        .into_iter()
+        .find(|task| task.task_id == task_id)
+        .and_then(|task| task.timeout_ms)
+        .expect("the task keeps a deadline");
+    assert!((1..=1200).contains(&deadline), "{deadline}");
+
+    let status = wait_for_terminal(services.registry(), &session, &task_id).await;
+    assert_eq!(status, TaskStatus::DeadlineKill);
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        started.elapsed()
+    );
     let result = services
         .registry()
         .get_task_output(&session, &task_id, 0, 65536)

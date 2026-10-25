@@ -34,8 +34,10 @@ the background.
   of the call, whether the command is still in the foreground or has moved to
   the background. A call whose `timeout_ms` is 300000 ms or less is killed in
   the foreground at its timeout, as today.
-- Manual backgrounding (ctrl+b) is unchanged. It still hands off with no
-  deadline.
+- Without a background host, a call still running at 5 minutes is stopped
+  with its process group, as a process left holding the pipe already is.
+- Manual backgrounding (ctrl+b) still hands off with no deadline. If the host
+  cannot adopt it, the process group is now stopped instead of left running.
 - This replaces the rule that Smith never converts a foreground call to the
   background automatically.
 

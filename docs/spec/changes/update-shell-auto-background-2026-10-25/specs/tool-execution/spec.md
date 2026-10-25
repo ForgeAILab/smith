@@ -45,7 +45,7 @@ output captured so far and the remaining `timeout_ms` deadline, which is
 measured from the start of the call. When the shell exits but a process it
 started still holds the output pipe 2 seconds later, that process MUST move to
 a session background task with no deadline. If no background service can take
-the process, Smith MUST stop it with its process group. Cancellation MUST reach
+the call or the process, Smith MUST stop it with its process group. Cancellation MUST reach
 the process group until the call returns. A background task whose shell has
 exited MUST stay stoppable by `task_stop`, its deadline, and session shutdown
 for as long as its output pipe stays open.
@@ -58,6 +58,14 @@ for as long as its output pipe stays open.
 - **AND** the result says the command has not completed
 - **AND** the task is killed with its process group 600000 ms after the call
   started if it is still running
+
+#### Scenario: Without a background service a long call is stopped
+
+- **GIVEN** a direct embedder supplies no background task service
+- **WHEN** a foreground call with `timeout_ms` 600000 is still running
+  300000 ms after it started
+- **THEN** Smith stops it with its process group
+- **AND** the result says it could not be moved to the background
 
 #### Scenario: A timeout at or below 5 minutes still kills in the foreground
 

@@ -683,6 +683,7 @@ impl smith_tools::background::BackgroundTaskHost for RegistryBackgroundTaskHost 
         group_pid: Option<u32>,
         captured_so_far: String,
         lines: mpsc::Receiver<String>,
+        timeout_ms: Option<u64>,
     ) -> Result<smith_tools::background::SpawnedTask, RuntimeError> {
         let (task_id, spool_ref) = self
             .registry
@@ -694,10 +695,7 @@ impl smith_tools::background::BackgroundTaskHost for RegistryBackgroundTaskHost 
                 group_pid,
                 &captured_so_far,
                 lines,
-                // Manual backgrounding hands off with no deadline: the
-                // foreground call's own `timeout_ms` governed the call it no
-                // longer is, and background tasks default to none anyway.
-                None,
+                timeout_ms,
             )
             .await?;
         Ok(smith_tools::background::SpawnedTask { task_id, spool_ref })

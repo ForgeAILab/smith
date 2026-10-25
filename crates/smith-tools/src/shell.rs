@@ -15,18 +15,20 @@
 //! `run_in_background` and manual backgrounding (ctrl+b in the TUI) are the
 //! two ways a caller moves ownership of that process group from this
 //! invocation to the session's background task registry, through the
-//! [`crate::background`] seam. The third is not asked for: a process the
+//! [`crate::background`] seam. Two more are not asked for. A call still
+//! running after [`AUTO_BACKGROUND_AFTER`] is handed off with what remains of
+//! its timeout, so no call holds a turn longer than that. And a process the
 //! command started with `&` inherits the output pipe unless it redirects it,
 //! and holds it open for as long as it runs, so a call that waited for the
 //! pipe to close would wait just as long. When the pipe outlives the shell by
 //! [`DRAIN_GRACE`], whatever holds it is handed off the same way. None of
 //! these paths exists without an injected host service: without it, an
-//! explicit `run_in_background` request fails clearly, and a process left
-//! holding the pipe is stopped with its group.
+//! explicit `run_in_background` request fails clearly, and a process that
+//! would have been handed off is stopped with its group.
 
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::security::{PermissionSet, SecurityResource};
@@ -71,6 +73,10 @@ const GRACE: Duration = Duration::from_millis(500);
 /// the command left running.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
+/// How long a foreground call may hold the turn before it moves to the
+/// background. A timeout at or below this still kills in the foreground.
+const AUTO_BACKGROUND_AFTER: Duration = Duration::from_secs(300);
+
 /// Resource kind used for the deliberately unsandboxed same-user host shell.
 ///
 /// A working directory below the project is only process setup; it does not
@@ -84,12 +90,24 @@ const HOST_SHELL_ENVIRONMENT_POLICY: &str = "inherit-host-environment-v1";
 #[derive(Debug, Clone)]
 pub struct ShellTool {
     background: Arc<dyn background::BackgroundTaskHost>,
+    auto_background_after: Duration,
 }
 
 impl ShellTool {
     /// Builds the tool with the background-task owner for this runtime.
     pub fn new(background: Arc<dyn background::BackgroundTaskHost>) -> Self {
-        Self { background }
+        Self {
+            background,
+            auto_background_after: AUTO_BACKGROUND_AFTER,
+        }
+    }
+
+    /// Moves a foreground call to the background after `after` instead of
+    /// [`AUTO_BACKGROUND_AFTER`], so tests need not wait five minutes.
+    #[must_use]
+    pub fn with_auto_background_after(mut self, after: Duration) -> Self {
+        self.auto_background_after = after;
+        self
     }
 }
 
@@ -126,11 +144,11 @@ impl Tool for ShellTool {
                     "timeout_ms": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Time limit in milliseconds. Defaults to 120000, max 600000. Optional for a background task; if omitted, it has no deadline."
+                        "description": "Time limit in milliseconds; the command is killed at it. Defaults to 120000, max 600000. A call still running after 300000 moves to the background and keeps this limit. Optional for a background task; if omitted, it has no deadline."
                     },
                     "run_in_background": {
                         "type": "boolean",
-                        "description": "Run in the background instead of waiting. Returns immediately with a task ID; the process keeps running. Poll output with `task_output`, stop early with `task_stop`. No deadline unless `timeout_ms` is set. Defaults to false."
+                        "description": "Run in the background instead of waiting. Returns immediately with a task ID; the process keeps running. Poll output with `task_output`, stop early with `task_stop`. No deadline unless `timeout_ms` is set. Use it for anything that may take over 5 minutes. Defaults to false."
                     }
                 },
                 "required": ["command"],
@@ -247,6 +265,7 @@ impl Tool for ShellTool {
             .map_or(DEFAULT_TIMEOUT_MS, |ms| (ms as u64).min(MAX_TIMEOUT_MS))
             .max(1);
 
+        let started = Instant::now();
         let mut child = spawn(command, &cwd)?;
 
         // stdout and stderr are merged in arrival order, because a compiler
@@ -282,6 +301,8 @@ impl Tool for ShellTool {
         let group = child.id();
         let mut output = String::new();
         let mut truncated = false;
+        let hand_off_after = self.auto_background_after;
+        let hands_off = u128::from(timeout_ms) > hand_off_after.as_millis();
 
         // Lines are accumulated inline, in the same loop that watches for
         // exit/timeout/cancel/backgrounding, rather than in a detached
@@ -300,7 +321,12 @@ impl Tool for ShellTool {
                         stop_group(&mut child, group).await;
                         Outcome::Cancelled
                     }
-                    () = recv_background_signal(&mut background_rx) => Outcome::Backgrounded,
+                    () = recv_background_signal(&mut background_rx) => {
+                        Outcome::Backgrounded { automatically: false }
+                    }
+                    () = tokio::time::sleep(hand_off_after), if hands_off => {
+                        Outcome::Backgrounded { automatically: true }
+                    }
                 }
             };
             tokio::pin!(terminal);
@@ -345,7 +371,7 @@ impl Tool for ShellTool {
                     stop_lingering(group, &mut lines_rx, &mut output, &mut truncated).await;
                 }
             }
-            Outcome::Backgrounded => {}
+            Outcome::Backgrounded { .. } => {}
         }
 
         match status {
@@ -405,6 +431,7 @@ impl Tool for ShellTool {
                             group,
                             output.clone(),
                             lines_rx,
+                            None,
                         )
                         .await
                     {
@@ -438,8 +465,14 @@ impl Tool for ShellTool {
                     is_error: !success,
                 })
             }
-            Outcome::Backgrounded => {
-                let spawned = self
+            Outcome::Backgrounded { automatically } => {
+                // The registry's deadline starts at adoption, so it gets what
+                // is left of this call's timeout, not all of it again. A call
+                // the user moved keeps none, as an explicit background call
+                // would without `timeout_ms`.
+                let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let remaining = timeout_ms.saturating_sub(elapsed).max(1);
+                let adopted = self
                     .background
                     .adopt(
                         ctx.session.clone(),
@@ -449,22 +482,66 @@ impl Tool for ShellTool {
                         group,
                         output.clone(),
                         lines_rx,
+                        automatically.then_some(remaining),
                     )
-                    .await?;
-                Ok(ToolOutcome {
-                    value: json!({
-                        "command": command,
-                        "task_id": spawned.task_id,
-                        "spool_ref": spawned.spool_ref,
-                        "running": true,
-                        "backgrounded_by_user": true,
-                    }),
-                    content: vec![agent_runtime_core::content::ContentPart::text(format!(
-                        "{}\n[moved to the background by the user as task {}; it has NOT \
+                    .await;
+                let spawned = match adopted {
+                    Ok(spawned) => spawned,
+                    Err(error) => {
+                        stop_detached(group).await;
+                        if !automatically {
+                            return Err(error);
+                        }
+                        return Ok(ToolOutcome {
+                            value: json!({
+                                "command": command,
+                                "timed_out": false,
+                                "truncated": truncated,
+                            }),
+                            content: vec![agent_runtime_core::content::ContentPart::text(format!(
+                                "{}\n[still running after {}ms and could not be moved to \
+                                     the background ({}), so it was stopped with its process \
+                                     group]",
+                                render(&output, truncated),
+                                hand_off_after.as_millis(),
+                                error.message
+                            ))]
+                            .into(),
+                            is_error: true,
+                        });
+                    }
+                };
+                let mut value = json!({
+                    "command": command,
+                    "task_id": spawned.task_id,
+                    "spool_ref": spawned.spool_ref,
+                    "running": true,
+                });
+                let note = if automatically {
+                    value["backgrounded_automatically"] = json!(true);
+                    value["timeout_ms"] = json!(timeout_ms);
+                    format!(
+                        "[still running after {}ms, so it moved to the background as task {}; \
+                         it has NOT completed — poll `task_output` with this task ID for its \
+                         result, or stop it with `task_stop`. It is still killed at its \
+                         {timeout_ms}ms timeout, {remaining}ms from now]",
+                        hand_off_after.as_millis(),
+                        spawned.task_id
+                    )
+                } else {
+                    value["backgrounded_by_user"] = json!(true);
+                    format!(
+                        "[moved to the background by the user as task {}; it has NOT \
                          completed — poll `task_output` with this task ID for its result, or \
                          stop it with `task_stop`]",
-                        render(&output, truncated),
                         spawned.task_id
+                    )
+                };
+                Ok(ToolOutcome {
+                    value,
+                    content: vec![agent_runtime_core::content::ContentPart::text(format!(
+                        "{}\n{note}",
+                        render(&output, truncated)
                     ))]
                     .into(),
                     is_error: false,
@@ -546,9 +623,12 @@ enum Outcome {
     Exited(std::io::Result<std::process::ExitStatus>),
     TimedOut,
     Cancelled,
-    /// The user moved this call to the background (ctrl+b) before it
-    /// finished; the registry now owns the process.
-    Backgrounded,
+    /// The call moved to the background before it finished, by the user
+    /// (ctrl+b) or at [`AUTO_BACKGROUND_AFTER`]; the registry now owns the
+    /// process.
+    Backgrounded {
+        automatically: bool,
+    },
 }
 
 fn render(output: &str, truncated: bool) -> String {
@@ -957,6 +1037,33 @@ mod tests {
 
         tokio::time::sleep(Duration::from_secs(3).saturating_sub(started.elapsed())).await;
         assert!(!marker.exists(), "cancellation left a process running");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn without_a_host_a_call_still_running_at_the_threshold_is_stopped() {
+        let (dir, ctx) = project();
+        let marker = dir.path().join("late.txt");
+        let command = format!("echo started; sleep 1; echo late > {}", marker.display());
+
+        let started = std::time::Instant::now();
+        let outcome = ShellTool::default()
+            .with_auto_background_after(Duration::from_millis(300))
+            .invoke(json!({"command": command, "timeout_ms": 5000}), &ctx)
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "{:?}",
+            started.elapsed()
+        );
+
+        let text = text_of(&outcome);
+        assert!(outcome.is_error, "{text}");
+        assert!(text.contains("started"), "{text}");
+        assert!(text.contains("stopped with its process group"), "{text}");
+        tokio::time::sleep(Duration::from_secs(2).saturating_sub(started.elapsed())).await;
+        assert!(!marker.exists(), "the command outlived the call");
     }
 
     #[tokio::test]
