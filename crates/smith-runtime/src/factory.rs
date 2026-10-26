@@ -170,7 +170,7 @@ use crate::transport::{ReqwestTransport, TransportConfig};
 use crate::xai::{XaiCacheIdentityProvider, XaiCredentialSource, XaiOAuthClient, XaiTokenBundle};
 
 mod authority;
-mod capabilities;
+pub(crate) mod capabilities;
 mod compose;
 mod construction;
 mod context_policy;

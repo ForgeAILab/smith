@@ -70,6 +70,61 @@ async fn provider_planning_records_every_versioned_smith_prompt_fragment() {
     session.shutdown().await.expect("a clean shutdown");
 }
 
+/// The web-research section joins a run whose surface can fetch, after every
+/// other Smith section; a run without web tools does not carry it.
+#[tokio::test]
+async fn web_research_guidance_follows_the_web_tool_surface() {
+    for web in [true, false] {
+        let fixture = Fixture::new(FAKE_CONFIG);
+        let provider = Arc::new(FakeProvider::text_reply("done"));
+        let mut request = RuntimeRequest {
+            provider: Some(provider.clone() as Arc<dyn Provider>),
+            ..request(&fixture, HostSurface::Headless)
+        };
+        if web {
+            request.built_in_tools = true;
+            request.modules = smith_module::ModuleComposition::with_defaults(
+                vec![smith_module::CompiledModule {
+                    module: Arc::new(smith_module_web::WebModule),
+                    origin: smith_module::ModuleOrigin::FirstParty,
+                }],
+                Vec::new(),
+            );
+        }
+        let smith = factory::build_request(request).await.expect("a runtime");
+        let session = smith
+            .runtime()
+            .start_session(StartSession::new())
+            .await
+            .expect("a session");
+        session
+            .run(UserInput::text("what changed in the latest release?"))
+            .await
+            .expect("the turn runs");
+        let snapshot = session.snapshot();
+        let manifest = snapshot.manifests.last().expect("a run manifest");
+        let ids = manifest
+            .manifest
+            .segments
+            .iter()
+            .filter(|segment| segment.id.as_str().starts_with("smith.prompt."))
+            .map(|segment| segment.id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids.last().map(String::as_str) == Some("smith.prompt.web-research"),
+            web,
+            "{ids:?}"
+        );
+        assert_eq!(
+            ids.iter()
+                .filter(|id| *id == "smith.prompt.web-research")
+                .count(),
+            usize::from(web)
+        );
+        session.shutdown().await.expect("a clean shutdown");
+    }
+}
+
 #[tokio::test]
 async fn a_complete_prompt_override_ignores_project_instructions() {
     let fixture = Fixture::new(FAKE_CONFIG);

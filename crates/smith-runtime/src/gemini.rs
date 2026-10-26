@@ -21,6 +21,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use agent_runtime::provider::citation::{CitationResolver, GEMINI_GROUNDING_REDIRECT_PREFIX};
 use agent_runtime_core::content::{Message, Role};
 use agent_runtime_core::provider::{
     CacheResourceProvider, Capabilities, ModelDescriptor, ModelId, Provider, ProviderCallContext,
@@ -32,6 +33,52 @@ use async_trait::async_trait;
 /// on a model turn.
 const CONTINUATION: &str =
     "Continue this turn from the attributed instruction at the end of your context.";
+
+/// How long one citation redirect lookup may take.
+const REDIRECT_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Resolves Gemini's grounding redirect citations to the pages they cite.
+///
+/// Each lookup is one GET to the redirect host the provider named. It is not
+/// followed, its body is not read, and it carries no credential. Anything but
+/// a redirect to an absolute HTTP(S) URL keeps the redirect.
+#[derive(Debug)]
+pub(crate) struct GroundingRedirectResolver {
+    client: reqwest::Client,
+}
+
+impl GroundingRedirectResolver {
+    /// A resolver sending `user_agent`, or `None` when no client can be built.
+    pub(crate) fn new(user_agent: &str) -> Option<Self> {
+        let client = reqwest::Client::builder()
+            .connect_timeout(REDIRECT_LOOKUP_TIMEOUT)
+            .timeout(REDIRECT_LOOKUP_TIMEOUT)
+            .user_agent(user_agent)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .ok()?;
+        Some(Self { client })
+    }
+}
+
+#[async_trait]
+impl CitationResolver for GroundingRedirectResolver {
+    async fn resolve(&self, url: &str) -> Option<String> {
+        if !url.starts_with(GEMINI_GROUNDING_REDIRECT_PREFIX) {
+            return None;
+        }
+        let response = self.client.get(url).send().await.ok()?;
+        if !response.status().is_redirection() {
+            return None;
+        }
+        let target = url::Url::parse(response.headers().get("location")?.to_str().ok()?).ok()?;
+        (matches!(target.scheme(), "https" | "http")
+            && target.username().is_empty()
+            && target.password().is_none()
+            && target.host().is_some())
+        .then(|| target.into())
+    }
+}
 
 /// Wraps a native Gemini provider so no request ends on a model turn.
 pub(crate) fn accept_internal_turns(provider: Arc<dyn Provider>) -> Arc<dyn Provider> {

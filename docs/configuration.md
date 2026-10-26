@@ -1384,6 +1384,12 @@ This allows `web_fetch`, backend search and `view_image` while planning. Hosted
 search follows the `web` entry too. MCP and plugin tools cannot use this list to
 admit network access. Filesystem and external writes remain excluded.
 
+The same list governs read-only child agents: a child spawned with read-only
+tools, or into the read-only workspace view, holds exactly what a read-only
+posture would, including these network reads and its own `artifact.read` and
+`artifact.list`. It is denied only tools that write or run commands, and its
+calls go through the same approval policy.
+
 A prepared-call rule can approve one fetch host without approving others:
 
 ```toml

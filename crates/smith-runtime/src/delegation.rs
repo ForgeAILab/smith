@@ -514,11 +514,11 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 tools.push(tool.clone());
             }
         }
-        tools.extend(
-            plugin_tools
-                .into_iter()
-                .filter(|tool| write_capable || tool.spec().effects.is_read_only()),
-        );
+        // The same rule a read-only root applies to remote tools: a plugin
+        // tool that reaches the network is not a read here.
+        tools.extend(plugin_tools.into_iter().filter(|tool| {
+            write_capable || crate::factory::capabilities::read_only_extension(tool.spec())
+        }));
         tools.push(Arc::new(crate::questionnaire::SmithQuestionnaireTool));
         tools.push(Arc::new(WriteTodosTool::new()));
         if let Some(store) = self.artifact_store.clone() {
@@ -565,6 +565,15 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 .with_workspace(workspace.root())
                 .with_agent("child"),
         );
+        // Everything above already applied the read-only posture to a child
+        // that may not write, so Runtime's read-only view keeps all of it that
+        // cannot write rather than only filesystem reads.
+        let read_only_names = (!write_capable).then(|| {
+            tools
+                .iter()
+                .map(|tool| tool.spec().name)
+                .collect::<Vec<_>>()
+        });
         let child_limits = self.capability_limits.for_child(&route.capabilities);
         let scope_inputs = child_limits.apply(scope_inputs)?;
         let activatable =
@@ -602,6 +611,17 @@ impl ChildRuntimeFactory for SmithChildFactory {
             }
         };
 
+        let hosted_tools =
+            if write_capable || route.read_only_network_modules.iter().any(|id| id == "web") {
+                route.hosted_tools.clone()
+            } else {
+                Vec::new()
+            };
+        let prompt_contributor = if crate::prompt::web_research_eligible(&tools, &hosted_tools) {
+            route.prompt_contributor.with_web_research()
+        } else {
+            route.prompt_contributor.clone()
+        };
         let mut builder = RuntimeBuilder::new(route.model.clone())
             .request_sizer(Arc::new(
                 crate::image_sizing::SmithRequestSizer::for_provider_and_model(
@@ -614,13 +634,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
             .provider_name(route.provider_name.clone())
             .model_profile(route.model_profile.clone())
             .loop_config(loop_config)
-            .hosted_tools(
-                if write_capable || route.read_only_network_modules.iter().any(|id| id == "web") {
-                    route.hosted_tools.clone()
-                } else {
-                    Vec::new()
-                },
-            )
+            .hosted_tools(hosted_tools)
             .context_policy(route.context_policy.clone())
             .cache_capability(
                 agent_runtime::context::ProviderCacheCapability::from_control(
@@ -655,11 +669,14 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 ActivationContext::new().with_ready_config([INTERACTION_READY_CONFIG]),
             )
             .activation_budget(activation_budget)
-            .context_contributor(Arc::new(route.prompt_contributor.clone()))
+            .context_contributor(Arc::new(prompt_contributor))
             .context_contributor(todo_component.clone())
             .tool_output_processor(todo_component.clone())
             .turn_commit_hook(todo_component)
             .clock(self.clock.clone());
+        if let Some(names) = read_only_names {
+            builder = builder.read_only_tool_names(names);
+        }
         if let Some(backend) = external_agent {
             builder = builder
                 .external_agent(backend)

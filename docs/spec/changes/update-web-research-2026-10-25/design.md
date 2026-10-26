@@ -36,15 +36,21 @@ children, which is why the `research` children still answered.
 
 ## Decisions
 
-- **Read-only means no writes, decided by the host.** `DelegationConfig` gains
-  `read_only_tool_names: Vec<String>`, a sibling of `delegation_tool_names`.
-  Both read-only filters admit a tool that passes `tool_is_read_only`, or that
-  is listed and whose permission bound has no `FsWrite`, `HostFsWrite`,
-  `ExternalWrite`, or `ProcessSpawn`. The guard keeps a mistaken list from
-  granting a write. Smith fills the list with the names a read-only-posture
-  session holds on each child route, so the root and children apply one rule
-  and the owner's existing settings narrow both. The neutral runtime default is
-  an empty list, so other hosts are unaffected.
+- **Read-only means no writes, decided by the host.** `RuntimeBuilder` gains
+  `read_only_tool_names(names)`, set by the child factory on the builder it
+  returns. Both read-only filters admit a tool that passes `tool_is_read_only`,
+  or that is named and whose permission bound has no `FsWrite`, `FsCreate`,
+  `FsDelete`, `HostFsWrite`, `ExternalWrite`, or `ProcessSpawn`. The guard
+  keeps a mistaken list from granting a write. Smith's `child_builder` already
+  applies the read-only posture (module posture, network-module admission,
+  read-only built-ins, the root's MCP rule) to a child that may not write, so
+  it names exactly the tools it built. The root and children apply one rule
+  and the owner's existing settings narrow both. The default is an empty list,
+  so other hosts are unaffected.
+  - Implementation note: the approved draft put a static list on
+    `DelegationConfig`. Module tool names exist only after each spawn mounts
+    its modules, so a static list would have meant hardcoded names or a second
+    mount. The builder carries the same list per spawn; behavior is unchanged.
   - Alternative considered: invert the runtime predicate to deny only write
     permissions. Rejected because host-defined permissions (for example
     `artifact.read`) cannot be classified by the runtime, and Smith's
@@ -69,6 +75,13 @@ children, which is why the `research` children still answered.
   once, without following it or reading a body, before rendering. Requests go
   only to the redirect host the provider named, with a short per-request
   timeout and a total budget; any failure keeps the redirect link.
+  - The adapter's transport is pinned to the Interactions origin, so lookups
+    go through a host-installed `CitationResolver`
+    (`GeminiInteractionsProvider::with_citation_resolver`): at most 64 unique
+    redirects, 8 in flight, 3 s in total, stopped by cancellation or the
+    request deadline. Runtime ships `GroundingRedirectResolver` on its reqwest
+    transport; Smith implements the trait on its own client (reqwest 0.13) so
+    the binary keeps one HTTP stack.
 - **One link per source per message.** The renderer already skips a URL the
   cited block contains; it now also skips a URL linked earlier in the same
   assistant message. Gemini emits a distinct redirect per grounding chunk, so

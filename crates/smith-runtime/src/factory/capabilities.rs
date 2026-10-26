@@ -238,7 +238,7 @@ pub(super) fn todo_planning_eligible(request: &RuntimeRequest) -> bool {
     !request.config.agent.active_posture().is_read_only()
 }
 
-pub(super) fn read_only_extension(spec: agent_runtime_core::tool::ToolSpec) -> bool {
+pub(crate) fn read_only_extension(spec: agent_runtime_core::tool::ToolSpec) -> bool {
     spec.effects.is_read_only()
         && spec
             .permission_upper_bound

@@ -69,6 +69,7 @@ mod fallback;
 mod limit_outcome;
 mod model_routes;
 mod profile_selection;
+mod read_only_children;
 mod result_delivery;
 mod transcript;
 mod wait_timers;

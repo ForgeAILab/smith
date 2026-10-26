@@ -546,7 +546,13 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         .activation_policy(Arc::new(FailClosedPolicy))
         .activation_context(activation_context)
         .activation_budget(activation_budget)
-        .context_contributor(Arc::new(prompt.contributor.clone()))
+        .context_contributor(Arc::new(
+            if crate::prompt::web_research_eligible(&capabilities.tools, &web.hosted) {
+                prompt.contributor.with_web_research()
+            } else {
+                prompt.contributor.clone()
+            },
+        ))
         .clock(clock.clone())
         .event_buffer(request.event_buffer)
         .shutdown_timeout_ms(request.shutdown_timeout_ms);

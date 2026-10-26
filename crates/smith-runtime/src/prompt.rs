@@ -169,7 +169,18 @@ non-resumable child with a new spawn. A child that needs user input returns a ne
 result instead of asking the user; decide whether to invoke root ask_user, then send the \
 answer to that child with an explicit agent follow_up. Stop a child with agent action stop \
 and its child_id; task_output and task_stop control background shell tasks, not child \
-agents.";
+agents.\n\
+\n\
+Ask a research child for its findings as concise text with one list of the sources it \
+used, not a full dossier with a citation after every sentence. Bulky data stays in the \
+artifacts its tools stored; ask it to name those by id instead of pasting them.";
+
+const WEB_RESEARCH: &str = "\
+Check a claim that depends on the web against its primary source; when web_fetch is \
+available, read the page itself rather than a search snippet. Cite the URL of each page you \
+used. A fetched page too long to show whole is stored as an artifact: read the part you need \
+with artifact.read. Report concisely, with one list of sources at the end rather than a \
+citation after every sentence.";
 
 const ADVISOR: &str = "\
 Consult advisor before substantive work, when stuck or when results do not fit, and before \
@@ -277,6 +288,22 @@ impl SmithPromptContributor {
     /// The immutable fragments this component contributes.
     pub fn fragments(&self) -> &[ContextFragment] {
         &self.fragments
+    }
+
+    /// Adds the web-research section, for a run whose surface can search or
+    /// fetch. It follows every other instruction section, so runs without web
+    /// tools keep their prefix. A complete host override stays as authored.
+    pub(crate) fn with_web_research(&self) -> Self {
+        if self
+            .fragments
+            .iter()
+            .any(|fragment| fragment.id.as_str() == "smith.prompt.host-override")
+        {
+            return self.clone();
+        }
+        let mut fragments = self.fragments.to_vec();
+        fragments.push(web_research_fragment());
+        Self::from_fragments(fragments)
     }
 
     /// Narrows inherited root instructions for a child without an advisor.
@@ -484,7 +511,7 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
         (
             "delegation",
             DELEGATION,
-            "smith-prompt-delegation-5",
+            "smith-prompt-delegation-6",
             context.delegation,
         ),
         (
@@ -566,6 +593,41 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
         );
     }
     fragments
+}
+
+/// Sequence of the web-research section: after the variable block's
+/// capability sections, so its presence moves no other section.
+const WEB_RESEARCH_SEQUENCE: u64 = VARIABLE_BLOCK_SEQUENCE + 5;
+
+/// The web-research section [`SmithPromptContributor::with_web_research`] adds.
+pub fn web_research_fragment() -> ContextFragment {
+    ContextFragment::new(
+        "smith.prompt.web-research",
+        FragmentKind::DeveloperInstruction,
+        FragmentSource::Host,
+        RegistryRevision::new("smith-prompt-web-research-1"),
+        FragmentContent::Text(WEB_RESEARCH.to_owned()),
+    )
+    .with_position(ContextPosition::new(
+        ContextLane::Instructions,
+        WEB_RESEARCH_SEQUENCE,
+    ))
+    .with_priority(i32::try_from(WEB_RESEARCH_SEQUENCE).unwrap_or(i32::MAX))
+    // Presence tracks the web tool surface, fixed for an activation epoch.
+    .with_cache_class(CacheClass::Stable)
+    .with_sensitivity(Sensitivity::Internal)
+}
+
+/// Whether a run with `tools` and `hosted` declarations gets the web-research
+/// section: the same facts that put web tools on its surface.
+pub(crate) fn web_research_eligible(
+    tools: &[std::sync::Arc<dyn agent_runtime_core::tool::Tool>],
+    hosted: &[agent_runtime_core::provider::HostedTool],
+) -> bool {
+    !hosted.is_empty()
+        || tools
+            .iter()
+            .any(|tool| matches!(tool.spec().name.as_str(), "web_fetch" | "web_search"))
 }
 
 /// Returns all default fragments in canonical contribution order.
@@ -878,6 +940,49 @@ mod tests {
                 .map(|fragment| fragment.id.to_string())
                 .collect::<Vec<_>>();
             assert_eq!(ids, vec![expected.to_owned()], "{label}");
+        }
+    }
+
+    #[test]
+    fn web_research_guidance_follows_every_other_section_and_moves_none() {
+        let base = SmithPromptContributor::new(&fully_capable());
+        let with = base.with_web_research();
+        let (last, rest) = with.fragments().split_last().unwrap();
+        assert_eq!(last.id.as_str(), "smith.prompt.web-research");
+        assert!(
+            base.fragments()
+                .iter()
+                .filter(|fragment| fragment.position.lane == ContextLane::Instructions)
+                .all(|fragment| fragment.position.sequence < last.position.sequence)
+        );
+        assert_eq!(
+            rest.iter()
+                .map(ContextFragment::content_hash)
+                .collect::<Vec<_>>(),
+            base.fragments()
+                .iter()
+                .map(ContextFragment::content_hash)
+                .collect::<Vec<_>>()
+        );
+        let prompt = render_fragments(with.fragments());
+        for guidance in ["primary source", "artifact.read", "one list of sources"] {
+            assert!(prompt.contains(guidance), "{prompt}");
+        }
+        let host = SmithPromptContributor::override_prompt("HOST");
+        assert_eq!(host.with_web_research().fragments().len(), 1);
+    }
+
+    #[test]
+    fn delegation_guidance_asks_research_children_for_bounded_reports() {
+        let prompt = render_fragments(&dynamic_fragments(&DynamicPromptContext {
+            delegation: true,
+            ..DynamicPromptContext::default()
+        }));
+        for guidance in [
+            "concise text with one list of the sources",
+            "name those by id",
+        ] {
+            assert!(prompt.contains(guidance), "{prompt}");
         }
     }
 

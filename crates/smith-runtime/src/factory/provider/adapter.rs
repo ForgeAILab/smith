@@ -612,10 +612,17 @@ pub(super) fn construct(
             let target = ProviderCredentialTarget::new(request.config.provider.name.value.clone())
                 .map_err(|error| FactoryError::Runtime(RuntimeError::config(error.to_string())))?;
             let source = credentials::credential_source(request, pool, secret);
-            let provider = GeminiInteractionsProvider::with_credential_source(
+            let mut provider = GeminiInteractionsProvider::with_credential_source(
                 transport, config, target, source,
             )
             .map_err(FactoryError::Transport)?;
+            // Grounding citations arrive as opaque Google redirects; resolved,
+            // they name the page and collapse to one link per page.
+            if let Some(resolver) =
+                crate::gemini::GroundingRedirectResolver::new(&request.transport.user_agent)
+            {
+                provider = provider.with_citation_resolver(Arc::new(resolver));
+            }
             // Wrapped here rather than at either call site, so the root
             // session and every preflighted child route get the same
             // treatment: an attributed internal turn is delivered on

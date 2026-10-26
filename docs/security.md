@@ -267,7 +267,15 @@ journals, and canonical user history.
 Questionnaire answers resume task reasoning but grant no permission or
 remembered approval. Child agents inherit a scoped tool view, capacity and
 deadline limits, no nested delegation, and root-only direct questionnaire
-readiness by default.
+readiness by default. A read-only child's view is the read-only posture's:
+Smith names the tools it kept, and Agent Runtime still refuses any named tool
+whose permission bound includes a filesystem or external write or a process
+spawn.
+
+Hosted-search citations from Gemini arrive as Google redirect links. Smith
+resolves each one with a single GET to the redirect host that neither follows
+the redirect, reads a body, nor sends a credential, and keeps the redirect when
+the lookup fails or takes longer than two seconds.
 
 ## Installed coding agents and the capability bridge
 
