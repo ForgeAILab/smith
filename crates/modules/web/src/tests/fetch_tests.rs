@@ -85,6 +85,72 @@ fn fallback_threshold_counts_cleaned_unicode_text_and_keeps_safe_links() {
     }
 }
 
+#[test]
+fn page_chrome_hidden_elements_and_image_urls_are_left_out() {
+    let base = Url::parse("https://docs.rs/guide/").unwrap();
+    let source = format!(
+        "<body><header><a href='/'>BAD SITE</a></header>\
+         <div role='navigation'>BAD ROLE</div><div role='note search'>BAD SEARCH</div>\
+         <div hidden>BAD HIDDEN</div><p aria-hidden='true'>BAD ARIA</p>\
+         <p style='color: red; DISPLAY : none !important'>BAD STYLE</p>\
+         <button>BAD BUTTON</button><iframe>BAD FRAME</iframe><dialog>BAD DIALOG</dialog>\
+         <div><header><h1>Post title</h1><p>By the team</p></header>\
+         <section><header>Section header</header></section>\
+         <p>{}</p><img alt=' A  diagram of the flow ' src='data:image/png;base64,AAAA'>\
+         <img src='/decor.png'></div></body>",
+        "Useful prose. ".repeat(20)
+    );
+    let (_, body) = crate::html::convert(&source, &base).unwrap();
+    assert!(!body.contains("BAD"), "{body}");
+    for kept in [
+        "# Post title",
+        "By the team",
+        "Section header",
+        "A diagram of the flow",
+    ] {
+        assert!(body.contains(kept), "{kept}: {body}");
+    }
+    assert!(!body.contains("data:"));
+    assert!(!body.contains("decor.png"));
+}
+
+#[test]
+fn links_without_text_go_and_links_into_the_page_keep_their_text() {
+    let base = Url::parse("https://docs.rs/guide/").unwrap();
+    let source = format!(
+        "<main><h2 id='new'><a href='#new'></a>What is new</h2>\
+         <h3 id='z'><a href='#z' aria-label='Link'>\u{200b}</a>Zero width</h3>\
+         <p>{} <a href='#toc'>Contents</a> <a href='https://docs.rs/guide/'>This page</a> \
+         <a href='javascript:x()'>Unsafe</a> <a name='here'>Named</a> \
+         <a href='/other#part'>Other page</a></p></main>",
+        "Useful prose. ".repeat(20)
+    );
+    let (_, body) = crate::html::convert(&source, &base).unwrap();
+    assert!(body.contains("## What is new"), "{body}");
+    assert!(body.contains("### Zero width"), "{body}");
+    assert!(!body.contains("#new") && !body.contains("#z") && !body.contains("[]"));
+    for text in ["Contents", "This page", "Unsafe", "Named"] {
+        assert!(body.contains(text), "{text}: {body}");
+        assert!(!body.contains(&format!("[{text}]")), "{text}: {body}");
+    }
+    assert!(
+        body.contains("[Other page](https://docs.rs/other#part)"),
+        "{body}"
+    );
+}
+
+#[test]
+fn a_page_wrapped_in_one_form_keeps_its_content() {
+    let base = Url::parse("https://docs.rs/guide/").unwrap();
+    let source = format!(
+        "<body><form id='page'><main><p>{}</p><input type='hidden' value='BAD STATE'></main></form></body>",
+        "Useful prose. ".repeat(20)
+    );
+    let (_, body) = crate::html::convert(&source, &base).unwrap();
+    assert!(body.contains("Useful prose."), "{body}");
+    assert!(!body.contains("BAD"), "{body}");
+}
+
 #[tokio::test]
 async fn truncation_stops_at_five_mib_and_keeps_the_prefix() {
     let mut body = vec![b'x'; BODY_LIMIT];

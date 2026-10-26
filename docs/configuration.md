@@ -1238,7 +1238,9 @@ reserve, or estimated-count slack.
 
 `[context] tool_output_inline_bytes` controls when serialized tool output is
 stored as an artifact. A completed child's reply, read with `agent` or delivered
-automatically, stays inline up to `limits.tool_output_limit_bytes` instead. `[context] inline_images` independently sets the recent
+automatically, and a `web_fetch` page stay inline up to
+`limits.tool_output_limit_bytes` instead; a longer page shows its beginning up
+to that ceiling. `[context] inline_images` independently sets the recent
 image window, default 10, range 1–100. The window advances in batches, retaining
 between that count and twice that count minus one; images in the newest user
 message are always included and do not count toward the window. A text-only
@@ -1315,9 +1317,14 @@ Web tools let Smith read public pages and search for current information.
 
 `web_fetch` is available by default. It GETs one HTTP(S) URL, converts the main
 HTML content to Markdown, passes through text, JSON and XML, and returns images
-as image parts. Results identify their source and are labelled external,
-untrusted content. Downloads are bounded to 5 MiB, 30 seconds and five redirects.
-There is no JavaScript rendering, authenticated browsing or PDF extraction.
+as image parts. The Markdown leaves out page chrome (site banners, navigation,
+buttons, frames, dialogs, hidden elements), shows images as their alt text, and
+drops heading permalinks and other links that lead back into the same page.
+Results identify their source and are labelled external, untrusted content.
+Downloads are bounded to 5 MiB, 30 seconds and five redirects. A page stays in
+the conversation whole up to `limits.tool_output_limit_bytes`; a longer one
+shows its beginning, and `artifact.read` continues it. There is no JavaScript
+rendering, authenticated browsing or PDF extraction.
 
 Private, loopback, link-local and metadata destinations are refused on every
 redirect hop. To read a local documentation server, set this in user config:
