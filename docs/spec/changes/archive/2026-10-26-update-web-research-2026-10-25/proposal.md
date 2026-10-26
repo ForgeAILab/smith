@@ -1,13 +1,14 @@
 ---
 created_at: 2026-10-25T19:42:24Z
-updated_at: 2026-10-26T15:00:00Z
+updated_at: 2026-10-26T07:02:30Z
 ---
 
 # Web research that reaches and reads its sources
 
-Status: approved 2026-10-25 and implementing; revised 2026-10-26 with the
-owner's answers to the rerun findings (fetched pages inline, softer fetch
-guidance with a source budget, cleaner page text).
+Status: approved 2026-10-25; revised 2026-10-26 with the owner's answers to
+the rerun findings (fetched pages inline, softer fetch guidance with a source
+budget, cleaner page text). Shipped on main through c29dce6f and archived
+2026-10-26; the code and orchestrator reruns are deferred (task 3.2b).
 
 ## Why
 

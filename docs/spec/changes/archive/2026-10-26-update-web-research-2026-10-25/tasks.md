@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-25T19:42:24Z
-updated_at: 2026-10-26T15:00:00Z
-completed_at:
+updated_at: 2026-10-26T07:02:30Z
+completed_at: 2026-10-26T07:02:30Z
 ---
 
 ## 0. Prerequisites (landed separately on `fix/web-research-reads`)
@@ -58,12 +58,41 @@ completed_at:
   a whole-page `form`.
 - [x] 2.10 Update `docs/configuration.md` and `docs/context-working-set.md`
   for inline fetched pages.
-- [ ] 2.6 Remove the interim spawn sentence from the owner's orchestrator
+- [x] 2.6 Remove the interim spawn sentence from the owner's orchestrator
   instructions once 2.2 ships (backup
-  `~/.smith/config.toml.bak-before-web-research-20261025`).
+  `~/.smith/config.toml.bak-before-web-research-20261025`): done 2026-10-26.
+  The main build c29dce6f is installed at `~/.local/bin/smith`, with the
+  previous build kept as `smith-main-69d686ad-backup`. The interim "Spawn
+  `research` children the same way…" sentence was removed from the owner's
+  `orchestrator` and `orchestrator-pro` profiles (config backup
+  `config.toml.bak-before-drop-research-spawn-20261026`), and Smith loads all
+  three profiles. The owner's `tool_output_inline_bytes = 65536` overrides
+  were left in place.
 
 ## 3. Verification
 
-- [ ] 3.1 Full gate (`--no-fail-fast`, 1.88 Clippy, CI's extra steps).
-- [ ] 3.2 Rerun the three live tests (research, code, orchestrator) and record
-  calls, time, tokens, and citation bytes against the 2026-10-25 baseline.
+- [x] 3.1 Full gate (`--no-fail-fast`, 1.88 Clippy, CI's extra steps). The
+  full locked gate ran on the pre-rebase tip 93d28a87: 3,333 passed, 0
+  failed, with fmt, both Clippy toolchains, fixtures, no-default-features,
+  smoke and deny all clean. After rebasing onto main, the headless fixtures
+  were re-recorded (token counts only, c29dce6f) and the smith-runtime and
+  web tests passed (1,064 passed, 0 failed); the full gate was not rerun on
+  the merged tip. CI passed on all four jobs (run 40273121970); the Linux
+  stable job's first attempt timed out on the known rare runtime conformance
+  hang `queued_interrupted_turn_does_not_contaminate_history` and passed on
+  rerun.
+- [x] 3.2 Rerun the research live test and record calls, time, tokens, and
+  citation bytes against the 2026-10-25 baseline (the code and orchestrator
+  reruns are 3.2b, deferred below). Runtime pin v0.12.0, branch build,
+  default inline settings: 61.6 s, 4 requests, 36.7K uncached + 39.1K cached
+  tokens, 2.0K output, 5 searches, 11 `web_fetch`, 0 `artifact.read`; the
+  answer had real blog.rust-lang.org URLs and one source list. Before:
+  82.8 s, 70.2K + 52.2K tokens, 6 fetches, 4 `artifact.read`.
+
+## Deferred to a follow-up change
+
+Archived 2026-10-26 without this. The owner deferred it on 2026-10-26: the
+orchestrator rerun costs about 17M tokens. No result is claimed for it.
+
+- 3.2b Rerun the code and orchestrator live tests and record calls, time,
+  tokens, and citation bytes against the 2026-10-25 baseline.

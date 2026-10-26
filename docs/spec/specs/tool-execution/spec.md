@@ -174,7 +174,7 @@ a session-scoped task ID and a bounded output-spool reference instead of
 waiting for completion. A background task SHALL run until it exits, is stopped
 by `task_stop`, or the session shuts down; `timeout_ms` MAY still be supplied
 to bound it. Smith MUST NOT convert a foreground call to background
-automatically under any condition.
+automatically except as defined by Automatic foreground handoff.
 
 #### Scenario: Start a build in the background
 
@@ -615,19 +615,41 @@ sent to a text-only model.
 
 Smith SHALL provide a `web_fetch` tool that GETs one `http` or `https` URL and
 returns its content as text. HTML SHALL be reduced to its main content and
-converted to Markdown with links preserved. `text/*`, JSON, and XML SHALL be
-returned as is. `image/*` SHALL be returned as an image part. Any other
-content type SHALL be a tool error naming the type. The tool SHALL bound
-each fetch at 5 MiB, 30 seconds, and 5 redirects. It SHALL send no cookies or
-credentials, and SHALL use a fixed Smith User-Agent. The result SHALL begin
-with the final URL, status, content type, and page title, followed by a
-line marking the body as external, untrusted content from that URL.
+converted to Markdown with links preserved. The main content SHALL be the
+page's `main` element, else its `article`, else its body, falling back to the
+body when the chosen element holds under 200 characters. Conversion SHALL leave
+out page chrome and invisible elements: scripts, styles, `nav`, `footer`,
+`aside`, `noscript`, `svg`, a `header` that is outside `article`, `aside`,
+`main`, `nav`, and `section` and holds no `h1`, interactive controls, frames,
+embedded media, elements whose `role` marks navigation, a banner, a footer,
+complementary content, search, a menu, or a dialog, and elements marked
+`hidden`, `aria-hidden="true"`, or inline `display: none`. An image SHALL be
+replaced by its alt text. A link with no text SHALL be removed, and a link to
+the same page or to no safe `http`/`https` destination SHALL keep only its
+text. `text/*`, JSON, and XML SHALL be returned as is. `image/*` SHALL be
+returned as an image part. Any other content type SHALL be a tool error naming
+the type. The tool SHALL bound each fetch at 5 MiB, 30 seconds, and 5
+redirects. It SHALL send no cookies or credentials, and SHALL use a fixed Smith
+User-Agent. The result SHALL begin with the final URL, status, content type,
+and page title, followed by a line marking the body as external, untrusted
+content from that URL.
 
 #### Scenario: Read a documentation page
 
 - **WHEN** the agent calls `web_fetch` with `https://docs.rs/serde/latest/serde/`
 - **THEN** the result begins with the final URL, `200`, and `text/html`
 - **AND** the body is Markdown of the page's main content with its links
+
+#### Scenario: A release post with heading permalinks and images
+
+- **GIVEN** a blog post whose headings each hold an empty link to their own
+  anchor, whose site banner is a top-level `header`, and whose figures are
+  images with alt text
+- **WHEN** the agent fetches it
+- **THEN** each heading is its text alone, with no empty link
+- **AND** the site banner is absent
+- **AND** each image appears as its alt text, without its URL
+- **AND** links to other pages keep their destinations
 
 #### Scenario: Oversized download
 
@@ -872,3 +894,75 @@ binding and `smith.guide.setup`, which explains configuring one.
 - **GIVEN** `plan` posture
 - **WHEN** the tool list is built
 - **THEN** the image-generation inactive report carries no setup hint
+
+### Requirement: Automatic foreground handoff
+
+A foreground `shell` call SHALL NOT hold a turn longer than 5 minutes, or for
+longer than 2 seconds after its shell exits. A call still running 300000 ms
+after it started MUST move to a session background task. The task keeps the
+output captured so far and the remaining `timeout_ms` deadline, which is
+measured from the start of the call. When the shell exits but a process it
+started still holds the output pipe 2 seconds later, that process MUST move to
+a session background task with no deadline. If no background service can take
+the call or the process, Smith MUST stop it with its process group. Cancellation MUST reach
+the process group until the call returns. A background task whose shell has
+exited MUST stay stoppable by `task_stop`, its deadline, and session shutdown
+for as long as its output pipe stays open.
+
+#### Scenario: A long call moves to the background at 5 minutes
+
+- **GIVEN** a foreground call with `timeout_ms` 600000
+- **WHEN** the command is still running 300000 ms after the call started
+- **THEN** the tool call returns with a task ID and the output captured so far
+- **AND** the result says the command has not completed
+- **AND** the task is killed with its process group 600000 ms after the call
+  started if it is still running
+
+#### Scenario: Without a background service a long call is stopped
+
+- **GIVEN** a direct embedder supplies no background task service
+- **WHEN** a foreground call with `timeout_ms` 600000 is still running
+  300000 ms after it started
+- **THEN** Smith stops it with its process group
+- **AND** the result says it could not be moved to the background
+
+#### Scenario: A timeout at or below 5 minutes still kills in the foreground
+
+- **GIVEN** a foreground call with the default 120000 ms timeout
+- **WHEN** the command is still running at 120000 ms
+- **THEN** Smith kills it with its process group and returns the actionable
+  timeout outcome
+
+#### Scenario: A server left running with `&` does not hold the call
+
+- **GIVEN** a foreground command that starts a process with `&` without
+  redirecting that process's output, then exits
+- **WHEN** the process still holds the output pipe 2 seconds after the shell
+  exits
+- **THEN** the tool call returns the shell's output and exit status
+- **AND** the process continues as a background task whose ID the result names
+
+#### Scenario: Without a background service the process is stopped
+
+- **GIVEN** a direct embedder supplies no background task service
+- **WHEN** a process left by a foreground command still holds the output pipe
+  2 seconds after the shell exits
+- **THEN** Smith stops it with its process group
+- **AND** the result says it was stopped
+
+#### Scenario: Cancellation after the shell exits
+
+- **GIVEN** a foreground command whose shell exited while a process it started
+  holds the output pipe
+- **WHEN** the tool call is cancelled before the call returns
+- **THEN** Smith terminates the owned process group
+- **AND** the call reports cancellation
+
+#### Scenario: A background task whose shell exited first is stopped
+
+- **GIVEN** a background task whose shell exited while a process it started
+  holds the output pipe
+- **WHEN** the agent calls `task_stop` with its task ID
+- **THEN** Smith terminates the owned process group within the cleanup grace
+  period
+- **AND** the task reports the stopped state
