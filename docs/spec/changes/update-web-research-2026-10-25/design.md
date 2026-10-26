@@ -24,6 +24,15 @@ children, which is why the `research` children still answered.
    sources warrant artifacts. The proposed 16 KiB page change is dropped.
 3. Resolving citation redirects is fine.
 
+Owner decisions (2026-10-26), after the reruns:
+
+4. Fetched pages come back inline up to the output ceiling, and the fetch
+   guidance is softened with a source budget; both ship together.
+5. Pages should be converted so the agent reads the main content. Conversion
+   was already Markdown of `<main>`/`<article>`; the rerun pages were mostly
+   source files and JSON, so this change removes the measured HTML noise
+   rather than adding a new extractor.
+
 ## Goals / Non-Goals
 
 - Goals: research children can fetch, search, and read their own artifacts;
@@ -32,7 +41,9 @@ children, which is why the `research` children still answered.
   concisely.
 - Non-Goals: a new deep-research mode or tool, provider deep-research models,
   JavaScript rendering, PDF extraction, changing the default inline threshold
-  or artifact page size, or granting write access by default.
+  for other tools or the artifact page size, a hard fetch limit, readability
+  scoring or model-summarized fetches, trimming JSON responses, or granting
+  write access by default.
 
 ## Decisions
 
@@ -86,6 +97,57 @@ children, which is why the `research` children still answered.
   cited block contains; it now also skips a URL linked earlier in the same
   assistant message. Gemini emits a distinct redirect per grounding chunk, so
   this only helps after resolution, which is why the two ship together.
+- **Fetched pages inline up to the output ceiling.** The offloader passes a
+  `web_fetch` outcome through when its serialization fits
+  `limits.tool_output_limit_bytes`, the same rule as a child's reply. In the
+  rerun, 64 KiB covers about 80% of the offloaded pages; the default-settings
+  cost came from 2 KiB read-backs, each resending the conversation, so a page
+  read once inline costs one request instead of ten.
+  - A longer page is still stored whole by the runtime offloader, and its
+    preview becomes the page's beginning up to the ceiling (less 1 KiB for the
+    reference and note) instead of a 1 KiB excerpt. The note names the byte
+    offset in the stored outcome where the unshown text starts, so a
+    continuing read neither repeats the beginning nor guesses. The offset is
+    found by encoding the shown prefix the way the stored outcome encodes it;
+    when it cannot be found the note says to read from the start.
+  - The ceiling is the same per-call output bound the runtime applies to the
+    rendered result, so an inline page is never cut by that later bound.
+  - An owner who raised `tool_output_inline_bytes` to 64 KiB already had
+    inline pages; the gain is for default settings and for pages above the
+    ceiling.
+  - Risk: each inline page stays in the child's context. With no limit on
+    fetches, 50 inline pages would fill a window, which is why the source
+    budget ships with it.
+- **A soft source budget, in guidance.** The web-research section asks the
+  model to start from search results, fetch a page when a snippet leaves a
+  claim unsettled, prefer the one primary page that settles it, and keep to
+  the task's source budget, or about ten pages without one, then report what
+  is still open. Root delegation guidance asks the parent to give a research
+  child its questions and a budget. There is no enforced limit: Smith's
+  defaults stay simple, and the parent or a profile's instructions can set a
+  tighter budget.
+- **Page text without chrome.** Conversion keeps choosing `<main>`, then
+  `<article>`, then the body, and gains these removals, all from the rerun
+  pages or the elements Mozilla Readability treats as invisible: a `header`
+  outside `article`, `aside`, `main`, `nav` and `section` that holds no `h1`
+  (the page banner; a post's own title block often sits in one);
+  `button`, `iframe`, `template`, `dialog`, `select`, `input`, `textarea`,
+  `canvas`, `object`, `embed`, `video`, and `audio`; elements whose `role` is
+  `navigation`, `banner`, `contentinfo`, `complementary`, `search`, `menu`,
+  `menubar`, `dialog`, or `alertdialog`; and elements marked `hidden`,
+  `aria-hidden="true"`, or `display: none` inline. An image becomes its alt
+  text, which also drops `data:` URIs. A link with no text is removed (the
+  heading permalinks were 53% of one release page's link bytes), and a link
+  that points back into the same page, or that had no safe destination, keeps
+  only its text; a link whose only text is a zero-width space counts as empty.
+  `form` is kept because some sites wrap the whole page in one.
+  - Measured on 15 sample pages (docs, blogs, Wikipedia, GitHub, MDN), the
+    converted text shrank 19% in total: 31% on Wikipedia (navigation boxes),
+    5–12% on documentation pages, with no body text lost in a review of the
+    removed lines.
+  - Alternative considered: a Readability port as a new dependency. Rejected
+    for now: the measured noise is removed by these rules, and the expensive
+    pages were not HTML.
 - **Guidance is conditional.** The web-research section is contributed only
   when `web_fetch`, `web_search`, or hosted search is on the surface and sits
   after the unconditional sections, so runs without web tools keep their
@@ -99,6 +161,12 @@ children, which is why the `research` children still answered.
   `read_only_network_modules = []` turns it off for both.
 - Inline reports put up to 64 KiB of reply in one parent request. The parent
   read those bytes anyway; it now does so in one request instead of dozens.
+- Inline fetched pages make each child request larger. The budget guidance
+  is the counterweight; if a model ignores it, the context planner's normal
+  compaction still applies.
+- Removing `aria-hidden` and `hidden` elements could drop content on a page
+  that hides its main content until a script runs. Those pages already need
+  JavaScript to render, which is a non-goal.
 - Redirect resolution adds latency at the end of a cited response (bounded by
   the total budget) and depends on Google's redirect service behaving as
   measured. Failure degrades to today's output.

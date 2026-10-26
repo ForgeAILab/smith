@@ -1,12 +1,13 @@
 ---
 created_at: 2026-10-25T19:42:24Z
-updated_at: 2026-10-25T20:20:00Z
+updated_at: 2026-10-26T15:00:00Z
 ---
 
 # Web research that reaches and reads its sources
 
-Status: Stage 1 proposal, revised with the owner's answers of 2026-10-25.
-Nothing here changes behavior until approved.
+Status: approved 2026-10-25 and implementing; revised 2026-10-26 with the
+owner's answers to the rerun findings (fetched pages inline, softer fetch
+guidance with a source budget, cleaner page text).
 
 ## Why
 
@@ -29,6 +30,17 @@ sources:
   `[domain](https://vertexaisearch.cloud.google.com/grounding-api-redirect/…)`,
   167–240 bytes each, 29–79 per report. The link hides the cited page, and a
   page cited in several text blocks is linked again in each.
+
+Reruns on the implementation (2026-10-26) fixed sources and citations but
+moved the cost to page reads: four research children made 210 `web_fetch`
+calls and 703 `artifact.read` calls, about 17M input tokens at default
+settings. 110 fetched pages were over the 8 KiB inline threshold (median
+20 KB, 90th percentile 98 KB); 81 were raw source files, 26 GitHub API JSON,
+and 3 HTML. Each was offloaded to a 1 KiB excerpt and read back in 2 KiB
+pages of escaped JSON. The guidance that made research fetch primary pages
+("read the page itself rather than a search snippet") set no limit. The HTML
+pages carried avoidable noise: an empty permalink link on every heading and
+image URLs.
 
 Two defects found in the same runs are fixed separately on
 `fix/web-research-reads` and are prerequisites here: `artifact.read` returned
@@ -56,21 +68,36 @@ a JSON array of byte values whenever a page edge split a UTF-8 character, and
   links to their destination URL with one bounded, non-following request each,
   and every hosted adapter links a source once per assistant message. A failed
   resolution keeps the redirect.
+- **Fetched pages come back as text.** A `web_fetch` result stays inline up
+  to the same per-call output ceiling (64 KiB by default). A longer page shows
+  its beginning up to that ceiling, and the complete result is stored as an
+  artifact whose reference names the `artifact.read` offset where the unshown
+  text starts. Other tools keep the 8 KiB inline threshold.
+- **Cleaner page text.** HTML conversion also drops page chrome (a page-level
+  `header`, buttons, frames, form controls, media, landmark roles for
+  navigation, banners, footers and dialogs, and hidden elements), replaces
+  images with their alt text, removes links with no text, and keeps the text
+  of links that point back into the same page or nowhere.
 - **Research guidance.** When web tools or hosted search are on the run's
   surface, a short conditional instruction section asks for primary sources,
-  real page URLs, and concise reports; root delegation guidance asks research
-  children for findings as text with one source list, naming artifacts for
-  bulky data.
+  real page URLs, and concise reports. It asks the model to start from search
+  results, fetch a page when a snippet leaves a claim unsettled, and keep to a
+  source budget (about ten pages when the task sets none). Root delegation
+  guidance asks for research children's findings as text with one source
+  list, naming artifacts for bulky data, and gives each research child its
+  questions and a source budget.
 
 ## Impact
 
 - Affected specs: `child-agents`, `context-working-set`, `provider-runtime`,
-  `harness-policy`.
+  `harness-policy`, `tool-execution`.
 - Affected code: Agent Runtime `delegation/{types,lifecycle,persistence}.rs`,
   `agent-runtime-provider/src/{gemini,hosted}.rs`, `harness/artifacts.rs`
   (upstream copy of the page-edge fix); Smith `smith-runtime/src/delegation.rs`,
-  `tool_output.rs`, prompt sections, and the runtime pin.
+  `tool_output.rs`, prompt sections, `modules/web/src/html.rs`, and the runtime
+  pin.
 - Requires one Agent Runtime release and a Smith pin move, bundling all runtime
-  work here. The delivery-budget and `agent result` changes are Smith-only.
+  work here. The delivery-budget, `agent result`, fetched-page, page-text and
+  guidance changes are Smith-only.
 - Overlaps `add-jev-agent-mode-and-two-layer-delegation-2026-10-23` only in
   `child-agents`; neither change edits the other's requirements.

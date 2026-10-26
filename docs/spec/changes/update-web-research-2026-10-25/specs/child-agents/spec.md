@@ -79,17 +79,20 @@ ordinary offloading rule.
 ### Requirement: Research delegation asks for bounded reports
 
 When the delegation section is present, Smith's root delegation guidance SHALL
-tell the model to ask a research child for its findings as concise text with
-one list of the sources it used, leaving bulky data in the artifacts its tools
-produced and naming those artifacts by ID, rather than returning a full dossier
-with repeated citations.
+tell the model to give a research child the questions it must settle and a
+source budget, and to ask for its findings as concise text with one list of
+the sources it used, leaving bulky data in the artifacts its tools produced
+and naming those artifacts by ID, rather than returning a full dossier with
+repeated citations.
 
 #### Scenario: The root delegates a research question
 
 - **GIVEN** a root run whose surface includes the `agent` tool
 - **WHEN** the context is assembled
-- **THEN** the delegation guidance asks research children for concise
-  findings, a single source list, and artifact IDs for bulky data
+- **THEN** the delegation guidance asks the root to give each research child
+  its questions and a source budget
+- **AND** it asks research children for concise findings, a single source
+  list, and artifact IDs for bulky data
 
 ## MODIFIED Requirements
 

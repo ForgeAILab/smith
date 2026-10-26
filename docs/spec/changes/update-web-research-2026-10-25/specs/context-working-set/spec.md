@@ -25,3 +25,35 @@ type, so a binary artifact is never decoded as text.
 - **GIVEN** an artifact whose bytes are not UTF-8
 - **WHEN** any page is read
 - **THEN** the page is returned as bytes, unchanged
+
+### Requirement: A fetched page stays inline up to the output ceiling
+Smith SHALL keep a `web_fetch` outcome inline when its serialization fits the
+resolved `limits.tool_output_limit_bytes`, regardless of
+`context.tool_output_inline_bytes`. A larger text outcome SHALL be stored
+unchanged as an artifact, and the model SHALL receive the reference with a
+preview holding the page's beginning up to that ceiling, less room for the
+reference, followed by a note giving the `artifact.read` offset in the stored
+outcome at which the unshown text starts. When that offset cannot be
+determined, the note SHALL say to read the artifact from its start. Other
+tools SHALL keep the inline threshold.
+
+#### Scenario: A 30 KB page under default settings
+- **GIVEN** `tool_output_inline_bytes = 8192` and the default 64 KiB output
+  ceiling
+- **WHEN** `web_fetch` returns a 30 KB page
+- **THEN** the model receives the whole page inline
+- **AND** no artifact is stored for it
+
+#### Scenario: A 200 KB page
+- **GIVEN** the default 64 KiB output ceiling
+- **WHEN** `web_fetch` returns a 200 KB source file
+- **THEN** the complete outcome is stored as an artifact
+- **AND** the model receives the file's first part, up to the ceiling, with
+  the artifact reference
+- **AND** reading the artifact at the offset the note gives returns the text
+  that follows the shown part
+
+#### Scenario: Another tool's 30 KB result
+- **GIVEN** the same settings
+- **WHEN** a shell command prints 30 KB
+- **THEN** the result is offloaded with a bounded excerpt as before
