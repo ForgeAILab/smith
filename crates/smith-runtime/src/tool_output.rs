@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 use smith_config::resolve::ResolvedConfig;
 
 use crate::artifact::ArtifactCatalog;
+use crate::delegation::AGENT_TOOL_NAME;
 
 /// Dedicated retrieval affordance: a broad `read` query can rank the file reader first.
 pub const ARTIFACT_DISCOVERY_QUERY: &str = "artifact-read";
@@ -52,18 +53,23 @@ pub struct ToolOutputContextPolicy {
     pub inline_bytes: u32,
     /// Maximum raw bytes requested from the artifact reader per invocation.
     pub artifact_page_bytes: u32,
+    /// Serialized bound up to which a completed child's reply stays inline,
+    /// in an `agent` outcome or an automatic delivery: the per-call ceiling.
+    pub reply_bytes: u32,
 }
 
 impl ToolOutputContextPolicy {
     /// Derives the policy without increasing an existing stricter output bound.
     pub fn from_config(config: &ResolvedConfig) -> Self {
-        let inline_bytes = u64::from(config.context.tool_output_inline_bytes.value)
-            .min(config.limits.tool_output_limit_bytes.value) as u32;
+        let limit = config.limits.tool_output_limit_bytes.value;
+        let inline_bytes =
+            u64::from(config.context.tool_output_inline_bytes.value).min(limit) as u32;
         Self {
             inline_bytes,
             // Leave room for JSON escaping, metadata and non-UTF8 byte arrays.
             // The final planner still sizes the actual rendered request.
             artifact_page_bytes: (inline_bytes / 4).clamp(1, 4096),
+            reply_bytes: limit.min(u64::from(u32::MAX)) as u32,
         }
     }
 
@@ -138,8 +144,8 @@ impl ToolOutputProcessor for ContextOffloader {
         ComponentDescriptor::new(
             "harness.artifact.offload",
             RegistryRevision::new(format!(
-                "smith-inline-output-v1-{}",
-                self.policy.inline_bytes
+                "smith-inline-output-v2-{}-{}",
+                self.policy.inline_bytes, self.policy.reply_bytes
             )),
         )
     }
@@ -152,6 +158,15 @@ impl ToolOutputProcessor for ContextOffloader {
         // Both already bound their own pages; offloading either would answer
         // a lookup with yet another reference.
         if view.call.name == "artifact.read" || view.call.name == ARTIFACT_LIST_TOOL_NAME {
+            return Ok(ToolOutputPatch::outcome(outcome));
+        }
+        // A child's reply is the report the parent asked for. Offloaded, it
+        // comes back one page per request, each resending the conversation.
+        if view.call.name == AGENT_TOOL_NAME
+            && carries_child_reply(&outcome.value)
+            && serde_json::to_vec(&outcome)
+                .is_ok_and(|encoded| encoded.len() <= self.policy.reply_bytes as usize)
+        {
             return Ok(ToolOutputPatch::outcome(outcome));
         }
         let Some(parts) = outcome.content.as_inline() else {
@@ -173,6 +188,16 @@ impl ToolOutputProcessor for ContextOffloader {
             *parts = vec![ContentPart::text(preview)];
         }
         Ok(patch)
+    }
+}
+
+/// Whether an `agent` outcome hands over a completed child's reply: `result`
+/// nests it under `text`, and `wait` on an idle child carries it bare.
+fn carries_child_reply(value: &Value) -> bool {
+    match value.get("result") {
+        Some(Value::String(_)) => true,
+        Some(Value::Object(result)) => result.get("text").is_some_and(Value::is_string),
+        _ => false,
     }
 }
 
@@ -669,6 +694,7 @@ mod tests {
         ToolOutputContextPolicy {
             inline_bytes: 8192,
             artifact_page_bytes: 2048,
+            reply_bytes: 65536,
         }
     }
     fn view() -> ToolOutputView {
@@ -756,6 +782,39 @@ mod tests {
             serde_json::to_value(original).unwrap()
         );
         assert!(!store.directory().exists());
+    }
+    #[tokio::test]
+    async fn a_childs_reply_stays_inline_up_to_the_output_ceiling() {
+        let dir = tempfile::tempdir().unwrap();
+        let offloader = policy().offloader(store(dir.path())).unwrap();
+        let mut agent = view();
+        agent.call.name = AGENT_TOOL_NAME.into();
+        let report = "a finding\n".repeat(3000);
+        for value in [
+            json!({"child_id": "c1", "state": "idle", "result": {"text": report, "artifacts": []}}),
+            json!({"child_id": "c1", "state": "idle", "result": report}),
+        ] {
+            let outcome = ToolOutcome::json(value);
+            let patch = offloader.process(&agent, outcome.clone()).await.unwrap();
+            assert_eq!(
+                serde_json::to_value(patch.outcome).unwrap(),
+                serde_json::to_value(outcome).unwrap()
+            );
+        }
+        let offloaded = [
+            // Over the ceiling, a reply follows the ordinary rule.
+            (
+                &agent,
+                ToolOutcome::json(json!({"result": {"text": "x".repeat(70_000)}})),
+            ),
+            // So does an agent outcome that carries no reply.
+            (&agent, ToolOutcome::json(json!({"children": report}))),
+            (&view(), ToolOutcome::text(report.clone())),
+        ];
+        for (view, outcome) in offloaded {
+            let patch = offloader.process(view, outcome).await.unwrap();
+            assert!(patch.outcome.content.artifact_reference().is_some());
+        }
     }
     #[tokio::test]
     async fn medium_failure_has_bounded_diagnostics_and_exact_idempotent_evidence() {

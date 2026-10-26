@@ -7,6 +7,7 @@ const LONG_TASK_MARKER: &str = "write-a-long-report-for-the-parent";
 const SHORT_TASK_MARKER: &str = "write-a-short-note-for-the-parent";
 const LONG_REPLY_HEAD: &str = "LONG-REPLY-HEAD";
 const SHORT_REPLY: &str = "the short child's note";
+const REPORT_TAIL: &str = "REPORT-TAIL";
 
 /// A child's final answer longer than one Runtime internal turn (4,096
 /// characters), which is an ordinary size for a review or research report.
@@ -15,6 +16,18 @@ fn long_reply() -> String {
         "{LONG_REPLY_HEAD}\n{}",
         "one finding the parent asked for, with its evidence\n".repeat(120)
     )
+}
+
+/// A 30,000-byte final answer, the size of a long research report.
+fn research_report() -> String {
+    let line = "a finding with the evidence and source the parent asked for\n";
+    let mut report = format!("{LONG_REPLY_HEAD}\n");
+    while report.len() + line.len() <= 30_000 {
+        report.push_str(line);
+    }
+    report.push_str(&"x".repeat(30_000 - report.len() - REPORT_TAIL.len()));
+    report.push_str(REPORT_TAIL);
+    report
 }
 
 /// Answers each child by the marker in its task and every parent request with
@@ -159,7 +172,7 @@ async fn a_child_reply_longer_than_an_internal_turn_still_reaches_the_parent() {
     session.shutdown().await.expect("a clean shutdown");
 }
 
-/// A reply larger than the resolved inline budget arrives as its opening
+/// A reply larger than the per-call output ceiling arrives as its opening
 /// excerpt plus a parent-owned reference, and the parent can read the exact
 /// reply back through that reference.
 #[tokio::test]
@@ -174,11 +187,7 @@ async fn a_reply_over_the_inline_budget_is_delivered_as_an_excerpt_and_a_readabl
     let store = Arc::new(SmithArtifactStore::new(paths));
     let mut runtime_request = request(&fixture, provider.clone());
     runtime_request.artifact_store = Some(store.clone());
-    runtime_request
-        .config
-        .context
-        .tool_output_inline_bytes
-        .value = 2_048;
+    runtime_request.config.limits.tool_output_limit_bytes.value = 2_048;
     let smith = Box::pin(factory::build_request(runtime_request))
         .await
         .expect("a root runtime with an artifact store");
@@ -256,6 +265,7 @@ async fn a_reply_over_the_inline_budget_is_delivered_as_an_excerpt_and_a_readabl
     let tools = smith_runtime::tool_output::ToolOutputContextPolicy {
         inline_bytes: 8192,
         artifact_page_bytes: 2048,
+        reply_bytes: 65536,
     }
     .artifact_tools(
         store.clone(),
@@ -281,6 +291,50 @@ async fn a_reply_over_the_inline_budget_is_delivered_as_an_excerpt_and_a_readabl
         child.as_str(),
         "{listed}"
     );
+
+    session.shutdown().await.expect("a clean shutdown");
+}
+
+/// A research report far over the 8 KiB offloading threshold is still the
+/// answer the parent asked for, so under default limits it arrives whole.
+#[tokio::test]
+async fn a_research_report_arrives_as_text() {
+    let fixture = Fixture::new();
+    let provider = Arc::new(ReplyByTaskProvider::new(vec![(
+        LONG_TASK_MARKER,
+        research_report(),
+    )]));
+    let smith = Box::pin(factory::build_request(request(&fixture, provider.clone())))
+        .await
+        .expect("a root runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    let delegation = smith.delegation().expect("a delegation surface");
+    let _lifecycle = wire_delegation(&session, delegation)
+        .await
+        .expect("delegation wires once");
+    let coordinator = delegation.coordinator().expect("a coordinator");
+
+    let child = spawn_read_only(coordinator, LONG_TASK_MARKER).await;
+    coordinator
+        .wait_task_outcome(&child)
+        .await
+        .expect("the child completes");
+    let delivery = wait_for_delivery_naming(&provider, &child).await;
+    let line = "a finding with the evidence and source the parent asked for";
+    assert_eq!(
+        delivery.matches(line).count(),
+        research_report().matches(line).count(),
+        "every line of the report is delivered"
+    );
+    assert!(
+        delivery.contains(REPORT_TAIL),
+        "the report's end is delivered"
+    );
+    assert!(!delivery.contains("is stored as artifact"), "no excerpt");
 
     session.shutdown().await.expect("a clean shutdown");
 }

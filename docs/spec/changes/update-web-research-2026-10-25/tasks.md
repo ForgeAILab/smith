@@ -32,7 +32,7 @@ completed_at:
   session holds on each child route; child-view tests for the default list,
   for `read_only_network_modules = []`, and for `artifact.read` in a read-only
   child.
-- [ ] 2.3 Set `delivery_inline_bytes` from `limits.tool_output_limit_bytes`
+- [x] 2.3 Set `delivery_inline_bytes` from `limits.tool_output_limit_bytes`
   and pass `agent` outcomes carrying a completed child's reply through the
   offloader up to that ceiling; delivery and `agent result` tests with a
   30,000-byte reply.

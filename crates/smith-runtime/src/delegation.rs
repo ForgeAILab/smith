@@ -32,7 +32,8 @@ use agent_runtime::context::{ContextBudget, ContextPolicy};
 use agent_runtime::delegation::{
     ChildCompletionAdmission, ChildCompletionAdmissionRequest, ChildDurability,
     ChildRuntimeFactory, ChildState, ChildStatus, ChildTaskOutcome, DELEGATION_PERMISSION,
-    DelegationConfig, DelegationCoordinator, DelegationLimits, DurableChildSpec, SpawnOutcome,
+    DelegationConfig, DelegationCoordinator, DelegationLimits, DurableChildSpec,
+    MAX_CHILD_DELIVERY_INLINE_BYTES, SpawnOutcome,
 };
 use agent_runtime::harness::{
     MemoryContributor, SemanticSummaryCoordinator, TodoComponent, WriteTodosTool,
@@ -767,13 +768,14 @@ pub async fn wire_delegation_with_wait_policy(
             delegation_tool_names: vec![AGENT_TOOL_NAME.to_owned()],
             wait_default: wait_policy.default_timeout().min(runtime_wait_max),
             wait_max: wait_policy.max_timeout().min(runtime_wait_max),
-            // A delivered child reply follows the same inline rule as any
-            // tool result the parent reads, including `agent result`.
-            delivery_inline_bytes: delegation
+            // A delivered child reply stays inline up to the same ceiling as
+            // one `agent result`; a report is text, not a page to read back.
+            delivery_inline_bytes: (delegation
                 .factory
                 .default_route
                 .tool_output_context
-                .inline_bytes as usize,
+                .reply_bytes as usize)
+                .clamp(1, MAX_CHILD_DELIVERY_INLINE_BYTES),
             ..DelegationConfig::default()
         },
     )?;

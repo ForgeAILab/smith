@@ -801,6 +801,7 @@ mod tests {
         let policy = crate::tool_output::ToolOutputContextPolicy {
             inline_bytes: 8192,
             artifact_page_bytes: 2048,
+            reply_bytes: 65536,
         };
         let mut tools = built_in_and_agent_tools();
         tools.push(Arc::new(policy.reader(store)));
@@ -832,6 +833,7 @@ mod tests {
         let policy = crate::tool_output::ToolOutputContextPolicy {
             inline_bytes: 8192,
             artifact_page_bytes: 2048,
+            reply_bytes: 65536,
         };
         let mut tools = built_in_and_agent_tools();
         tools.extend(policy.artifact_tools(

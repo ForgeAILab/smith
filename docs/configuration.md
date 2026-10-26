@@ -1237,7 +1237,8 @@ reserve, or estimated-count slack.
 | `background.max_monitors` | `8` | Reserved process-monitor capacity |
 
 `[context] tool_output_inline_bytes` controls when serialized tool output is
-stored as an artifact. `[context] inline_images` independently sets the recent
+stored as an artifact. A completed child's reply, read with `agent` or delivered
+automatically, stays inline up to `limits.tool_output_limit_bytes` instead. `[context] inline_images` independently sets the recent
 image window, default 10, range 1–100. The window advances in batches, retaining
 between that count and twice that count minus one; images in the newest user
 message are always included and do not count toward the window. A text-only

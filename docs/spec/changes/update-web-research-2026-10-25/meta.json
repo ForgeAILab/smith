@@ -2,6 +2,8 @@
   "change_id": "update-web-research",
   "change_ref": "update-web-research-2026-10-25",
   "created_at": "2026-10-25T19:42:24Z",
-  "updated_at": "2026-10-25T20:20:00Z",
-  "completed_at": null
+  "updated_at": "2026-10-26T01:50:37Z",
+  "completed_at": null,
+  "status": "implementing",
+  "implementation_started_at": "2026-10-26T01:50:37Z"
 }

@@ -51,6 +51,7 @@ impl AgentTool {
                 crate::tool_output::ToolOutputContextPolicy {
                     inline_bytes: 8192,
                     artifact_page_bytes: 2048,
+                    reply_bytes: 65536,
                 },
             ),
         }

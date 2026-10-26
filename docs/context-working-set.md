@@ -27,6 +27,11 @@ resolved policy, including explicitly selected child-profile routes.
    ceiling; it is not the process capture limit. The effective offload threshold
    is the smaller of the inline setting and this existing ceiling.
 
+A completed child's reply is the exception. An `agent` outcome that carries
+one (`result`, or `wait` on an idle child) and an automatic child-completion
+delivery stay inline up to `limits.tool_output_limit_bytes`, so the parent reads
+a report as text in one step. A longer reply follows the ordinary rule.
+
 A preview contains reported status metadata, head/tail excerpts and at most three
 explicitly **heuristic** diagnostic lines. At the default threshold its body is
 bounded to 1200 Unicode characters, plus the runtime-generated artifact marker.
@@ -46,8 +51,11 @@ with query `artifact-read`; the next provider request advertises the authorized
 reader. Previews include this guidance rather than eagerly activating every tool.
 Follow `next_offset` to inspect more evidence rather than loading everything.
 The stored object is the original serialized tool outcome, not a changed raw-text
-file format. Pages may be UTF-8 or byte arrays using the existing runtime format.
-Raw page bytes are not rendered JSON bytes or exact model tokens.
+file format. A text page never splits a character: an edge inside a multi-byte
+character moves to that character's start, and `offset` and `next_offset`
+report the bytes actually returned. Content that is not UTF-8 comes back as a
+byte array using the existing runtime format. Raw page bytes are not rendered
+JSON bytes or exact model tokens.
 
 Prepared invocations cannot exceed the current bound. A changed policy may
 therefore reject an old incompatible prepared artifact read instead of silently
