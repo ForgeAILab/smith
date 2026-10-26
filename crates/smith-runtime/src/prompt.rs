@@ -171,16 +171,19 @@ answer to that child with an explicit agent follow_up. Stop a child with agent a
 and its child_id; task_output and task_stop control background shell tasks, not child \
 agents.\n\
 \n\
-Ask a research child for its findings as concise text with one list of the sources it \
-used, not a full dossier with a citation after every sentence. Bulky data stays in the \
-artifacts its tools stored; ask it to name those by id instead of pasting them.";
+When you delegate research, give the child the questions it must settle and a source \
+budget, such as about ten pages. Ask for its findings as concise text with one list of the \
+sources it used, not a full dossier with a citation after every sentence. Bulky data stays \
+in the artifacts its tools stored; ask it to name those by id instead of pasting them.";
 
 const WEB_RESEARCH: &str = "\
-Check a claim that depends on the web against its primary source; when web_fetch is \
-available, read the page itself rather than a search snippet. Cite the URL of each page you \
-used. A fetched page too long to show whole is stored as an artifact: read the part you need \
-with artifact.read. Report concisely, with one list of sources at the end rather than a \
-citation after every sentence.";
+Check a claim that depends on the web against its primary source. Start from search \
+results; when web_fetch is available, fetch a page only when a snippet leaves the claim \
+unsettled, and prefer the one primary page that settles it over several that repeat it. Keep \
+to the source budget your task sets, or about ten pages when it sets none, then report what \
+is still open. Cite the URL of each page you used. A page too long to show whole shows its \
+beginning; continue it with artifact.read at the offset its result names. Report concisely, \
+with one list of sources at the end rather than a citation after every sentence.";
 
 const ADVISOR: &str = "\
 Consult advisor before substantive work, when stuck or when results do not fit, and before \
@@ -511,7 +514,7 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
         (
             "delegation",
             DELEGATION,
-            "smith-prompt-delegation-6",
+            "smith-prompt-delegation-7",
             context.delegation,
         ),
         (
@@ -605,7 +608,7 @@ pub fn web_research_fragment() -> ContextFragment {
         "smith.prompt.web-research",
         FragmentKind::DeveloperInstruction,
         FragmentSource::Host,
-        RegistryRevision::new("smith-prompt-web-research-1"),
+        RegistryRevision::new("smith-prompt-web-research-2"),
         FragmentContent::Text(WEB_RESEARCH.to_owned()),
     )
     .with_position(ContextPosition::new(
@@ -965,7 +968,13 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         let prompt = render_fragments(with.fragments());
-        for guidance in ["primary source", "artifact.read", "one list of sources"] {
+        for guidance in [
+            "primary source",
+            "only when a snippet leaves the claim",
+            "about ten pages",
+            "artifact.read at the offset",
+            "one list of sources",
+        ] {
             assert!(prompt.contains(guidance), "{prompt}");
         }
         let host = SmithPromptContributor::override_prompt("HOST");
@@ -979,6 +988,7 @@ mod tests {
             ..DynamicPromptContext::default()
         }));
         for guidance in [
+            "questions it must settle and a source budget",
             "concise text with one list of the sources",
             "name those by id",
         ] {

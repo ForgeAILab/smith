@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-25T19:42:24Z
-updated_at: 2026-10-26T03:30:00Z
+updated_at: 2026-10-26T15:00:00Z
 completed_at:
 ---
 
@@ -45,6 +45,19 @@ completed_at:
   ceiling tests.
 - [x] 2.5 Update `docs/configuration.md` (web tools, child agents, delivery
   budget), `docs/context-working-set.md`, and `docs/security.md`.
+- [x] 2.7 Keep `web_fetch` outcomes inline up to the output ceiling; above
+  it, preview the page's beginning with the continuation offset; offloader
+  tests for a 30 KB page, a 200 KB page read on from the named offset, and a
+  30 KB shell result that still offloads.
+- [x] 2.8 Soften the web-research section (fetch when a snippet leaves a claim
+  unsettled, source budget of about ten pages, continuation offset) and add
+  the questions-and-budget sentence to root delegation guidance; bump both
+  fragment revisions; regenerate the headless fixtures.
+- [x] 2.9 Drop page chrome, hidden elements, image URLs, empty links and
+  same-page links in HTML conversion; conversion tests for each rule and for
+  a whole-page `form`.
+- [x] 2.10 Update `docs/configuration.md` and `docs/context-working-set.md`
+  for inline fetched pages.
 - [ ] 2.6 Remove the interim spawn sentence from the owner's orchestrator
   instructions once 2.2 ships (backup
   `~/.smith/config.toml.bak-before-web-research-20261025`).
