@@ -39,6 +39,14 @@ pub const ARTIFACT_LIST_TOOL_NAME: &str = "artifact.list";
 /// Retrieval affordance for the lister, disjoint from the reader's.
 pub const ARTIFACT_LIST_DISCOVERY_QUERY: &str = "artifact-list";
 
+/// The web module's page reader, whose pages are read whole far more often
+/// than in parts.
+const WEB_FETCH_TOOL_NAME: &str = "web_fetch";
+
+/// Room a page preview leaves under the ceiling for the artifact reference
+/// line and the continuation note.
+const PAGE_PREVIEW_ROOM: usize = 1024;
+
 /// Runtime's exact message for an id no stored artifact has.
 const ARTIFACT_NOT_FOUND: &str = "artifact not found";
 
@@ -54,7 +62,8 @@ pub struct ToolOutputContextPolicy {
     /// Maximum raw bytes requested from the artifact reader per invocation.
     pub artifact_page_bytes: u32,
     /// Serialized bound up to which a completed child's reply stays inline,
-    /// in an `agent` outcome or an automatic delivery: the per-call ceiling.
+    /// in an `agent` outcome or an automatic delivery, and a fetched page
+    /// stays inline: the per-call ceiling.
     pub reply_bytes: u32,
 }
 
@@ -144,7 +153,7 @@ impl ToolOutputProcessor for ContextOffloader {
         ComponentDescriptor::new(
             "harness.artifact.offload",
             RegistryRevision::new(format!(
-                "smith-inline-output-v2-{}-{}",
+                "smith-inline-output-v3-{}-{}",
                 self.policy.inline_bytes, self.policy.reply_bytes
             )),
         )
@@ -162,8 +171,11 @@ impl ToolOutputProcessor for ContextOffloader {
         }
         // A child's reply is the report the parent asked for. Offloaded, it
         // comes back one page per request, each resending the conversation.
-        if view.call.name == AGENT_TOOL_NAME
-            && carries_child_reply(&outcome.value)
+        // A fetched page is the same: read back in pages, it costs a request
+        // per page, so up to the ceiling it stays inline too.
+        let fetched_page = view.call.name == WEB_FETCH_TOOL_NAME;
+        if (fetched_page
+            || view.call.name == AGENT_TOOL_NAME && carries_child_reply(&outcome.value))
             && serde_json::to_vec(&outcome)
                 .is_ok_and(|encoded| encoded.len() <= self.policy.reply_bytes as usize)
         {
@@ -180,7 +192,11 @@ impl ToolOutputProcessor for ContextOffloader {
         {
             return Ok(ToolOutputPatch::outcome(outcome));
         }
-        let preview = text_preview(&outcome, self.preview_chars);
+        let page_budget = (self.policy.reply_bytes as usize).saturating_sub(PAGE_PREVIEW_ROOM);
+        let preview = (fetched_page && page_budget > self.preview_chars)
+            .then(|| page_preview(&outcome, page_budget))
+            .flatten()
+            .unwrap_or_else(|| text_preview(&outcome, self.preview_chars));
         // Runtime persists the *unchanged* outcome before returning a reference.
         // Storage errors remain errors; never fabricate a retrieval pointer.
         let mut patch = self.inner.process(view, outcome).await?;
@@ -199,6 +215,46 @@ fn carries_child_reply(value: &Value) -> bool {
         Some(Value::Object(result)) => result.get("text").is_some_and(Value::is_string),
         _ => false,
     }
+}
+
+/// A fetched page too long to show whole: its beginning, up to `budget`
+/// bytes, and where the unshown text starts in the stored outcome. `None`
+/// when the outcome is not a single text part.
+fn page_preview(outcome: &ToolOutcome, budget: usize) -> Option<String> {
+    let [ContentPart::Text { text }] = outcome.content.as_inline()? else {
+        return None;
+    };
+    let mut end = budget.min(text.len());
+    if end == text.len() {
+        return Some(text.clone());
+    }
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    // End on a line when one is near, so code and prose are not cut mid-line.
+    if let Some(line) = text[..end].rfind('\n').filter(|line| *line >= end / 2) {
+        end = line + 1;
+    }
+    let head = &text[..end];
+    let continuation = continuation_offset(outcome, text, head).map_or_else(
+        || "read the artifact from its start".to_owned(),
+        |offset| format!("read on with artifact.read at offset {offset}"),
+    );
+    Some(format!(
+        "{head}\n[Page continues: {} of {} bytes of text shown. The complete result is the artifact above; {continuation}.]",
+        head.len(),
+        text.len(),
+    ))
+}
+
+/// The byte offset in the stored outcome, encoded as Runtime's offloader
+/// stores it, at which `text` continues after `head`.
+fn continuation_offset(outcome: &ToolOutcome, text: &str, head: &str) -> Option<usize> {
+    let encoded = String::from_utf8(serde_json::to_vec(outcome).ok()?).ok()?;
+    let start = encoded.find(&serde_json::to_string(text).ok()?)?;
+    // JSON escapes each character alone, so the encoded text begins with the
+    // encoded head; the head's closing quote is not part of it.
+    Some(start + serde_json::to_string(head).ok()?.len() - 1)
 }
 
 /// Artifact reader with bounded defaults and oversized-request clamping.
@@ -756,6 +812,72 @@ mod tests {
         for (view, outcome) in offloaded {
             let patch = offloader.process(view, outcome).await.unwrap();
             assert!(patch.outcome.content.artifact_reference().is_some());
+        }
+    }
+    #[tokio::test]
+    async fn a_fetched_page_stays_inline_up_to_the_ceiling_and_then_shows_its_beginning() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(dir.path());
+        let offloader = policy().offloader(store.clone()).unwrap();
+        let mut fetch = view();
+        fetch.call.name = WEB_FETCH_TOOL_NAME.into();
+        let page = |body: String| {
+            let mut outcome = ToolOutcome::text(format!(
+                "URL: https://example.com/src.rs | Status: 200\n\nContent from https://example.com/src.rs (external, untrusted):\n{body}"
+            ));
+            outcome.value = json!({"url": "https://example.com/src.rs", "status": 200});
+            outcome
+        };
+
+        let small = page("let quoted = \"é\";\n".repeat(1500));
+        let patch = offloader.process(&fetch, small.clone()).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(patch.outcome).unwrap(),
+            serde_json::to_value(small.clone()).unwrap()
+        );
+        // The same bytes from another tool still offload at the threshold.
+        let patch = offloader.process(&view(), small).await.unwrap();
+        assert!(patch.outcome.content.artifact_reference().is_some());
+
+        for body in [
+            "let quoted = \"é\";\n".repeat(12_000),
+            // No line to end on: the cut still falls between characters.
+            "é".repeat(100_000),
+        ] {
+            let outcome = page(body);
+            let ContentPart::Text { text } = &outcome.content.as_inline().unwrap()[0] else {
+                unreachable!()
+            };
+            let patch = offloader.process(&fetch, outcome.clone()).await.unwrap();
+            let ToolContent::Artifact {
+                preview, reference, ..
+            } = &patch.outcome.content
+            else {
+                panic!("a page over the ceiling is stored");
+            };
+            let ContentPart::Text { text: preview } = &preview[0] else {
+                panic!("the preview is text");
+            };
+            assert!(
+                preview.len() <= 65536 - PAGE_PREVIEW_ROOM + 200,
+                "{}",
+                preview.len()
+            );
+            let note = preview.rsplit_once("\n[Page continues: ").unwrap().1;
+            let shown: usize = note.split(' ').next().unwrap().parse().unwrap();
+            assert!(shown > 32_768 && shown <= 65536 - PAGE_PREVIEW_ROOM);
+            assert!(preview.starts_with(&text[..shown]));
+            let offset: usize = note
+                .rsplit_once("at offset ")
+                .unwrap()
+                .1
+                .trim_end_matches(".]")
+                .parse()
+                .unwrap();
+            let stored = bytes(store.as_ref(), reference).await;
+            assert_eq!(stored, serde_json::to_vec(&outcome).unwrap());
+            let rest = serde_json::to_string(&text[shown..]).unwrap();
+            assert!(stored[offset..].starts_with(&rest.as_bytes()[1..]));
         }
     }
     #[tokio::test]

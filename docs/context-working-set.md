@@ -32,6 +32,12 @@ one (`result`, or `wait` on an idle child) and an automatic child-completion
 delivery stay inline up to `limits.tool_output_limit_bytes`, so the parent reads
 a report as text in one step. A longer reply follows the ordinary rule.
 
+A fetched page is the other exception. A `web_fetch` result stays inline up to
+`limits.tool_output_limit_bytes` (64 KiB by default). A longer page is stored
+whole, and the model sees its beginning up to that ceiling with a note giving
+the `artifact.read` offset at which the unshown text starts in the stored
+result, so reading on neither repeats the beginning nor guesses.
+
 A preview contains reported status metadata, head/tail excerpts and at most three
 explicitly **heuristic** diagnostic lines. At the default threshold its body is
 bounded to 1200 Unicode characters, plus the runtime-generated artifact marker.
