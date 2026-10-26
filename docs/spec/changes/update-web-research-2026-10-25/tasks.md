@@ -25,11 +25,11 @@ completed_at:
   blocks; update renderer tests.
 - [x] 1.4 Cut `ArtifactReadTool` pages at a character boundary, deciding text
   by media type (upstream copy of 0.1) so other hosts get it.
-- [ ] 1.5 Release, merge to runtime main.
+- [x] 1.5 Release, merge to runtime main (v0.12.0, `9f3ff2f`, PRs #79 and #80).
 
 ## 2. Smith
 
-- [ ] 2.1 Pin the runtime release and drop Smith's own page-edge trim (0.1),
+- [x] 2.1 Pin the runtime release and drop Smith's own page-edge trim (0.1),
   which cannot see the media type, now that the runtime reader decides by it.
 - [x] 2.2 Name the tools a non-write-capable child build holds through
   `read_only_tool_names`, and admit plugin tools to it by the root's read-only

@@ -291,66 +291,8 @@ impl Tool for ContextArtifactReader {
         self.inner
             .invoke(prepared, ctx)
             .await
-            .map(text_page)
             .map_err(|error| self.explain_missing(error))
     }
-}
-
-/// Runtime pages artifacts by raw bytes and returns any page that is not
-/// valid UTF-8 as an array of byte values, which is every text page whose edge
-/// splits a multi-byte character. Trimming the partial characters keeps a text
-/// artifact readable as text; a page that is invalid inside stays bytes.
-fn text_page(mut outcome: ToolOutcome) -> ToolOutcome {
-    if outcome.value.get("encoding").and_then(Value::as_str) != Some("bytes") {
-        return outcome;
-    }
-    let (Some(offset), Some(values)) = (
-        outcome.value.get("offset").and_then(Value::as_u64),
-        outcome.value.get("content").and_then(Value::as_array),
-    ) else {
-        return outcome;
-    };
-    let Some(bytes) = values
-        .iter()
-        .map(|value| value.as_u64().and_then(|byte| u8::try_from(byte).ok()))
-        .collect::<Option<Vec<u8>>>()
-    else {
-        return outcome;
-    };
-    // An offset inside a character starts with at most three continuation bytes.
-    let lead = bytes
-        .iter()
-        .take(3)
-        .take_while(|byte| (0x80..0xC0).contains(*byte))
-        .count();
-    let rest = &bytes[lead..];
-    let text = match std::str::from_utf8(rest) {
-        Ok(text) => text,
-        // No error length: the bytes end partway through one character.
-        Err(error) if error.error_len().is_none() => {
-            std::str::from_utf8(&rest[..error.valid_up_to()]).expect("validated prefix")
-        }
-        Err(_) => return outcome,
-    };
-    // A page shorter than one character keeps its bytes so reading still advances.
-    if text.is_empty() {
-        return outcome;
-    }
-    let consumed = lead + text.len();
-    let next_offset = if consumed < bytes.len() {
-        json!(offset + consumed as u64)
-    } else {
-        outcome.value["next_offset"].clone()
-    };
-    outcome.value = json!({
-        "artifact": outcome.value["artifact"].clone(),
-        "offset": offset + lead as u64,
-        "next_offset": next_offset,
-        "encoding": "utf8",
-        "content": text,
-    });
-    outcome.content = ToolContent::inline(vec![ContentPart::text(outcome.value.to_string())]);
-    outcome
 }
 
 /// Metadata-only inventory of the invoking session's artifacts.
