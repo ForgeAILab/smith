@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-19T04:20:00Z
-updated_at: 2026-10-19T04:20:00Z
-completed_at:
+updated_at: 2026-10-26T07:05:49Z
+completed_at: 2026-10-26T07:05:49Z
 ---
 
 ## 1. Serving table
@@ -79,7 +79,29 @@ completed_at:
   work end to end. Two of three tasks hit the initially pinned 16,384 output
   ceiling mid-reasoning; the operator chose native output ceilings
   (131,072 for GLM) for the baseline on that evidence.
-- [ ] 5.5 `dev` profile (26 tasks × 1 rollout) completes on both servings
+- [x] 5.5 `dev` profile (26 tasks × 1 rollout) completes on both servings
   (`smith-glm53-dev-baseline-001`, then `smith-luna-max-dev-baseline-001`).
-- [ ] 5.6 Descriptive baseline comparison report produced with
+  Both jobs on the durable jobs volume (`/Volumes/Data/smith-harbor/jobs`)
+  ran all 26 trials to a finished Harbor result:
+  `smith-glm53-dev-baseline-001` on 2026-10-19–20 with 12 errored trials, and
+  `smith-luna-max-dev-baseline-001` on 2026-10-20 with 13 errored trials.
+
+## Not run
+
+Archived 2026-10-26 with the serving code shipped (099b83e9) and both
+development jobs run, but no comparison produced. The `luna-max` job
+directory has no `smith-harbor-provenance.json`, which `analyze` reads, so
+the report needs that file first. The GLM job's audit finding (a core dump
+that captured the agent environment into a collected artifact) is recorded
+in the proposal. No comparison result is claimed.
+
+- 5.6 Descriptive baseline comparison report produced with
   `analyze --descriptive-only`; both jobs audited for credential material.
+
+The key-delivery hardening the proposal names, an owner-only file reference
+outside the task workspace instead of the environment-exec channel, is not
+built. Before archiving, the delta was trimmed to what the bridge does:
+"versioned" left Pinned model servings (the table carries no version of its
+own; `BRIDGE_VERSION` is unchanged since before servings), and "artifact"
+and the scenario that the audit finds zero hits left the API-key isolation
+requirement, since the sandboxed process can still expose its environment.

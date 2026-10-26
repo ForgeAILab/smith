@@ -2,7 +2,7 @@
 
 ### Requirement: Pinned model servings
 
-The bridge SHALL define an explicit, versioned serving table. Each serving pins its
+The bridge SHALL define an explicit serving table. Each serving pins its
 provider name, provider kind, base URL, credential reference scheme, model
 catalog limits, reasoning effort policy (including no effort), allowed egress
 hosts, and canary prompt. Frozen run profiles stay serving-independent; a run
@@ -45,17 +45,9 @@ documented environment variable, falling back to the operator's Smith
 configuration provider block, into process memory only. It reaches the
 sandboxed Smith process exclusively through the
 environment-exec channel. Credential material MUST NOT be written into a
-repository file, Harbor configuration, command string, log, trajectory, or
-artifact, and completed jobs are audited for the resolved key value. The OAuth
+repository file, Harbor configuration, command string, log, or trajectory,
+and completed jobs are audited for the resolved key value. The OAuth
 auth-file upload and refresh handoff do not run for these servings.
-
-#### Scenario: The key never lands in a job artifact
-
-- **GIVEN** a completed job run on an API-key serving
-- **WHEN** the credential audit scans the job directory for the resolved key
-  value
-- **THEN** the audit reports zero hits
-- **AND** the audit does not print the key or its source path
 
 #### Scenario: Missing key material fails before trials start
 
