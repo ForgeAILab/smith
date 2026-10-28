@@ -373,11 +373,12 @@ to canonical model conversation history.
   text
 - **AND** normal transcript scrolling remains available
 
-#### Scenario: Interactive safety surfaces remain modal
+#### Scenario: Interactive safety surfaces are inline prompts
 
 - **WHEN** Smith needs command selection, tool approval, provider-spend
   confirmation, undo confirmation, or revert confirmation
-- **THEN** Smith may open the corresponding modal with explicit controls
+- **THEN** Smith opens the corresponding inline prompt in the anchored pane with
+  explicit controls, never a centered or framed modal
 - **AND** informational command results themselves never require dismissal
 
 #### Scenario: Local results do not become model context
@@ -1646,7 +1647,7 @@ When the active provider has a credential pool, the TUI SHALL show which pool
 member is active, offer an accessible picker listing every member with its
 usage meter, cooldown state, and provenance-safe display name, and accept an
 explicit manual switch to any member not currently in cooldown. A rotation
-offered after limit exhaustion SHALL be presented as a modal the user answers,
+offered after limit exhaustion SHALL be presented as an inline prompt the user answers,
 stating the cache cost of switching, and its outcome SHALL be recorded in the
 transcript. Headless runs SHALL select their member once at session start and
 keep it for the whole run, projecting the active member and the typed
@@ -1669,12 +1670,12 @@ or rotating.
 - **AND** the sticky selection persists for future sessions
 - **AND** the transcript records the manual switch
 
-#### Scenario: Rotation is offered as a modal and announced
+#### Scenario: Rotation is offered as an inline prompt and announced
 
 - **GIVEN** an attempt hits limit exhaustion mid-task with an eligible member
   available
 - **WHEN** the runtime offers rotation
-- **THEN** a modal names the outgoing and incoming members, the outgoing
+- **THEN** an inline prompt names the outgoing and incoming members, the outgoing
   member's reset time, and warns that switching resends the turn without the
   provider-side prompt cache
 - **AND** confirming it replays the attempt and writes a rotation notice to the
@@ -3916,3 +3917,47 @@ providers resends conversation context to a configured provider.
 - **WHEN** a current client replays it
 - **THEN** deserialization succeeds without inventing fallback decisions
 - **AND** historical usage keeps its original binding attribution
+
+### Requirement: Inline prompts share one numbered select
+
+Every interactive prompt SHALL render in the anchored pane, in place of the
+composer while it is open and keeping its draft: tool approval, confirmation (provider spend, undo, revert, redo,
+trust, child follow-up and resume, account rotation), and agent-originated
+questionnaire, with no frame and no centering, using one grammar: an
+indented heading-tone title, indented evidence, and numbered `❯ N. Label`
+choice rows. Up/Down SHALL move the highlight, Enter SHALL answer the
+highlighted row, and the digit SHALL answer directly where it is not already
+bound to other meaning. Long evidence SHALL scroll with Shift+Up/Down while the
+choices stay visible. A prompt MAY take the transcript and composer rows; a pane too
+short for the list SHALL show the choices on one row. Every prompt SHALL open
+behind the quiet window that swallows keys typed before it appeared. An
+approval's highlight SHALL start on `Yes`; a confirmation's highlight SHALL
+start on its cancel row, so Enter alone never applies a consequential action.
+
+#### Scenario: An approval reads like the questionnaire
+
+- **GIVEN** a shell tool requests approval
+- **WHEN** the prompt opens
+- **THEN** the anchored pane shows the title, command, place, and
+  warning, then `Do you want to proceed?` and `❯ 1. Yes`, `2.` session
+  allowance, `3. No (esc)`
+- **AND** no bordered or centered box is drawn
+
+#### Scenario: Enter after the quiet window answers the highlighted row
+
+- **GIVEN** an approval has been open past its quiet window
+- **WHEN** the user presses Down then Enter
+- **THEN** the session allowance is granted
+- **AND** an Enter typed before the prompt appeared grants nothing
+
+#### Scenario: A confirmation defaults to cancel
+
+- **GIVEN** `/undo` opens its confirmation
+- **WHEN** the user presses Enter without moving the highlight
+- **THEN** the undo is cancelled and the workspace is unchanged
+
+#### Scenario: A minimum-size terminal keeps the prompt answerable
+
+- **GIVEN** a 40×10 terminal and an edit approval
+- **WHEN** the prompt renders
+- **THEN** the title, target, and all three choices are visible

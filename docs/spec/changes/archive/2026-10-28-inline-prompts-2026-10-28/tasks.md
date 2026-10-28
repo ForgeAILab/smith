@@ -16,4 +16,4 @@
 ## 3. Docs and tests
 
 - [x] 3.1 DESIGN.md describes inline prompts only.
-- [ ] 3.2 Render and state tests updated for the inline select.
+- [x] 3.2 Render and state tests updated for the inline select.
