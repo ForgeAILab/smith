@@ -408,7 +408,7 @@
                 "{width}×{height}:\n{resume_screen}"
             );
             assert!(
-                modal_box_rows(&resume_screen, "resume interrupted child")
+                pane_rows(&resume_screen, "resume interrupted child")
                     .join(" ")
                     .contains("exact interrupted"),
                 "{width}×{height}:\n{resume_screen}"
@@ -428,7 +428,7 @@
                 "Bash command",
                 "rm -rf build",
                 "process execution",
-                "y  Yes",
+                "1. Yes",
                 "in this target",
             ],
         );
@@ -535,7 +535,7 @@
                 "- fn retry() {",
                 "+ fn retry(limit: u32) {",
                 "    once();",
-                "y  Yes",
+                "1. Yes",
             ],
         );
         assert!(
@@ -548,7 +548,7 @@
     async fn an_edit_approval_names_its_relative_path_once_and_uses_the_session_choice_copy() {
         let app = edit_approval("before\n", "after\n").await;
         let screen = render(&app, 120, 30, Theme::new().without_color());
-        let box_rows = modal_box_rows(&screen, "Edit file");
+        let box_rows = pane_rows(&screen, "Edit file");
         let box_text = box_rows.join(" ");
         let words = box_text
             .split_whitespace()
@@ -559,9 +559,10 @@
         assert!(!box_text.contains("at src/retry.rs"), "{screen}");
         assert!(!screen.contains("/repo/src/retry.rs"), "{screen}");
         assert!(
-            words.contains("Yes, and don't ask again for `edit` in this target this session"),
+            screen.contains("  2. Yes, and don't ask again for `edit` in this target this session"),
             "{screen}"
         );
+        assert!(!words.contains("don't ask again"), "{screen}");
     }
 
     #[tokio::test]
@@ -575,21 +576,32 @@
     }
 
     #[test]
-    fn recovery_confirmations_pad_warnings_body_and_controls_like_approvals() {
+    fn recovery_confirmations_indent_warnings_body_and_controls_like_approvals() {
         for (width, height) in [(44, 16), (74, 24), (120, 32)] {
             let mut app = App::new("model", "project");
             app.confirm_undo(recovery_preview("@@ -1,1 +1,1 @@\n-before\n+after"));
             let screen = render(&app, width, height, Theme::new().without_color());
-            for fragment in ["No action", "@@ -1,1", "y apply undo"] {
+            assert!(!screen.contains('│'), "{width}×{height}:\n{screen}");
+            for fragment in ["undo last Smith turn", "No action", "@@ -1,1"] {
                 let row = screen
                     .lines()
-                    .find(|row| row.contains(fragment) && row.contains('│'))
-                    .expect("modal row");
-                let start = row.find('│').expect("left border") + '│'.len_utf8();
-                assert!(row[start..].starts_with("  "), "{width}×{height}: {row}");
-                let end = row.rfind('│').expect("right border");
-                assert!(row[..end].ends_with("  "), "{width}×{height}: {row}");
+                    .find(|row| row.contains(fragment))
+                    .expect("pane row");
+                assert!(
+                    row.starts_with("  ") && !row.starts_with("   "),
+                    "{width}×{height}: {row}"
+                );
             }
+            let accept = screen
+                .lines()
+                .find(|row| row.contains("1. apply undo"))
+                .expect("accept row");
+            assert!(accept.starts_with("  1. "), "{width}×{height}: {accept}");
+            let cancel = screen
+                .lines()
+                .find(|row| row.contains("2. cancel (n/esc)"))
+                .expect("cancel row");
+            assert!(cancel.starts_with("❯ 2. "), "{width}×{height}: {cancel}");
         }
     }
 
@@ -654,7 +666,7 @@
         let app = edit_approval(&old, &new).await;
         let screen = render(&app, 74, 24, Theme::new());
 
-        insta_like(&screen, &["ctrl+o to expand", "y  Yes"]);
+        insta_like(&screen, &["ctrl+o to expand", "1. Yes"]);
     }
 
     #[tokio::test]
@@ -672,7 +684,7 @@
                 "unchanged lines",
                 "- let x10 = 10;",
                 "+ let x10 = 11;",
-                "y  Yes",
+                "1. Yes",
             ],
         );
     }
@@ -684,7 +696,7 @@
             let screen = render(&app, width, height, Theme::new());
             insta_like(&screen, &["Edit file", "src/retry.rs"]);
             assert!(
-                screen.contains("y  Yes") && screen.contains("n  No (esc)"),
+                screen.contains("1. Yes") && screen.contains("3. No (esc)"),
                 "{width}×{height} left the approval unanswerable:\n{screen}"
             );
             for line in screen.lines() {
@@ -821,7 +833,7 @@
     fn approval_screen_words(screen: &str) -> String {
         screen
             .lines()
-            .map(|row| row.trim().trim_matches('│').trim())
+            .map(|row| row.trim())
             .collect::<Vec<_>>()
             .join(" ")
             .split_whitespace()
@@ -886,13 +898,13 @@
                     "tools all",
                     "workspace shared",
                     "Warning: the child acts on its own with these tools",
-                    "y Yes",
-                    "a Yes, and don't ask again for child agents this session",
-                    "n No (esc)",
+                    "1. Yes",
+                    "2. Yes, and don't ask again for child agents this session",
+                    "3. No (esc)",
                 ],
             );
             assert_eq!(screen.matches("Start a child agent").count(), 1, "{screen}");
-            let rows = modal_box_rows(&screen, "Start a child agent");
+            let rows = pane_rows(&screen, "Start a child agent");
             assert_eq!(rows[0], "Make exactly one edit in src/main.rs", "{screen}");
             assert_eq!(rows[1], "tools all", "{screen}");
             assert_eq!(rows[2], "workspace shared", "{screen}");
@@ -1054,7 +1066,7 @@
     }
 
     #[tokio::test]
-    async fn approval_padding_keeps_wrapped_body_and_controls_inside_the_safe_width() {
+    async fn approval_indent_keeps_wrapped_body_and_controls_inside_the_safe_width() {
         for (width, height) in [(100, 32), (80, 24), (44, 16)] {
             let mut app = App::new("gpt-5.3", "/repo");
             app.present_approval(
@@ -1068,20 +1080,14 @@
             for expanded in [false, true] {
                 app.work_details = expanded;
                 let screen = render(&app, width, height, Theme::new().without_color());
-                let mut body_rows = 0;
                 for row in screen.lines() {
                     assert!(row.width() <= usize::from(width), "{screen}");
-                    if let Some((_, inside)) = row.split_once('│') {
-                        let (inside, _) = inside.rsplit_once('│').expect("right border");
-                        assert!(inside.starts_with("  "), "left padding: {row}");
-                        assert!(inside.ends_with("  "), "right padding: {row}");
-                        body_rows += 1;
-                    }
+                    assert!(!row.contains(['│', '╭', '╮', '╰', '╯']), "{screen}");
                 }
-                assert!(body_rows > 0, "{screen}");
-                assert!(screen.contains("│  printf"), "{screen}");
-                assert!(screen.contains("│  Do you want to proceed?"), "{screen}");
-                assert!(screen.contains("│    n  No (esc)"), "{screen}");
+                assert!(screen.contains("\n    printf"), "{screen}");
+                assert!(screen.contains("\n  Do you want to proceed?"), "{screen}");
+                assert!(screen.contains("\n❯ 1. Yes"), "{screen}");
+                assert!(screen.contains("\n  3. No (esc)"), "{screen}");
             }
         }
     }
@@ -1136,9 +1142,9 @@
                 "Warning:",
                 "Runs outside the sandbox with your files, environment and credentials, child processes, network, and data egress.",
                 "Do you want to proceed?",
-                "y Yes",
-                "a Yes, don't ask again for this exact shell action this session",
-                "n No (esc)",
+                "1. Yes",
+                "2. Yes, don't ask again for this exact shell action this session",
+                "3. No (esc)",
                 "ctrl+o details",
             ] {
                 assert!(
@@ -1151,9 +1157,9 @@
                 "in /repo",
                 "Warning:",
                 "Do you want to proceed?",
-                "y Yes",
-                "a Yes",
-                "n No",
+                "1. Yes",
+                "2. Yes",
+                "3. No",
             ];
             let positions = ordered.map(|text| words.find(text).expect("default evidence"));
             assert!(
@@ -1179,16 +1185,12 @@
                 "{screen}"
             );
             if width == 44 {
-                let top = screen
+                let title = screen
                     .lines()
                     .find(|row| row.contains("Bash command"))
-                    .expect("border");
-                assert!(top.starts_with('╭') && top.ends_with('╮'), "{screen}");
-                assert_eq!(
-                    top.width(),
-                    44,
-                    "the narrow approval must use the safe width"
-                );
+                    .expect("title row");
+                assert_eq!(title, "  Bash command", "{screen}");
+                assert!(!screen.contains(['│', '╭', '╮']), "{screen}");
             }
         }
     }
@@ -1251,15 +1253,22 @@
         render_synced(&mut app, 44, 16, Theme::new().without_color());
         assert!(app.approval_scroll_limit > 18);
         let mut seen = String::new();
-        for _ in 0..=app.approval_scroll_limit {
+        loop {
+            let offset = app.approval_scroll;
             seen.push_str(&render_synced(
                 &mut app,
                 44,
-                16,
+                22,
                 Theme::new().without_color(),
             ));
-            app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+            // Up and Down choose a row; Shift moves through the evidence.
+            app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+            if app.approval_scroll == offset {
+                break;
+            }
         }
+        assert!(app.approval_scroll > 18, "Shift+Down scrolled the evidence");
+        assert_eq!(app.approval_choice, 0, "scrolling never moves the choice");
         assert!(
             seen.contains("+ let y23 = 23;"),
             "the expanded diff is still cut"
@@ -1276,7 +1285,7 @@
             &["ctrl+o to expand", "ctrl+o details", "src/retry.rs"],
         );
         assert_eq!(
-            modal_box_rows(&refolded, "Edit file").first().copied(),
+            pane_rows(&refolded, "Edit file").first().copied(),
             Some("src/retry.rs"),
             "{refolded}"
         );
@@ -1313,8 +1322,8 @@
         let mut app = App::new("gpt-5.3", "/repo");
         app.present_approval(approval_evidence_prompt("cargo publish --dry-run", false).await);
         assert_eq!(
-            render(&app, 44, 16, Theme::new()),
-            render(&app, 44, 16, Theme::new().without_color())
+            render(&app, 44, 20, Theme::new()),
+            render(&app, 44, 20, Theme::new().without_color())
         );
         let mut terminal = Terminal::new(TestBackend::new(44, 16)).expect("terminal");
         terminal
@@ -1343,7 +1352,7 @@
         let screen = render(&app, 44, 16, Theme::new().without_color());
         let words = approval_screen_words(&screen);
         assert_eq!(
-            modal_box_rows(&screen, "Edit file").first().copied(),
+            pane_rows(&screen, "Edit file").first().copied(),
             Some("src/retry.rs"),
             "{screen}"
         );
@@ -1356,8 +1365,8 @@
             deadline.as_str(),
             "remaining",
             "Do you want to proceed?",
-            "y Yes",
-            "n No (esc)",
+            "1. Yes",
+            "3. No (esc)",
         ] {
             assert!(words.contains(required), "missing {required}:\n{screen}");
         }
@@ -1398,7 +1407,7 @@
         );
         insta_like(
             &after,
-            &["Bash command", "cargo publish --dry-run", "n  No (esc)"],
+            &["Bash command", "cargo publish --dry-run", "3. No (esc)"],
         );
         assert_eq!(app.pending_approval_count(), 1);
         app.on_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));

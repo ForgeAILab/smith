@@ -18,7 +18,7 @@ use crate::theme::{Theme, Tone};
 #[cfg(test)]
 use crate::transcript::MAX_LOCAL_RESULT_BYTES;
 
-use super::approval::{approval_scroll_limit, draw_approval};
+use super::approval::{approval_rows, approval_scroll_limit, draw_approval};
 use super::composer::*;
 use super::modal::*;
 use super::questionnaire::{draw_questionnaire, questionnaire_rows};
@@ -133,13 +133,14 @@ pub fn layout(area: Rect, app: &App, theme: Theme) -> SurfaceLayout {
             scroll.result_revision = None;
         }
     }
+    let pane = surface_areas(area, app)[1];
     let approval = matches!(app.overlay, Some(Overlay::Approval { .. })).then(|| {
-        let limit = approval_scroll_limit(area, app, theme);
+        let limit = approval_scroll_limit(pane, app, theme);
         (app.approval_scroll.min(limit), limit)
     });
     let confirm = match &app.overlay {
         Some(Overlay::Confirm(dialog)) => {
-            let limit = confirm_scroll_limit(area, dialog, theme);
+            let limit = confirm_scroll_limit(pane, dialog, theme);
             Some((dialog.scroll.min(limit), limit))
         }
         _ => None,
@@ -217,9 +218,6 @@ fn draw_surface(frame: &mut Frame<'_>, app: &App, theme: Theme) {
         return;
     }
 
-    let composer_rows = composer_rows(app, area.width).saturating_add(2);
-    let agents_rows = agents_rows(app, area, composer_rows);
-    let anchored = anchored_rows(app, area, composer_rows, agents_rows);
     let [
         transcript,
         compact,
@@ -229,19 +227,9 @@ fn draw_surface(frame: &mut Frame<'_>, app: &App, theme: Theme) {
         composer,
         hint,
         agents,
-    ] = Layout::vertical([
-        Constraint::Min(3),
-        Constraint::Length(anchored.compact),
-        Constraint::Length(anchored.pending),
-        Constraint::Length(anchored.todos),
-        Constraint::Length(working_rows(app)),
-        Constraint::Length(composer_rows),
-        Constraint::Length(hint_rows(app)),
-        Constraint::Length(agents_rows),
-    ])
-    .areas(area);
+    ] = surface_areas(area, app);
     draw_transcript(frame, transcript, app, theme);
-    if anchored.compact > 0 {
+    if !compact.is_empty() {
         match &app.overlay {
             Some(Overlay::Shortcuts) => draw_shortcuts(frame, compact, theme),
             Some(Overlay::Palette {
@@ -256,40 +244,30 @@ fn draw_surface(frame: &mut Frame<'_>, app: &App, theme: Theme) {
             Some(Overlay::Questionnaire { state }) => {
                 draw_questionnaire(frame, compact, state, theme);
             }
+            Some(Overlay::Approval { .. }) => draw_approval(frame, compact, app, theme),
+            Some(Overlay::Confirm(dialog)) => draw_confirm(frame, compact, dialog, theme),
             _ => unreachable!("compact rows require a compact interaction"),
         }
     }
-    if anchored.pending > 0 {
+    if !pending.is_empty() {
         draw_pending_input(frame, pending, app, theme);
     }
-    if anchored.todos > 0 {
+    if !todos.is_empty() {
         draw_todos(frame, todos, app, theme);
     }
-    if working_rows(app) > 0 {
+    if !working.is_empty() {
         draw_working(frame, working, app, theme);
     }
-    draw_composer(frame, composer, app, theme);
+    if !composer.is_empty() {
+        draw_composer(frame, composer, app, theme);
+    }
     draw_hint(frame, hint, app, theme);
-    if agents_rows > 0 {
+    if !agents.is_empty() {
         draw_agents(frame, agents, app, theme);
     }
 
-    match &app.overlay {
-        Some(Overlay::Approval { .. }) => draw_approval(frame, area, app, theme),
-        Some(
-            Overlay::Questionnaire { .. }
-            | Overlay::Palette { .. }
-            | Overlay::ResourcePicker { .. }
-            | Overlay::HistorySearch { .. }
-            | Overlay::Shortcuts,
-        ) => {}
-        Some(Overlay::Confirm(dialog)) => draw_confirm(frame, area, dialog, theme),
-        None => {}
-    }
-
     // Last, over everything: the highlight belongs on whatever the user can
-    // actually see, and painting it before the overlays would let a modal
-    // cover the very cells it marks.
+    // actually see, so it patches the finished cells.
     paint_selection(frame, app, theme);
 }
 
@@ -339,14 +317,20 @@ fn paint_selection(frame: &mut Frame<'_>, app: &App, theme: Theme) {
     }
 }
 
-/// The transcript rect under the same vertical layout `draw_surface` renders
-/// with.
-fn transcript_rect(area: Rect, app: &App) -> Rect {
-    let composer_rows = composer_rows(app, area.width).saturating_add(2);
+/// The vertical layout `draw_surface` renders with: transcript, anchored
+/// interaction pane, pending input, todos, working, composer, hint, agents.
+fn surface_areas(area: Rect, app: &App) -> [Rect; 8] {
+    // An open prompt owns input, so it takes the composer's rows the way
+    // Claude Code's permission prompt does; the draft returns on close.
+    let composer_rows = if app.overlay.as_ref().is_some_and(Overlay::is_prompt) {
+        0
+    } else {
+        composer_rows(app, area.width).saturating_add(2)
+    };
     let agents_rows = agents_rows(app, area, composer_rows);
     let anchored = anchored_rows(app, area, composer_rows, agents_rows);
-    let [transcript, _, _, _, _, _, _, _] = Layout::vertical([
-        Constraint::Min(3),
+    Layout::vertical([
+        Constraint::Min(transcript_floor(app)),
         Constraint::Length(anchored.compact),
         Constraint::Length(anchored.pending),
         Constraint::Length(anchored.todos),
@@ -355,8 +339,24 @@ fn transcript_rect(area: Rect, app: &App) -> Rect {
         Constraint::Length(hint_rows(app)),
         Constraint::Length(agents_rows),
     ])
-    .areas(area);
-    transcript
+    .areas(area)
+}
+
+/// The transcript rect under the same vertical layout `draw_surface` renders
+/// with.
+fn transcript_rect(area: Rect, app: &App) -> Rect {
+    surface_areas(area, app)[0]
+}
+
+/// Transcript rows kept visible under the anchored pane. A prompt that must
+/// be answered may take them all, as the modal it replaced did, so its
+/// evidence and keys fit a minimum-size terminal.
+fn transcript_floor(app: &App) -> u16 {
+    if app.overlay.as_ref().is_some_and(Overlay::is_prompt) {
+        0
+    } else {
+        3
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -378,6 +378,8 @@ fn desired_compact_rows(app: &App, width: u16) -> u16 {
         Some(Overlay::ResourcePicker { picker, .. }) => compact_resource_picker_rows(picker),
         Some(Overlay::HistorySearch { .. }) => 2,
         Some(Overlay::Questionnaire { state }) => questionnaire_rows(state, width),
+        Some(Overlay::Approval { .. }) => approval_rows(app, width),
+        Some(Overlay::Confirm(dialog)) => confirm_rows(dialog, width),
         _ => 0,
     }
 }
@@ -390,16 +392,9 @@ fn anchored_rows(app: &App, area: Rect, composer_rows: u16, agents_rows: u16) ->
         .saturating_sub(hint_rows(app))
         .saturating_sub(agents_rows)
         .saturating_sub(working_rows(app))
-        .saturating_sub(3);
+        .saturating_sub(transcript_floor(app));
     let pending_desired = desired_pending_input_rows(app);
     let todo_desired = desired_todo_rows(app);
-    if matches!(app.overlay, Some(Overlay::Approval { .. })) {
-        return AnchoredRows {
-            compact: 0,
-            pending: 0,
-            todos: 0,
-        };
-    }
     let (compact, pending, todos) = if compact_desired > 0 {
         // Compact interactions temporarily own the anchored pane. The todo
         // projection remains in App state and returns unchanged when the

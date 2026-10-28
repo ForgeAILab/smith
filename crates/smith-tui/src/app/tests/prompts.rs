@@ -126,22 +126,52 @@
     }
 
     #[tokio::test]
-    async fn approval_is_never_granted_by_enter() {
+    async fn approval_enter_answers_the_highlighted_row_only_after_the_quiet_window() {
         let mut app = app();
-        app.present_approval(prompt("shell").await);
-        elapse_prompt_guard(&mut app);
+        let (approval, decision) =
+            pending_prompt_with("shell", serde_json::json!({"command": "rm -rf build"})).await;
+        app.present_approval(approval);
 
-        // Enter, Tab, and an ordinary character must all leave the modal open.
-        for code in [KeyCode::Enter, KeyCode::Tab, KeyCode::Char('x')] {
+        // Inside the quiet window even Enter is swallowed.
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
+        assert!(!decision.is_finished());
+
+        // Tab and an ordinary character never answer, guarded or not.
+        elapse_prompt_guard(&mut app);
+        for code in [KeyCode::Tab, KeyCode::Char('x')] {
             assert_eq!(app.on_key(key(code)), None);
             assert!(
                 matches!(app.overlay, Some(Overlay::Approval { .. })),
                 "{code:?} must not answer an approval"
             );
         }
+        assert_eq!(app.approval_choice, 0);
 
-        app.on_key(key(KeyCode::Char('y')));
+        // Down moves the highlight without answering; Enter then denies the
+        // last row.
+        app.on_key(key(KeyCode::Down));
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(app.approval_choice, 2);
+        assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
+        app.on_key(key(KeyCode::Enter));
         assert!(app.overlay.is_none());
+        assert!(matches!(
+            decision.await.expect("denied"),
+            ApprovalDecision::Deny { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn approval_enter_on_the_default_row_allows_once() {
+        let mut app = app();
+        let (approval, decision) =
+            pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
+        app.present_approval(approval);
+        elapse_prompt_guard(&mut app);
+        app.on_key(key(KeyCode::Enter));
+        assert!(app.overlay.is_none());
+        assert_eq!(decision.await.expect("allowed"), ApprovalDecision::Allow);
     }
 
     #[tokio::test]

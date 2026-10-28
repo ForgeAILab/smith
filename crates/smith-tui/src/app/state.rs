@@ -453,7 +453,7 @@ pub enum Overlay {
 }
 
 impl Overlay {
-    pub(super) fn is_prompt(&self) -> bool {
+    pub(crate) fn is_prompt(&self) -> bool {
         matches!(
             self,
             Self::Approval { .. } | Self::Questionnaire { .. } | Self::Confirm(_)
@@ -486,6 +486,9 @@ pub struct ConfirmDialog {
     pub accept: Box<ConfirmOutcome>,
     /// Outcome consumed on cancellation.
     pub cancel: Box<ConfirmOutcome>,
+    /// Highlighted choice: 0 accepts, 1 cancels. Starts on cancel, so Enter
+    /// alone never applies a consequential action.
+    pub choice: usize,
     /// Wrapped body offset.
     pub scroll: usize,
     /// Current viewport bound.
@@ -516,6 +519,7 @@ impl ConfirmDialog {
             hint: format!("y {accept_label} · n/esc cancel"),
             accept: Box::new(accept),
             cancel: Box::new(cancel),
+            choice: 1,
             scroll: 0,
             scroll_limit: 0,
             rotation: None,
@@ -896,6 +900,8 @@ pub struct App {
     /// Visual-row offset and bound for the approval's reviewable content.
     pub(crate) approval_scroll: u16,
     pub(crate) approval_scroll_limit: u16,
+    /// Highlighted approval choice: 0 yes, 1 yes for the session, 2 no.
+    pub(crate) approval_choice: usize,
     /// The admitted local shortcut turn, used only to attribute its call row.
     /// Kept until its matching terminal, including across turn-start events.
     pub(super) local_shell_turn: Option<(TurnId, u64)>,

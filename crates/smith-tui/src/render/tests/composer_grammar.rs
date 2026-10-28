@@ -275,12 +275,12 @@ fn hint_row_keeps_existing_picker_controls_at_all_widths() {
 }
 
 #[tokio::test]
-async fn hint_row_keeps_existing_approval_controls() {
+async fn hint_row_offers_the_approval_chooser_controls() {
     let mut app = App::new("model", "project");
     app.present_approval(prompt("shell", serde_json::json!({"command": "ls"})).await);
     assert_eq!(
         overlay_hint(&app).as_deref(),
-        Some("y allow once · a allow this target · n deny")
+        Some("↑↓ or 1–3 choose · enter confirm · esc deny")
     );
     for width in [44, 80, 100] {
         let screen = render(&app, width, 16, Theme::new().without_color());

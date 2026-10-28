@@ -214,6 +214,8 @@ async fn every_confirmation_preserves_its_labels_scrolls_and_has_guarded_decisio
                 }
             );
             assert_eq!(dialog.cancel_key, "n/esc");
+            assert_eq!(dialog.choice, 1, "Enter alone cancels");
+            let cancel_label = dialog.cancel_label.to_string();
             assert_ne!(dialog.body.last().map(String::as_str), Some(""));
             // The child and rotation sources have short authored bodies;
             // exercise the same viewport with long content for these too.
@@ -229,13 +231,18 @@ async fn every_confirmation_preserves_its_labels_scrolls_and_has_guarded_decisio
             assert!(first.contains(case.label), "{first}");
             if let Some(warning) = case.warning {
                 let flattened = first
-                    .replace('│', " ")
                     .split_whitespace()
                     .collect::<Vec<_>>()
                     .join(" ");
                 assert!(flattened.contains(warning), "{first}");
             }
-            assert!(first.contains("↑↓ review"), "{first}");
+            assert!(first.contains("shift+↑↓ review"), "{first}");
+            assert!(first.contains("enter confirm"), "{first}");
+            assert!(!first.contains('│'), "{first}");
+            assert!(
+                first.contains(&format!("❯ 2. {cancel_label} (n/esc)")),
+                "the cancel row starts highlighted: {first}"
+            );
             assert!(!first.contains("body line 199"), "{first}");
 
             clock.advance(499);
@@ -244,10 +251,11 @@ async fn every_confirmation_preserves_its_labels_scrolls_and_has_guarded_decisio
             clock.advance(499);
             assert_eq!(app.on_key(key(KeyCode::Enter)), None);
             assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
-            app.on_key(key(KeyCode::Down));
-            assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.scroll == 1));
+            // Up and Down choose a row; PageUp, PageDown, and Shift+Up/Down scroll.
             app.on_key(key(KeyCode::Up));
-            assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.scroll == 0));
+            assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.choice == 0 && dialog.scroll == 0));
+            app.on_key(key(KeyCode::Down));
+            assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.choice == 1 && dialog.scroll == 0));
             app.on_key(key(KeyCode::PageDown));
             assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.scroll == 10));
             app.on_key(key(KeyCode::PageUp));
@@ -267,27 +275,27 @@ async fn every_confirmation_preserves_its_labels_scrolls_and_has_guarded_decisio
                 app.on_key(key(KeyCode::PageDown));
             }
             let narrow = confirmation_screen(&mut app, 40, 10);
+            assert!(narrow.contains("2. "), "{}: {narrow}", case.title);
+            let narrow = confirmation_screen(&mut app, 40, 14);
             assert!(narrow.contains("body line 199"), "{}: {narrow}", case.title);
 
             clock.advance(500);
-            assert_eq!(
-                app.on_key(key(KeyCode::Enter)),
-                None,
-                "{} Enter",
-                case.title
-            );
-            assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
+            // Enter answers the highlighted row: cancel by default, accept
+            // once the user has moved up to it.
             let expected = if decision == KeyCode::Char('y') {
                 case.accept.clone()
             } else {
                 case.cancel.clone()
             };
-            assert_eq!(
-                app.on_key(key(decision)),
-                expected,
-                "{} decision",
-                case.title
-            );
+            let answered = match decision {
+                KeyCode::Char('y') => {
+                    app.on_key(key(KeyCode::Up));
+                    app.on_key(key(KeyCode::Enter))
+                }
+                KeyCode::Char('n') => app.on_key(key(KeyCode::Enter)),
+                other => app.on_key(key(other)),
+            };
+            assert_eq!(answered, expected, "{} decision", case.title);
             assert!(app.overlay.is_none());
             assert!(!app.should_quit);
             if let Some(rotation) = rotation {

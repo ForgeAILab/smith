@@ -42,6 +42,7 @@ impl App {
             work_details: false,
             approval_scroll: 0,
             approval_scroll_limit: 0,
+            approval_choice: 0,
             local_shell_turn: None,
             resources: RuntimeResources::default(),
             following: true,

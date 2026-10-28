@@ -1,23 +1,25 @@
-//! Action-first approvals, with scrollable prepared-action detail.
+//! Action-first approvals, drawn inline above the composer, with scrollable
+//! prepared-action detail.
 
 use agent_runtime_core::security::SecurityResource;
 use agent_runtime_core::tool::PreparedToolCall;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 
 use crate::app::{App, Overlay};
 use crate::diff::{Change, EditReview};
 use crate::theme::{Theme, Tone, glyph};
 
-use super::modal::{
-    authority_warning, deadline_text, modal_max_height, modal_width, security_resource_text,
-};
+use super::modal::{authority_warning, deadline_text, security_resource_text};
+use super::questionnaire::choice_row;
 use super::wrap::wrap_lines;
 
 const DIFF_PREVIEW_LINES: usize = 4;
-pub(super) const HORIZONTAL_PADDING: u16 = 2;
+/// Indent shared with the compact pickers and the questionnaire.
+pub(super) const INDENT: &str = "  ";
+pub(super) const INDENT_WIDTH: u16 = 2;
 
 fn line(text: impl Into<String>, theme: Theme, tone: Tone) -> Line<'static> {
     Line::from(Span::styled(text.into(), theme.style(tone)))
@@ -311,38 +313,134 @@ fn compose(
     if waiting > 0 {
         hint.push_str(&format!(" · {waiting} more waiting"));
     }
-    let foot = vec![
-        line("Do you want to proceed?", theme, Tone::Heading),
-        line("  y  Yes", theme, Tone::Success),
-        line(
-            format!("  a  {}", session_choice(prepared, delegation.is_some())),
-            theme,
-            Tone::Warning,
-        ),
-        line("  n  No (esc)", theme, Tone::Default),
-        line(hint, theme, Tone::Dim),
-    ];
+    let session = session_choice(prepared, delegation.is_some());
+    let mut foot = vec![line(
+        format!("{INDENT}Do you want to proceed?"),
+        theme,
+        Tone::Heading,
+    )];
+    foot.extend(choice_rows(
+        &["Yes", &session, "No (esc)"],
+        app.approval_choice,
+        theme,
+    ));
+    foot.push(line(format!("{INDENT}{hint}"), theme, Tone::Dim));
     (title, body, foot)
 }
 
+/// The first row of every inline prompt, matching the picker and
+/// questionnaire headings: indented, in the heading tone. Severity belongs to
+/// the warning rows, not the title.
+pub(super) fn pane_title(text: &str, theme: Theme) -> Line<'static> {
+    line(format!("{INDENT}{text}"), theme, Tone::Heading)
+}
+
+/// A numbered choice list shared by every inline prompt, drawn exactly like
+/// the questionnaire's rows: `❯ 1. Yes`.
+pub(super) fn choice_rows(labels: &[&str], selected: usize, theme: Theme) -> Vec<Line<'static>> {
+    labels
+        .iter()
+        .enumerate()
+        .map(|(index, label)| choice_row(index, label, index == selected, false, theme))
+        .collect()
+}
+
+/// Wraps choice rows so a long label hangs under its first word, not under
+/// the `❯ 1. ` marker. Other lines wrap normally.
+pub(super) fn wrap_choices(lines: &[Line<'static>], width: u16) -> Vec<Line<'static>> {
+    let mut wrapped = Vec::new();
+    for line in lines {
+        let marker = line.spans.first().map(|span| span.content.as_ref());
+        let is_choice = matches!(marker, Some("❯ " | "  "))
+            && line
+                .spans
+                .get(1)
+                .is_some_and(|span| span.content.ends_with(". "));
+        if !is_choice {
+            wrapped.extend(wrap_lines(std::slice::from_ref(line), width));
+            continue;
+        }
+        let hang = line.spans[..2]
+            .iter()
+            .map(|span| span.content.chars().count())
+            .sum::<usize>();
+        let label = Line::from(line.spans[2..].to_vec());
+        let rows = wrap_lines(&[label], width.saturating_sub(hang as u16));
+        for (index, mut row) in rows.into_iter().enumerate() {
+            if index == 0 {
+                let mut spans = line.spans[..2].to_vec();
+                spans.extend(row.spans);
+                row.spans = spans;
+            } else {
+                row.spans.insert(0, Span::raw(" ".repeat(hang)));
+            }
+            wrapped.push(row);
+        }
+    }
+    wrapped
+}
+
+/// The same choices on one row, for a pane too short for the full list.
+fn compact_choices(labels: &[&str], selected: usize, theme: Theme) -> Line<'static> {
+    let mut spans = vec![Span::styled("❯ ", theme.style(Tone::Accent))];
+    for (index, label) in labels.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" · ", theme.style(Tone::Dim)));
+        }
+        spans.push(Span::styled(
+            format!("{}. {label}", index + 1),
+            theme.style(if index == selected {
+                Tone::Accent
+            } else {
+                Tone::Default
+            }),
+        ));
+    }
+    Line::from(spans)
+}
+
+pub(super) fn indented(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|mut line| {
+            line.spans.insert(0, Span::raw(INDENT));
+            line
+        })
+        .collect()
+}
+
 struct ApprovalLayout {
-    area: Rect,
-    title: String,
+    title: Line<'static>,
     body: Vec<Line<'static>>,
     foot: Vec<Line<'static>>,
     scroll_limit: u16,
 }
 
+/// Rows the inline approval wants at `width`; the layout may grant fewer.
+pub(super) fn approval_rows(app: &App, width: u16) -> u16 {
+    let inner = width.saturating_sub(INDENT_WIDTH * 3);
+    let (_, body, foot) = compose(app, Theme::new(), DIFF_PREVIEW_LINES);
+    let rows = 1 + wrap_lines(&body, inner).len() + wrap_choices(&foot, width).len();
+    u16::try_from(rows).unwrap_or(u16::MAX)
+}
+
 fn approval_layout(area: Rect, app: &App, theme: Theme) -> ApprovalLayout {
-    let width = if area.width < 60 {
-        area.width
-    } else {
-        modal_width(area)
-    };
-    let inner = width.saturating_sub(2 + HORIZONTAL_PADDING * 2);
+    let inner = area.width.saturating_sub(INDENT_WIDTH * 3);
+    let height = usize::from(area.height);
     let (title, body, mut controls) = compose(app, theme, DIFF_PREVIEW_LINES);
+    let title = pane_title(&title, theme);
     let mut body = wrap_lines(&body, inner);
-    let mut foot = wrap_lines(&controls, inner);
+    // A pane too short for the title, one evidence row, and the full choice
+    // list keeps the same keys on one line.
+    let compact = 2 + wrap_choices(&controls, area.width).len() > height;
+    if compact {
+        controls = vec![compact_choices(
+            &["Yes", "Session", "No (esc)"],
+            app.approval_choice,
+            theme,
+        )];
+    }
+    let mut foot = wrap_choices(&controls, area.width);
     if !app.work_details
         && matches!(
             app.overlay,
@@ -355,53 +453,28 @@ fn approval_layout(area: Rect, app: &App, theme: Theme) -> ApprovalLayout {
         // Fold the diff further before letting it push the place, warning, or
         // deadline out of the default view on a short terminal.
         for preview in (1..DIFF_PREVIEW_LINES).rev() {
-            if body.len() + foot.len() + 2 <= usize::from(area.height) {
+            if 1 + body.len() + foot.len() <= height {
                 break;
             }
             body = wrap_lines(&compose(app, theme, preview).1, inner);
         }
     }
-    let wanted = u16::try_from(body.len() + foot.len() + 2).unwrap_or(u16::MAX);
-    // The normal modal ceiling yields to decision evidence on short screens.
-    // Extra detail scrolls; controls never scroll away with the JSON or diff.
-    let minimum = if app.work_details {
-        u16::try_from(foot.len() + 5).unwrap_or(u16::MAX)
-    } else {
-        wanted
-    };
-    let height = wanted
-        .min(modal_max_height(area).max(minimum))
-        .min(area.height);
-    let modal = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
-    let mut room = usize::from(height.saturating_sub(2)).saturating_sub(foot.len());
-    if body.len() > room {
-        // Replace the detail hint rather than spending a scarce row that
-        // would otherwise hold the exact target on a ten-row screen.
-        if let Some(hint) = controls.last_mut() {
-            hint.spans
-                .push(Span::styled(" · ↑↓ review", theme.style(Tone::Dim)));
-        }
-        foot = wrap_lines(&controls, inner);
-        if foot.len() + 1 > usize::from(height.saturating_sub(2)) {
-            if let Some(hint) = controls.last_mut() {
-                hint.spans.pop();
-                hint.spans
-                    .push(Span::styled(" · ↑↓", theme.style(Tone::Dim)));
-            }
-            foot = wrap_lines(&controls, inner);
-        }
-        room = usize::from(height.saturating_sub(2)).saturating_sub(foot.len());
+    let room = height.saturating_sub(1 + foot.len());
+    // The one-row choice list has no room for a review hint; paging still works.
+    if body.len() > room
+        && !compact
+        && let Some(hint) = controls.last_mut()
+    {
+        // Extra detail scrolls; controls never scroll away with the JSON or diff.
+        hint.spans
+            .push(Span::styled(" · shift+↑↓ review", theme.style(Tone::Dim)));
+        foot = wrap_choices(&controls, area.width);
     }
+    let room = height.saturating_sub(1 + foot.len());
     let scroll_limit = u16::try_from(body.len().saturating_sub(room)).unwrap_or(u16::MAX);
     ApprovalLayout {
-        area: modal,
         title,
-        body,
+        body: indented(indented(body)),
         foot,
         scroll_limit,
     }
@@ -411,36 +484,29 @@ pub(super) fn approval_scroll_limit(area: Rect, app: &App, theme: Theme) -> u16 
     approval_layout(area, app, theme).scroll_limit
 }
 
+/// Draws the approval inline above the composer, like the questionnaire.
 pub(super) fn draw_approval(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
+    if area.is_empty() {
+        return;
+    }
     let ApprovalLayout {
-        area,
         title,
         body,
         foot,
         scroll_limit,
     } = approval_layout(area, app, theme);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .padding(Padding::horizontal(HORIZONTAL_PADDING))
-        .border_style(theme.style(Tone::Warning))
-        .title(Span::styled(
-            format!(" {title} "),
-            theme.style(Tone::Heading),
-        ));
-    let inner = block.inner(area);
     frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(title), Rect { height: 1, ..area });
     let foot_height = u16::try_from(foot.len())
         .unwrap_or(u16::MAX)
-        .min(inner.height);
-    let body_height = inner.height.saturating_sub(foot_height);
+        .min(area.height.saturating_sub(1));
+    let body_height = area.height.saturating_sub(1 + foot_height);
     frame.render_widget(
         Paragraph::new(body).scroll((app.approval_scroll.min(scroll_limit), 0)),
-        Rect::new(inner.x, inner.y, inner.width, body_height),
+        Rect::new(area.x, area.y + 1, area.width, body_height),
     );
     frame.render_widget(
         Paragraph::new(foot),
-        Rect::new(inner.x, inner.y + body_height, inner.width, foot_height),
+        Rect::new(area.x, area.y + 1 + body_height, area.width, foot_height),
     );
 }

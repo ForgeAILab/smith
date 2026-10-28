@@ -120,15 +120,15 @@ async fn bridged_spawn_approval_matches_native_action_prompt() {
     for width in [44, 100] {
         let bridged_screen = render(&harness, width, 32, Theme::new().without_color());
         let native_screen = render(&native, width, 32, Theme::new().without_color());
-        let bridged = modal_box_rows(&bridged_screen, "Start a child agent");
+        let bridged = pane_rows(&bridged_screen, "Start a child agent");
         assert_eq!(
             bridged,
-            modal_box_rows(&native_screen, "Start a child agent")
+            pane_rows(&native_screen, "Start a child agent")
         );
         assert_eq!(bridged[0], "Make exactly one edit in src/main.rs");
         insta_like(
             &approval_screen_words(&bridged_screen),
-            &["Warning: the child acts on its own", "y Yes", "n No (esc)"],
+            &["Warning: the child acts on its own", "1. Yes", "3. No (esc)"],
         );
     }
 }

@@ -463,10 +463,11 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
         Some(Overlay::Shortcuts) => None,
         Some(Overlay::Approval { .. }) => {
             let waiting = app.queued_prompt_count();
+            let keys = "↑↓ or 1–3 choose · enter confirm · esc deny";
             Some(if waiting == 0 {
-                "y allow once · a allow this target · n deny".to_owned()
+                keys.to_owned()
             } else {
-                format!("y allow once · a allow this target · n deny · {waiting} queued")
+                format!("{keys} · {waiting} queued")
             })
         }
         Some(Overlay::Questionnaire { state }) => {
@@ -496,11 +497,20 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
         Some(Overlay::HistorySearch { .. }) => {
             Some("ctrl+r older · enter use · esc cancel".to_owned())
         }
-        Some(Overlay::Confirm(dialog)) => Some(if app.queued_prompt_count() == 0 {
-            dialog.hint.clone()
-        } else {
-            format!("{} · {} queued", dialog.hint, app.queued_prompt_count())
-        }),
+        Some(Overlay::Confirm(dialog)) => {
+            // Rotation keeps its digits for the account numbers it prints.
+            let choose = if dialog.rotation.is_some() {
+                "↑↓ choose"
+            } else {
+                "↑↓ or 1–2 choose"
+            };
+            let mut hint = format!("{choose} · enter confirm · {}", dialog.hint);
+            let queued = app.queued_prompt_count();
+            if queued > 0 {
+                hint.push_str(&format!(" · {queued} queued"));
+            }
+            Some(hint)
+        }
         // The inspector is a read-only view, not an overlay, but it owns the
         // same keys the identity footer would otherwise explain: while it is
         // open, the hint row says how to leave it and how to reply to the

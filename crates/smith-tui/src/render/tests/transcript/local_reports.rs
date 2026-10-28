@@ -723,7 +723,7 @@ async fn malformed_edit_arguments_fall_back_rather_than_show_an_empty_diff() {
     );
     let screen = render(&app, 74, 24, Theme::new());
 
-    insta_like(&screen, &["old_string: once();", "y  Yes"]);
+    insta_like(&screen, &["old_string: once();", "1. Yes"]);
     assert!(
         !screen.contains("change  "),
         "an unreviewable edit must not claim a diff:\n{screen}"

@@ -95,12 +95,15 @@ resource picker adds a footer control row. Slash completion relies on the
 established keyboard contract and keeps the one-row identity footer. Closing a
 picker restores the unchanged todo projection. Choosers are never modal: every
 one, in a session or before it, is the same inline list (see *Setup before the
-coding surface* and the resource-picker grammar). Modal overlays are reserved
-for consequential interaction:
-approval, provider-spend confirmation, agent-originated questionnaires,
-and undo/revert confirmation. They are centered, max 72
-columns wide and 60% of height, and drawn over the transcript. Read-only
-command information never opens a modal; it appends to the transcript. Only
+coding surface* and the resource-picker grammar). Smith has no modal
+overlays. Consequential interaction — approval, provider-spend confirmation,
+agent-originated questionnaires, and undo/revert confirmation — uses the
+anchored pane, in place of the composer while it is open (the draft is kept),
+and the same numbered select: an indented
+heading-tone title, indented evidence, then `❯ 1. Label` rows. A prompt may
+take the transcript and composer rows so its choices fit a minimum-size terminal;
+a pane too short for the list shows the choices on one row. Read-only command
+information appends to the transcript. Only
 one interactive surface is visible at a time. Runtime-originated approvals and
 questionnaires wait in a stable FIFO prompt queue; a new prompt never
 supersedes, implicitly denies, or drops an older one. The footer names the
@@ -297,7 +300,7 @@ Rules:
   state word beside `✓`. Other errors and warnings name their condition.
 - **No fixed background fills.** Composer, user text, and all other surfaces
   use the terminal default background; Smith cannot know the user's palette.
-- **Bold marks structure** — action verbs, headings, strong Markdown, modal
+- **Bold marks structure** — action verbs, headings, strong Markdown, pane
   titles, and the active selection. It never colors an entire paragraph.
 - Assistant Markdown follows the reference hierarchy: H1 bold+underline, H2
   bold, H3 bold+italic, lower headings italic, inline code cyan, emphasis
@@ -309,8 +312,9 @@ Rules:
 ## 5. Composer, commands, and keyboard
 
 The composer is the only persistent focus target. Transcript scrolling is
-global and never requires a focus mode. There is no hidden modal state: a
-modal or resource picker owns input and names its controls in the hint row.
+global and never requires a focus mode. There is no hidden modal state: an
+inline prompt or resource picker owns input and names its controls in the hint
+row.
 Slash completion is the deliberate quiet exception: its selected-row grammar
 and the keyboard contract below are sufficient, so it adds no control strip.
 
@@ -414,9 +418,13 @@ is replaced by its exact stored text in the user transcript; an image label
 remains visible while its registered image is sent as a separate content part.
 Composer history and uncommitted pending previews keep the compact labels.
 
-Approval keys are deliberately *not* `Enter`-defaulted. An approval modal has
-no default action, because a stray `Enter` from the composer must never grant a
-shell command. A questionnaire also opens with no implicit answer or action.
+An approval is a numbered select: `↑↓` moves the highlight, `Enter` answers
+the highlighted row, and `1`/`y`, `2`/`a`, `3`/`n`/`Esc` answer directly;
+`Shift+↑↓` scrolls long evidence. The highlight starts on `Yes`. A stray
+`Enter` from the composer still never grants a shell command: every prompt
+opens behind a quiet window that swallows keys typed before it appeared. A
+confirmation's highlight starts on cancel, so `Enter` alone never applies a
+consequential action. A questionnaire also opens with no implicit answer or action.
 `Enter` in its choice list only stages the highlighted choice; submission
 requires moving to the explicit `Submit` action. `Decline` returns a typed
 decline, while `Esc` cancels the interaction under the active turn's
@@ -472,7 +480,7 @@ canonical workspace-relative file identities without reading files or
 contacting a provider. A dispatched queued file observes dequeue-time workspace
 content. The anchored pane labels each category in text, shows at most three
 preview lines plus an overflow count, and shares its remaining bounded height
-with the public todo projection. A compact picker or modal still owns the area
+with the public todo projection. A compact picker or inline prompt still owns the area
 and its keys first. This state is process-local, counts as live work for exit
 and reconfiguration, and is not presented as journal durability.
 
@@ -797,13 +805,13 @@ unchanged in terminal and headless modes.
 
 `/diff` is read-only and appends directly to the transcript. Empty, non-Git,
 binary, oversized, and conflicted states are named explicitly. `/review` names
-its selected scope and provider spend in a confirmation modal before dispatch;
+its selected scope and provider spend in an inline confirmation before dispatch;
 the reviewer receives read-only workspace authority and findings return to the
 transcript.
 
-`/undo` and `/revert` never have a default action. Their confirmation modals show
+`/undo` and `/revert` never have a default action. Their inline confirmations show
 the exact reverse patch, origin (`Smith`, `user`, or `unknown`), and any paths
-that cannot be proven safe. `y` confirms only after every post-image check
+that cannot be proven safe. `y` (or `Enter` on the apply row) confirms only after every post-image check
 passes; `n` or `Esc` cancels. A stale path, ambiguous tool delta, or partial
 validation failure leaves the entire workspace unchanged.
 
@@ -1111,7 +1119,7 @@ redundant with nothing. Suppression is presentation only — the call, its
 arguments, and its result stay in canonical history, the journal, and machine
 output — and it applies identically live and after resume.
 
-The approval modal is the deliberate exception: it receives the runtime's
+The approval prompt is the deliberate exception: it receives the runtime's
 immutable prepared action through the separate approval channel because the
 user cannot make an informed safety decision from a compact summary alone.
 The action leads: edit calls render the bounded line diff; other calls render
@@ -1264,7 +1272,7 @@ coordinator explicitly transfers a bounded copy and records lineage.
 
 ## 9. Accessibility
 
-- **Screen readers.** Every modal announces its title as the first rendered
+- **Screen readers.** Every inline prompt announces its title as the first rendered
   text. Transcript blocks are separated by a blank line so a screen reader's
   paragraph navigation matches Smith's block structure.
 - **Contrast.** Because Smith uses named ANSI colors, contrast is the terminal

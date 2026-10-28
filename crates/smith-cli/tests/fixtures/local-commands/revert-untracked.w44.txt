@@ -1,19 +1,14 @@
-  ┌ revert selected change ──────────────┐
-  │  No action is selected by default.   │
-  │  Review the complete reverse patch.  │
-  │  origin: unknown                     │
-  │                                      │
-  │  diff --git a/untracked.txt          │
-  │  b/untracked.txt                     │
-  │  deleted file mode 100644            │
-  │  --- a/untracked.txt                 │
-  │  +++ /dev/null                       │
-  │  -new file                           │
-  │                                      │
-  │  y apply revert   n/esc cancel       │
-  └──────────────────────────────────────┘
+  revert selected change
+  No action is selected by default. Review
+  the complete reverse patch.
+  origin: unknown
 
-────────────────────────────────────────────
-> Ask Smith to do anything
-────────────────────────────────────────────
-  y apply revert · n/esc cancel
+  diff --git a/untracked.txt
+  b/untracked.txt
+  deleted file mode 100644
+  --- a/untracked.txt
+  +++ /dev/null
+  -new file
+
+  1. apply revert
+❯ 2. cancel (n/esc)

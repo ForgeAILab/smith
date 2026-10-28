@@ -205,7 +205,7 @@ async fn typing_through_an_approval_preserves_the_draft_and_requires_a_quiet_win
         })
         .collect::<Vec<_>>()
         .join("\n");
-    for control in ["y  Yes", "a  Yes", "n  No (esc)"] {
+    for control in ["❯ 1. Yes", "2. Yes, and don't ask again", "3. No (esc)"] {
         assert!(screen.contains(control), "{screen}");
     }
 
@@ -442,18 +442,19 @@ async fn rotation_controls_ignore_typing_until_the_offer_has_a_quiet_window() {
 }
 
 #[tokio::test]
-async fn enter_never_answers_an_approval_before_or_after_expanding_and_settling() {
+async fn enter_answers_an_approval_only_after_expanding_and_settling() {
     let mut app = app();
     let clock = prompt_clock(&mut app);
     app.composer.replace("keep the draft");
     let (prompt, decision) =
         pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
     app.present_approval(prompt);
+    // The quiet window swallows Enter whether or not the details are open.
     for expanded in [false, true] {
         if expanded {
             app.on_key(ctrl('o'));
         }
-        for elapsed in [0, 500] {
+        for elapsed in [0, 400] {
             clock.advance(elapsed);
             assert_eq!(app.on_key(key(KeyCode::Enter)), None);
             assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
@@ -462,11 +463,10 @@ async fn enter_never_answers_an_approval_before_or_after_expanding_and_settling(
         }
     }
     clock.advance(500);
-    app.on_key(key(KeyCode::Esc));
-    assert!(matches!(
-        decision.await.expect("explicit denial"),
-        ApprovalDecision::Deny { .. }
-    ));
+    assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+    assert!(app.overlay.is_none());
+    assert_eq!(app.composer.text(), "keep the draft");
+    assert_eq!(decision.await.expect("explicit allow"), ApprovalDecision::Allow);
 }
 
 #[tokio::test]

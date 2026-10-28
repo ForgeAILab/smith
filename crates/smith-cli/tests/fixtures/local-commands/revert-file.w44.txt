@@ -1,21 +1,15 @@
-  ┌ revert selected change ──────────────┐
-  │  No action is selected by default.   │
-  │  Review the complete reverse patch.  │
-  │  origin: Smith                       │
-  │                                      │
-  │  diff --git b/tracked.txt            │
-  │  a/tracked.txt                       │
-  │  index 294186e..90be1f3 100644       │
-  │  --- b/tracked.txt                   │
-  │  +++ a/tracked.txt                   │
-  │  @@ -1 +1 @@                         │
-  │  -after                              │
-  │  +before                             │
-  │                                      │
-  │  y apply revert   n/esc cancel       │
-  └──────────────────────────────────────┘
+  revert selected change
+  No action is selected by default. Review
+  the complete reverse patch.
+  origin: Smith
 
-────────────────────────────────────────────
-> Ask Smith to do anything
-────────────────────────────────────────────
-  y apply revert · n/esc cancel
+  diff --git b/tracked.txt a/tracked.txt
+  index 294186e..90be1f3 100644
+  --- b/tracked.txt
+  +++ a/tracked.txt
+  @@ -1 +1 @@
+  -after
+  +before
+
+  1. apply revert
+❯ 2. cancel (n/esc)

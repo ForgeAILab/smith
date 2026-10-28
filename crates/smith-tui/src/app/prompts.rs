@@ -89,6 +89,7 @@ impl App {
                 self.prompt_input_guard.start();
                 self.approval_scroll = 0;
                 self.approval_scroll_limit = 0;
+                self.approval_choice = 0;
                 Overlay::Approval { prompt, review }
             }
             PendingPrompt::Questionnaire(state) => {

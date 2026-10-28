@@ -168,17 +168,22 @@ impl App {
             match key.code {
                 KeyCode::PageUp => self.scroll_up(10),
                 KeyCode::PageDown => self.scroll_down(10),
-                KeyCode::Home | KeyCode::End => {
-                    self.selection = None;
-                    return self.on_scroll_key(key);
+                // Up/Down choose; Shift moves through the evidence instead.
+                KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    self.approval_scroll = self.approval_scroll.saturating_sub(1);
                 }
-                KeyCode::Up => self.approval_scroll = self.approval_scroll.saturating_sub(1),
-                KeyCode::Down => {
+                KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
                     self.approval_scroll = self
                         .approval_scroll
                         .saturating_add(1)
                         .min(self.approval_scroll_limit);
                 }
+                KeyCode::Home | KeyCode::End => {
+                    self.selection = None;
+                    return self.on_scroll_key(key);
+                }
+                KeyCode::Up => self.approval_choice = self.approval_choice.saturating_sub(1),
+                KeyCode::Down => self.approval_choice = (self.approval_choice + 1).min(2),
                 _ => {
                     if ignore_prompt_key {
                         return None;
@@ -297,10 +302,14 @@ impl App {
             return None;
         };
         match key.code {
-            KeyCode::Up => dialog.scroll = dialog.scroll.saturating_sub(1),
-            KeyCode::Down => {
-                dialog.scroll = dialog.scroll.saturating_add(1).min(dialog.scroll_limit)
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                dialog.scroll = dialog.scroll.saturating_sub(1);
             }
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                dialog.scroll = dialog.scroll.saturating_add(1).min(dialog.scroll_limit);
+            }
+            KeyCode::Up => dialog.choice = 0,
+            KeyCode::Down => dialog.choice = 1,
             KeyCode::PageUp => dialog.scroll = dialog.scroll.saturating_sub(10),
             KeyCode::PageDown => {
                 dialog.scroll = dialog.scroll.saturating_add(10).min(dialog.scroll_limit)
@@ -310,8 +319,11 @@ impl App {
                     return None;
                 }
                 let (accept, offered) = match key.code {
+                    KeyCode::Enter => (dialog.choice == 0, (dialog.choice == 0).then_some(0)),
                     KeyCode::Char('y') => (true, Some(0)),
                     KeyCode::Char('n') | KeyCode::Esc => (false, None),
+                    KeyCode::Char('1') if dialog.rotation.is_none() => (true, Some(0)),
+                    KeyCode::Char('2') if dialog.rotation.is_none() => (false, None),
                     // Retain the account numbers already printed by rotation.
                     KeyCode::Char(digit @ '1'..='9') if dialog.rotation.is_some() => {
                         let position = digit.to_digit(10)? as usize - 1;
@@ -557,13 +569,19 @@ impl App {
     }
 
     pub(super) fn on_approval_key(&mut self, key: KeyEvent) -> Option<Action> {
-        // No default action: an approval modal must not be answerable by a
-        // stray Enter arriving from the composer.
-        match key.code {
-            KeyCode::Char('y') => self.answer_approval(Some(PromptScope::Once)),
-            KeyCode::Char('a') => self.answer_approval(Some(PromptScope::Session)),
-            KeyCode::Char('n') | KeyCode::Esc => self.answer_approval(None),
-            _ => {}
+        // The prompt input guard has already swallowed a stray Enter arriving
+        // from the composer, so Enter here answers the highlighted row.
+        let choice = match key.code {
+            KeyCode::Enter => self.approval_choice,
+            KeyCode::Char('1' | 'y') => 0,
+            KeyCode::Char('2' | 'a') => 1,
+            KeyCode::Char('3' | 'n') | KeyCode::Esc => 2,
+            _ => return None,
+        };
+        match choice {
+            0 => self.answer_approval(Some(PromptScope::Once)),
+            1 => self.answer_approval(Some(PromptScope::Session)),
+            _ => self.answer_approval(None),
         }
         None
     }

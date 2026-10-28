@@ -255,17 +255,18 @@ mod tests {
         }
     }
 
-    fn modal_box_rows<'a>(screen: &'a str, title: &str) -> Vec<&'a str> {
+    /// The body rows of an inline prompt pane: everything between its title
+    /// row and the first question or choice row, trimmed of indentation.
+    fn pane_rows<'a>(screen: &'a str, title: &str) -> Vec<&'a str> {
         screen
             .lines()
-            .skip_while(|row| !row.contains(['╭', '┌']) || !row.contains(title))
+            .skip_while(|row| row.trim() != title)
             .skip(1)
-            .take_while(|row| !row.contains(['╰', '└']))
-            .filter_map(|row| {
-                let (_, inside) = row.split_once('│')?;
-                let (inside, _) = inside.rsplit_once('│')?;
-                Some(inside.trim())
+            .take_while(|row| {
+                let row = row.trim_start_matches(['❯', ' ']);
+                !(row.starts_with("Do you want to proceed?") || row.starts_with("1. "))
             })
+            .map(str::trim)
             .collect()
     }
     include!("layout.rs");

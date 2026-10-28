@@ -271,7 +271,7 @@ fn tab_span(text: String, active: bool, theme: Theme) -> Span<'static> {
 
 /// One numbered list row: `❯ 1. ✓ Label`. The label is the last span so the
 /// free-form row can replace it.
-fn choice_row(
+pub(super) fn choice_row(
     index: usize,
     label: &str,
     selected: bool,

@@ -1,4 +1,4 @@
-//! Approval, questionnaire, palette, search, and confirmation overlays.
+//! Palette, search, and confirmation panes, plus shared approval wording.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,12 +11,11 @@ use agent_runtime_core::tool::PreparedToolCall;
 use agent_runtime_registry::Permission;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::layout::*;
+use super::approval::{INDENT, INDENT_WIDTH, choice_rows, indented, pane_title, wrap_choices};
 use super::lists::{detail_line, list_row};
 
 /// Command completion keeps the transcript visible by reserving at most five
@@ -286,7 +285,7 @@ pub(super) fn draw_history_search(
 }
 
 struct ConfirmLayout {
-    area: Rect,
+    title: Line<'static>,
     warning: Vec<Line<'static>>,
     body: Vec<Line<'static>>,
     foot: Vec<Line<'static>>,
@@ -294,9 +293,16 @@ struct ConfirmLayout {
     scroll_limit: usize,
 }
 
+/// Rows the inline confirmation wants at `width`; the layout may grant fewer.
+pub(super) fn confirm_rows(dialog: &ConfirmDialog, width: u16) -> u16 {
+    let layout = confirm_layout(Rect::new(0, 0, width, u16::MAX), dialog, Theme::new());
+    let rows = 1 + layout.warning.len() + layout.body.len() + layout.foot.len();
+    u16::try_from(rows).unwrap_or(u16::MAX)
+}
+
 fn confirm_layout(area: Rect, dialog: &ConfirmDialog, theme: Theme) -> ConfirmLayout {
-    let width = modal_width(area);
-    let inner = width.saturating_sub(2 + super::approval::HORIZONTAL_PADDING * 2);
+    let inner = area.width.saturating_sub(INDENT_WIDTH * 2);
+    let title = pane_title(&dialog.title, theme);
     let warning = dialog
         .warning
         .as_ref()
@@ -313,36 +319,26 @@ fn confirm_layout(area: Rect, dialog: &ConfirmDialog, theme: Theme) -> ConfirmLa
         .map(Line::from)
         .collect::<Vec<_>>();
     let body = super::wrap::wrap_lines(&body, inner);
-    let controls = Line::from(vec![
-        Span::styled("y", theme.style(dialog.accept_tone)),
-        Span::styled(
-            format!(" {}   ", dialog.accept_label),
-            theme.style(Tone::Dim),
-        ),
-        Span::styled(dialog.cancel_key, theme.style(Tone::Success)),
-        Span::styled(format!(" {}", dialog.cancel_label), theme.style(Tone::Dim)),
-    ]);
-    let mut foot = super::wrap::wrap_lines(&[controls], inner);
-    let wanted = warning.len() + body.len() + foot.len() + usize::from(!body.is_empty()) + 2;
-    // Like approvals, the height ceiling yields enough room for the fixed
-    // warning, decision keys, and one body row on short terminals.
-    let minimum = warning.len() + foot.len() + usize::from(!body.is_empty()) + 2;
-    let mut height = wanted
-        .min(usize::from(modal_max_height(area)).max(minimum))
-        .min(usize::from(area.height));
-    let mut room = height.saturating_sub(2 + warning.len() + foot.len());
+    let cancel = format!("{} ({})", dialog.cancel_label, dialog.cancel_key);
+    let controls = choice_rows(&[&dialog.accept_label, &cancel], dialog.choice, theme);
+    let mut foot = wrap_choices(&controls, area.width);
+    let height = usize::from(area.height);
+    let mut room = height.saturating_sub(1 + warning.len() + foot.len());
     // The separator belongs to the fixed footer, never the scrollable body.
-    // On short terminals it yields to the last visible body row.
+    // On short panes it yields to the last visible body row.
     let mut separator = usize::from(!body.is_empty() && room > 1);
     room = room.saturating_sub(separator);
     if body.len() > room {
-        height = height.max(minimum + 1).min(usize::from(area.height));
-        room = height.saturating_sub(3 + warning.len() + foot.len());
+        room = room.saturating_sub(1);
         separator = usize::from(!body.is_empty() && room > 1);
         room = room.saturating_sub(separator);
         let limit = body.len().saturating_sub(room);
         foot.push(Line::from(Span::styled(
-            format!("↑↓ review · {}/{}", dialog.scroll.min(limit) + 1, limit + 1),
+            format!(
+                "{INDENT}shift+↑↓ review · {}/{}",
+                dialog.scroll.min(limit) + 1,
+                limit + 1
+            ),
             theme.style(Tone::Dim),
         )));
     }
@@ -350,16 +346,10 @@ fn confirm_layout(area: Rect, dialog: &ConfirmDialog, theme: Theme) -> ConfirmLa
         foot.insert(0, Line::default());
     }
     let scroll_limit = body.len().saturating_sub(room);
-    let height = u16::try_from(height).unwrap_or(u16::MAX);
     ConfirmLayout {
-        area: Rect::new(
-            area.x + area.width.saturating_sub(width) / 2,
-            area.y + area.height.saturating_sub(height) / 2,
-            width,
-            height,
-        ),
-        warning,
-        body,
+        title,
+        warning: indented(warning),
+        body: indented(body),
         foot,
         body_height: u16::try_from(room).unwrap_or(u16::MAX),
         scroll_limit,
@@ -370,31 +360,32 @@ pub(super) fn confirm_scroll_limit(area: Rect, dialog: &ConfirmDialog, theme: Th
     confirm_layout(area, dialog, theme).scroll_limit
 }
 
+/// Draws a confirmation inline above the composer, like the questionnaire.
 pub(super) fn draw_confirm(
     frame: &mut Frame<'_>,
     area: Rect,
     dialog: &ConfirmDialog,
     theme: Theme,
 ) {
+    if area.is_empty() {
+        return;
+    }
     let ConfirmLayout {
-        area,
+        title,
         warning,
         body,
         foot,
         body_height,
         scroll_limit,
     } = confirm_layout(area, dialog, theme);
-    let block = WidgetBlock::default()
-        .borders(Borders::ALL)
-        .padding(Padding::horizontal(super::approval::HORIZONTAL_PADDING))
-        .border_style(theme.style(dialog.tone))
-        .title(Span::styled(
-            format!(" {} ", dialog.title),
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
-    let inner = block.inner(area);
     frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(title), Rect { height: 1, ..area });
+    let inner = Rect::new(
+        area.x,
+        area.y + 1,
+        area.width,
+        area.height.saturating_sub(1),
+    );
     let warning_height = u16::try_from(warning.len())
         .unwrap_or(u16::MAX)
         .min(inner.height);
@@ -403,6 +394,7 @@ pub(super) fn draw_confirm(
         Rect::new(inner.x, inner.y, inner.width, warning_height),
     );
     let body_y = inner.y + warning_height;
+    let body_height = body_height.min(inner.height.saturating_sub(warning_height));
     let visible = body
         .into_iter()
         .skip(dialog.scroll.min(scroll_limit))
@@ -421,18 +413,4 @@ pub(super) fn draw_confirm(
             inner.height.saturating_sub(warning_height + body_height),
         ),
     );
-}
-
-/// A modal's width: centered, at most 72 columns (`DESIGN.md` §2).
-pub(super) fn modal_width(area: Rect) -> u16 {
-    area.width
-        .saturating_sub(4)
-        .min(72)
-        .max(MIN_WIDTH.min(area.width))
-}
-
-/// The tallest a modal may be: 60% of the height (`DESIGN.md` §2), and never
-/// more than the viewport, so an overlay cannot spill off screen.
-pub(super) fn modal_max_height(area: Rect) -> u16 {
-    (area.height.saturating_mul(3) / 5).max(3).min(area.height)
 }

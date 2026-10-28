@@ -30,13 +30,14 @@ fn redo_confirmation_body_and_hint_offer_applying_the_redo() {
     assert!(screen.contains("complete"), "{screen}");
     assert!(screen.contains("forward"), "{screen}");
     assert!(screen.contains("patch."), "{screen}");
-    assert!(screen.contains("y apply redo"), "{screen}");
-    assert_eq!(screen.matches("y apply redo").count(), 2, "{screen}");
+    assert!(screen.contains("❯ 2. cancel (n/esc)"), "{screen}");
+    assert!(screen.contains("  1. apply redo"), "{screen}");
+    assert_eq!(screen.matches("apply redo").count(), 2, "{screen}");
     assert!(!screen.contains("apply undo"), "{screen}");
     assert!(!screen.contains("reverse patch"), "{screen}");
     assert_eq!(
         overlay_hint(&app).as_deref(),
-        Some("y apply redo · n/esc cancel")
+        Some("↑↓ or 1–2 choose · enter confirm · y apply redo · n/esc cancel")
     );
 }
 
@@ -50,14 +51,14 @@ fn mcp_trust_confirmation_names_the_server_and_the_authority_it_permits() {
     assert!(screen.contains("declared"), "{screen}");
     assert!(screen.contains("tools."), "{screen}");
     assert!(screen.contains("command: docs-server"), "{screen}");
-    assert!(screen.contains("y trust and connect"), "{screen}");
-    assert_eq!(screen.matches("y trust and connect").count(), 2, "{screen}");
+    assert!(screen.contains("  1. trust and connect"), "{screen}");
+    assert_eq!(screen.matches("trust and connect").count(), 2, "{screen}");
     for wrong_action in ["reverse patch", "undo", "revert"] {
         assert!(!screen.contains(wrong_action), "{screen}");
     }
     assert_eq!(
         overlay_hint(&app).as_deref(),
-        Some("y trust and connect · n/esc leave untrusted")
+        Some("↑↓ or 1–2 choose · enter confirm · y trust and connect · n/esc leave untrusted")
     );
 }
 
@@ -71,9 +72,9 @@ fn skill_trust_confirmation_names_the_skill_and_the_instructions_it_activates() 
     assert!(screen.contains("project"), "{screen}");
     assert!(screen.contains("instructions."), "{screen}");
     assert!(screen.contains("path: skills/deploy"), "{screen}");
-    assert!(screen.contains("y trust and activate"), "{screen}");
+    assert!(screen.contains("  1. trust and activate"), "{screen}");
     assert_eq!(
-        screen.matches("y trust and activate").count(),
+        screen.matches("trust and activate").count(),
         2,
         "{screen}"
     );
@@ -82,7 +83,7 @@ fn skill_trust_confirmation_names_the_skill_and_the_instructions_it_activates() 
     }
     assert_eq!(
         overlay_hint(&app).as_deref(),
-        Some("y trust and activate · n/esc leave withheld")
+        Some("↑↓ or 1–2 choose · enter confirm · y trust and activate · n/esc leave withheld")
     );
 }
 
