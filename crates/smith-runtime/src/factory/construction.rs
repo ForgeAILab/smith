@@ -193,6 +193,9 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     let mut harness_modules = resolved.modules;
     let mut harness_report = resolved.report;
     let mut request = resolved.request;
+    request
+        .persistence_redactor
+        .get_or_insert_with(DefaultRedactor::default);
     // Host policy first. It costs nothing to check and everything to get wrong,
     // and failing here means a misconfigured run never reaches a keychain.
     let authority = authority::prepare(&request)?;

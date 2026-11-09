@@ -59,6 +59,7 @@ pub mod session;
 pub(crate) mod session_history;
 pub mod skills;
 pub mod summary;
+pub mod tool_failures;
 pub mod tool_output;
 pub mod transport;
 mod vision;

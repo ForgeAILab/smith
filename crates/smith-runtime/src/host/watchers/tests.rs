@@ -176,6 +176,9 @@ async fn wasm_watcher_fixture_reaches_an_idle_session_through_the_inbox() {
     )
     .unwrap();
     let context = ModuleContext {
+        session_identity: Default::default(),
+        feedback_redactor: None,
+        recent_failures: None,
         is_child_session: false,
         settings: Default::default(),
         workspace_root: Some(root.path().to_owned()),

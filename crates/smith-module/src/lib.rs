@@ -106,6 +106,7 @@ pub struct ImageBinding {
 /// Session accounting for separately attributed vision provider work.
 pub trait VisionUsageRecorder: agent_runtime::harness::TurnCommitHook {
     /// Retains reported usage, including partial usage from interrupted calls.
+    /// Redact and bound a report while serializing duplicate checks and pruning.
     fn record(&self, session: &SessionId, record: agent_runtime_core::usage::UsageRecord);
 }
 
@@ -137,9 +138,55 @@ pub trait SessionHistory: Send + Sync + fmt::Debug {
     ) -> Result<(), RuntimeError>;
 }
 
+/// Host identity is kept separate from model-authored report text.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct SessionIdentity {
+    /// Smith release that supplied this evidence.
+    pub version: String,
+    /// Source revision of the Smith build.
+    pub commit: String,
+    /// Resolved session profile.
+    pub profile: String,
+    /// Resolved provider name or CLI adapter.
+    pub provider: String,
+    /// Resolved model name.
+    pub model: String,
+}
+
+/// Literal redaction shares the host's registered secret values.
+pub trait FeedbackRedactor: Send + Sync + fmt::Debug {
+    /// Replace registered secret literals in free text.
+    fn redact_text(&self, text: &str) -> String;
+}
+
+/// One failed invocation retained before turn commit.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolFailure {
+    /// Name of the failed tool.
+    pub name: String,
+    /// Host-assigned failed call id.
+    pub call_id: String,
+    /// Turn attribution when the executor supplied it.
+    pub turn_id: Option<String>,
+    /// Failure text, bounded to 500 characters by the host.
+    pub error: String,
+}
+
+/// Invocation failures are available before the current turn is committed.
+pub trait RecentFailures: Send + Sync + fmt::Debug {
+    /// Return the most recent failures for this invocation session.
+    fn recent(&self, session: &SessionId) -> Vec<ToolFailure>;
+}
+
 /// Named host facts and services needed to mount one module.
 #[derive(Clone)]
 pub struct ModuleContext {
+    /// Resolved host identity, separate from tool arguments.
+    pub session_identity: SessionIdentity,
+    /// Shared literal-secret policy for local reports.
+    pub feedback_redactor: Option<Arc<dyn FeedbackRedactor>>,
+    /// In-flight failures that canonical history may not hold yet.
+    pub recent_failures: Option<Arc<dyn RecentFailures>>,
     /// This module's own resolved plain settings.
     pub settings: ModuleSettings,
     /// Canonical workspace root for confined module file access.

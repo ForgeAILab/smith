@@ -26,7 +26,7 @@ pub(crate) fn pinned_core(abilities: &SealedAbilities) -> Vec<RegistryId> {
     let registered = abilities.names();
     CORE_TOOL_NAMES
         .into_iter()
-        .chain(["view_image"])
+        .chain(["view_image", "harness_feedback"])
         .filter(|name| registered.contains(name))
         .map(RegistryId::tool)
         .collect()

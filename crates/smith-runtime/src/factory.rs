@@ -438,6 +438,8 @@ pub struct RuntimeRequest {
     /// before construction so the credential resolved here can be registered
     /// without returning or retaining its raw value in host policy.
     pub persistence_redactor: Option<DefaultRedactor>,
+    /// Failed calls are shared with mounted modules before turn commit.
+    pub tool_failures: Arc<crate::tool_failures::FailureRecorder>,
     /// The clock, for deterministic tests.
     pub clock: Option<Arc<dyn Clock>>,
     /// How a configured credential reference becomes a secret.
@@ -512,6 +514,7 @@ impl RuntimeRequest {
             artifact_catalog: None,
             observers: Vec::new(),
             persistence_redactor: None,
+            tool_failures: Arc::new(crate::tool_failures::FailureRecorder::default()),
             clock: None,
             credentials: None,
             provider: None,

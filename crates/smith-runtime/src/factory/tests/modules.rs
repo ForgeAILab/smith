@@ -1349,3 +1349,147 @@ fn read_only_posture_keeps_hints_only_for_admitted_network_modules() {
     super::super::modules::enforce_posture(&mut strict, ModulePosture::ReadOnly, &[]);
     assert!(hinted(&strict).is_empty());
 }
+
+#[tokio::test]
+async fn harness_feedback_pinned_in_every_surface_and_absent_when_off() {
+    for (surface, read_only) in [
+        (HostSurface::Headless, false),
+        (HostSurface::Child, false),
+        (HostSurface::Child, true),
+        (HostSurface::Terminal, false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut req = request(
+            dir.path(),
+            vec![CompiledModule {
+                module: Arc::new(smith_module_harness_feedback::HarnessFeedbackModule),
+                origin: ModuleOrigin::FirstParty,
+            }],
+        );
+        req.surface = surface;
+        if read_only {
+            req.config.agent.profile.posture = sourced(smith_config::model::AgentPosture::Plan);
+        }
+        req.config.user_dir = dir.path().into();
+        let runtime =
+            build(crate::harness::resolve(crate::harness::HarnessSpec::trusted(req)).unwrap())
+                .await
+                .unwrap();
+        let pinned = crate::capability_limits::pinned_core(runtime.abilities());
+        assert!(pinned.contains(&agent_runtime::registry::RegistryId::tool(
+            "harness_feedback"
+        )));
+        let session = runtime
+            .runtime()
+            .start_session(StartSession::new())
+            .await
+            .unwrap();
+        assert!(
+            session
+                .capability_catalog()
+                .iter()
+                .any(|e| e.id.name == "harness_feedback"
+                    && e.state == agent_runtime::capability::CapabilityState::Active)
+        );
+        let tools: Vec<_> = runtime
+            .mounted_modules()
+            .iter()
+            .flat_map(|m| m.contributions.iter())
+            .filter_map(|c| {
+                if let ModuleContribution::Tool(t) = c {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let index = crate::capability_limits::activatable_tools(
+            &tools,
+            runtime.abilities(),
+            &Default::default(),
+        );
+        assert!(index.is_none());
+        let bridged =
+            crate::cli_bridge::BridgedSet::new(tools.iter().map(|t| t.spec()).collect(), false);
+        assert!(bridged.contains("harness_feedback"));
+        let mut req = request(
+            dir.path(),
+            vec![CompiledModule {
+                module: Arc::new(smith_module_harness_feedback::HarnessFeedbackModule),
+                origin: ModuleOrigin::FirstParty,
+            }],
+        );
+        req.config.user_dir = dir.path().into();
+        req.modules.enabled.clear();
+        let off =
+            build(crate::harness::resolve(crate::harness::HarnessSpec::trusted(req)).unwrap())
+                .await
+                .unwrap();
+        assert!(!off.policy().tools.iter().any(|n| n == "harness_feedback"));
+    }
+}
+
+#[tokio::test]
+async fn harness_feedback_records_failed_call_under_deny_without_activation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut req = request(
+        dir.path(),
+        vec![CompiledModule {
+            module: Arc::new(smith_module_harness_feedback::HarnessFeedbackModule),
+            origin: ModuleOrigin::FirstParty,
+        }],
+    );
+    req.built_in_tools = true;
+    req.config.user_dir = dir.path().into();
+    req.config.approval.mode = sourced(ApprovalMode::Deny);
+    let call = |id: &str, name: &str, args: &str| {
+        let mut events = agent_runtime::provider::fake::tool_call_fragments(0, id, name, args);
+        events.push(ProviderStreamEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
+        ScriptedStream::new(events)
+    };
+    req.provider = Some(Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            call("failed-read", "read", r#"{"path":"missing-file"}"#),
+            call(
+                "feedback",
+                "harness_feedback",
+                r#"{"kind":"bug","area":"tools","title":"Read failed","what_happened":"Read failed and was abandoned","session":"forged"}"#,
+            ),
+            ScriptedStream::new(vec![ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            }]),
+        ],
+    )));
+    let runtime =
+        build(crate::harness::resolve(crate::harness::HarnessSpec::trusted(req)).unwrap())
+            .await
+            .unwrap();
+    let session = runtime
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .unwrap();
+    session
+        .send(UserInput::text(
+            "Read the file and report the harness problem",
+        ))
+        .unwrap()
+        .completed()
+        .await;
+    let reports = smith_module_harness_feedback::FeedbackStore::open(dir.path())
+        .list()
+        .unwrap()
+        .reports;
+    assert_eq!(reports.len(), 1);
+    let e = &reports[0].evidence[0];
+    assert_ne!(e.session, "forged");
+    assert!(
+        e.failures
+            .iter()
+            .any(|f| f.name == "read" && f.call_id == "failed-read")
+    );
+}

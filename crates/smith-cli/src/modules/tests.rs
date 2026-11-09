@@ -12,8 +12,12 @@ fn catalog_contains_each_port_even_when_its_feature_is_omitted() {
         .map(CompiledModule::descriptor)
         .chain(composition.known.iter().cloned())
         .collect::<Vec<_>>();
-    assert_eq!(descriptors.len(), 4);
+    assert_eq!(descriptors.len(), 5);
     for (id, compiled_in) in [
+        (
+            "harness-feedback",
+            cfg!(feature = "module-harness-feedback"),
+        ),
         ("web", cfg!(feature = "module-web")),
         ("vision", cfg!(feature = "module-vision")),
         (
@@ -110,7 +114,13 @@ size = "1024x1024"
     let composition = composition_from_resolved_config(&resolution.config);
     assert_eq!(
         composition.enabled,
-        ["image-generation".into(), "vision".into(), "web".into()].into()
+        [
+            "harness-feedback".into(),
+            "image-generation".into(),
+            "vision".into(),
+            "web".into()
+        ]
+        .into()
     );
     assert_eq!(
         composition.settings["image-generation"]["model"],

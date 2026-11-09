@@ -124,6 +124,10 @@ pub(super) fn prepare(
         tools.push(tool);
         ability_sources.push(source);
     }
+    tools = tools
+        .into_iter()
+        .map(|inner| request.tool_failures.wrap(inner))
+        .collect();
     let abilities = seal_tool_abilities(tools.iter().cloned().zip(ability_sources))
         .map_err(FactoryError::AbilityRegistry)?;
 

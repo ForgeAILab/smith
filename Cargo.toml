@@ -12,6 +12,7 @@ members = [
     "crates/modules/image-generation",
     "crates/modules/vision",
     "crates/modules/web",
+    "crates/modules/harness-feedback",
     "crates/modules/budget-notice",
     "crates/smith-tools",
     "crates/smith-client",
@@ -42,6 +43,7 @@ smith-wasm-host = { path = "crates/smith-wasm-host", version = "0.8.1" }
 wasmtime = { version = "=36.0.19", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
 smith-plugin = { path = "crates/smith-plugin", version = "0.8.1" }
 smith-test-module = { path = "crates/test-support/module-fixture", version = "0.8.1" }
+smith-module-harness-feedback = { path = "crates/modules/harness-feedback", version = "0.8.1" }
 smith-module-web = { path = "crates/modules/web", version = "0.8.1" }
 smith-module-vision = { path = "crates/modules/vision", version = "0.8.1" }
 smith-module-image-generation = { path = "crates/modules/image-generation", version = "0.8.1" }

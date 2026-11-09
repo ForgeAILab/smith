@@ -207,6 +207,21 @@ pub(super) fn context(
         ReqwestTransport::new(request.transport.clone()).map_err(FactoryError::Transport)?,
     );
     Ok(ModuleContext {
+        session_identity: smith_module::SessionIdentity {
+            version: env!("CARGO_PKG_VERSION").into(),
+            commit: option_env!("GIT_COMMIT").unwrap_or("unknown").into(),
+            profile: request.config.agent.profile.name.clone(),
+            provider: if request.config.provider.kind.value.starts_with("cli/") {
+                request.config.provider.kind.value.clone()
+            } else {
+                request.config.provider.name.value.clone()
+            },
+            model: request.config.model.value.clone(),
+        },
+        feedback_redactor: Some(Arc::new(
+            request.persistence_redactor.clone().unwrap_or_default(),
+        )),
+        recent_failures: Some(request.tool_failures.clone()),
         settings: ModuleSettings::new(),
         is_child_session: matches!(request.surface, super::HostSurface::Child),
         workspace_root: request

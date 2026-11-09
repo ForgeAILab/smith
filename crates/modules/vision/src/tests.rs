@@ -118,6 +118,9 @@ impl SessionHistory for History {
 
 fn context() -> ModuleContext {
     ModuleContext {
+        session_identity: Default::default(),
+        feedback_redactor: None,
+        recent_failures: None,
         settings: Default::default(),
         workspace_root: None,
         user_dir: "user".into(),

@@ -26,6 +26,9 @@ impl SessionHistory for History {
 
 fn context() -> ModuleContext {
     ModuleContext {
+        session_identity: Default::default(),
+        feedback_redactor: None,
+        recent_failures: None,
         is_child_session: false,
         web: None,
         http: None,

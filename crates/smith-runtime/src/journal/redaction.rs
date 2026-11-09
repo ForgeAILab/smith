@@ -198,3 +198,14 @@ fn is_sensitive_key(key: &str) -> bool {
         .split(|character: char| !character.is_ascii_alphanumeric())
         .any(|word| SENSITIVE_KEY_WORDS.contains(&word))
 }
+
+impl smith_module::FeedbackRedactor for DefaultRedactor {
+    fn redact_text(&self, text: &str) -> String {
+        let mut value = Value::String(text.into());
+        self.scrub(&mut value);
+        value
+            .as_str()
+            .expect("literal redaction preserves strings")
+            .into()
+    }
+}

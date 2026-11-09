@@ -15,5 +15,7 @@ workspace = true
 agent-runtime = { workspace = true }
 agent-runtime-core = { workspace = true }
 
+serde = { workspace = true }
+
 [dev-dependencies]
 agent-runtime-testkit = { workspace = true }

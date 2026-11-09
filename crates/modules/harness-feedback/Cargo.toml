@@ -1,0 +1,27 @@
+[package]
+name = "smith-module-harness-feedback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+[lints]
+workspace = true
+[dependencies]
+agent-runtime = { workspace = true }
+agent-runtime-core = { workspace = true }
+smith-module = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+fs2 = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+[dev-dependencies]
+smith-host = { workspace = true }
+agent-runtime-testkit = { workspace = true }
+tokio = { workspace = true }

@@ -3852,6 +3852,7 @@ dependencies = [
  "smith-host",
  "smith-module",
  "smith-module-budget-notice",
+ "smith-module-harness-feedback",
  "smith-module-image-generation",
  "smith-module-vision",
  "smith-module-web",
@@ -3939,6 +3940,7 @@ dependencies = [
  "agent-runtime",
  "agent-runtime-core",
  "agent-runtime-testkit",
+ "serde",
 ]
 
 [[package]]
@@ -3953,6 +3955,27 @@ dependencies = [
  "serde_json",
  "smith-module",
  "tokio",
+]
+
+[[package]]
+name = "smith-module-harness-feedback"
+version = "0.8.1"
+dependencies = [
+ "agent-runtime",
+ "agent-runtime-core",
+ "agent-runtime-testkit",
+ "async-trait",
+ "chrono",
+ "fs2",
+ "serde",
+ "serde_json",
+ "sha2",
+ "smith-host",
+ "smith-module",
+ "tempfile",
+ "tokio",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4066,6 +4089,7 @@ dependencies = [
  "smith-host",
  "smith-module",
  "smith-module-budget-notice",
+ "smith-module-harness-feedback",
  "smith-module-image-generation",
  "smith-module-vision",
  "smith-module-web",

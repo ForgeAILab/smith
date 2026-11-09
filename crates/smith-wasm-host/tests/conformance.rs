@@ -55,6 +55,9 @@ fn config(root: &std::path::Path) -> WasmModuleConfig {
 }
 fn context(root: &std::path::Path, transport: Arc<ReplayTransport>) -> ModuleContext {
     ModuleContext {
+        session_identity: Default::default(),
+        feedback_redactor: None,
+        recent_failures: None,
         is_child_session: false,
         web: None,
         http: Some(Arc::new(ReplayHttp(transport.clone()))),
