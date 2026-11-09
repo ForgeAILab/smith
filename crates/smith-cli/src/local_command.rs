@@ -18,6 +18,7 @@ pub(super) mod compact;
 pub(super) mod context;
 pub(super) mod diagnostics;
 mod diff;
+pub(crate) mod feedback;
 pub(crate) mod file_commands;
 mod goal;
 pub(super) mod mcp;
@@ -49,6 +50,7 @@ pub(super) async fn handle_local_command(
     command: HostCommand,
 ) {
     let report = match command {
+        HostCommand::Feedback(action) => feedback::command(host, action),
         HostCommand::Skills(action) => {
             skills::command(skills, host.runtime().skill_index(), action)
         }
@@ -104,6 +106,16 @@ pub(super) async fn handle_local_command(
 /// Kept in the CLI because focus and confirmation belong to this surface.
 pub(super) enum CommandReport {
     Show(LocalResult),
+    FeedbackDetail {
+        id: String,
+        report: smith_client::feedback_report::FeedbackReport,
+    },
+    FeedbackPreview {
+        id: String,
+        url: String,
+        title: String,
+        body: String,
+    },
     Append(LocalResult),
     Inspect(Box<AgentSnapshot>),
     Parent,
@@ -137,6 +149,16 @@ pub(super) enum CommandReport {
 impl CommandReport {
     fn present(self, app: &mut App) {
         match self {
+            Self::FeedbackDetail { id, report } => {
+                app.show_local_report(LocalResult::Feedback(Box::new(report)));
+                app.confirm_feedback(id);
+            }
+            Self::FeedbackPreview {
+                id,
+                url,
+                title,
+                body,
+            } => app.confirm_feedback_filing(id, url, title, body),
             Self::Show(report) => app.show_local_report(report),
             Self::Append(report) => app.transcript.push_local(report),
             Self::Inspect(snapshot) => {

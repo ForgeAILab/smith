@@ -36,6 +36,7 @@ Primary
 /undo — Undo the last attributable turn
 /redo — Reapply the newest exact undone turn
 /revert [FILE] — Selectively revert a file or hunk
+/feedback [ID] — Review local harness feedback
 
 Advanced
 /diagnostics — Show detailed cache and recovery diagnostics

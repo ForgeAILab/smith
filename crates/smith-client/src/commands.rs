@@ -3,6 +3,24 @@
 //! Slash completion, `Ctrl+P`, `/help`, and parsing consume the same table.
 //! Each parsed value carries its entry and encodes the executor in its type.
 
+/// Feedback actions issued by local review controls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FeedbackAction {
+    /// List reports, or inspect one by id.
+    Show(Option<String>),
+    /// Build the public issue preview.
+    Preview(String),
+    /// Dismiss one report locally.
+    Dismiss(String),
+    /// Open the exact prefilled URL approved in the preview.
+    Open {
+        /// Report to mark filed after hand-off.
+        id: String,
+        /// URL carried from the reviewed preview.
+        url: String,
+    },
+}
+
 use crate::file_commands::{CatalogEntry, CommandCatalog};
 use crate::help_report::{HelpCommand, HelpKey, HelpReport};
 use crate::skill_commands::{SkillCommand, SkillInvocation};
@@ -717,6 +735,17 @@ command_registry! {
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Host(HostCommand::Revert(value)))),
         usage_example: "/revert tracked.txt",
         complete_without_value: false,
+    },
+    /// Review locally queued harness feedback.
+    Host Feedback(FeedbackAction) => CommandSpec {
+        name: "feedback",
+        argument_hint: "[ID]",
+        description: "Review local harness feedback",
+        requires_idle: false,
+        advanced: false,
+        grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Host(HostCommand::Feedback(FeedbackAction::Show(value))))),
+        usage_example: "/feedback",
+        complete_without_value: true,
     },
     /// Show detailed cache and recovery diagnostics.
     Host Diagnostics => CommandSpec {

@@ -320,7 +320,11 @@ fn confirm_layout(area: Rect, dialog: &ConfirmDialog, theme: Theme) -> ConfirmLa
         .collect::<Vec<_>>();
     let body = super::wrap::wrap_lines(&body, inner);
     let cancel = format!("{} ({})", dialog.cancel_label, dialog.cancel_key);
-    let controls = choice_rows(&[&dialog.accept_label, &cancel], dialog.choice, theme);
+    let mut labels = vec![dialog.accept_label.as_str(), cancel.as_str()];
+    if let Some((label, _)) = &dialog.extra {
+        labels.push(label);
+    }
+    let controls = choice_rows(&labels, dialog.choice, theme);
     let mut foot = wrap_choices(&controls, area.width);
     let height = usize::from(area.height);
     let mut room = height.saturating_sub(1 + warning.len() + foot.len());

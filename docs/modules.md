@@ -1,8 +1,8 @@
 # Compiled modules
 
 A module is native Rust compiled into Smith, selected by configuration, and
-mounted when the runtime is composed. Smith currently ships `image-generation`
-and `budget-notice`. Default builds include both; `cargo build -p smith-cli
+mounted when the runtime is composed. Default builds include `web`, `vision`,
+`image-generation`, `budget-notice`, and `harness-feedback`; `cargo build -p smith-cli
 --no-default-features` produces a working binary with the core tools and no
 optional modules.
 
@@ -34,6 +34,22 @@ exist, the edit keeps them aligned. Different values in the same layer are an
 error; across layers the ordinary precedence decides. Other image settings
 keep their existing keys. `budget-notice` defaults on and is inactive when
 semantic summaries are disabled or the input budget cannot fit its threshold.
+
+## Harness feedback
+
+`harness-feedback` gives the agent a pinned `harness_feedback` tool for local
+reports about Smith. It is enabled by default. To disable it:
+
+```toml
+[modules.harness-feedback]
+enabled = false
+```
+
+Disabling removes the tool, reporting guidance, and startup notice. Stored
+reports remain available through `/feedback` and `smith feedback`.
+The Cargo feature is `module-harness-feedback`.
+See [Harness feedback](harness-feedback.md) for evidence, limits, review,
+GitHub filing, and repair-agent access.
 
 ## Contract
 

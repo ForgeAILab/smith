@@ -648,6 +648,8 @@ gates and the exact Agent Runtime source they require.
 [`docs/configuration.md`](docs/configuration.md) is the typed configuration
 reference, and [`docs/security.md`](docs/security.md) records Smith's threat
 model and trust boundaries.
+[`docs/harness-feedback.md`](docs/harness-feedback.md) explains local agent
+reports, `/feedback` review, and `smith feedback` access for repair agents.
 
 ## Specification
 

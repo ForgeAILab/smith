@@ -16,8 +16,8 @@ use super::agents::render_agent_report;
 use super::changes::{render_diff_report, render_recovery_report, render_review_report};
 use super::integrations::{render_mcp_report, render_skills_report};
 use super::local_reports::{
-    render_diagnostics_report, render_goal_report, render_message_report, render_shell_report,
-    render_timeline_report,
+    render_diagnostics_report, render_feedback_report, render_goal_report, render_message_report,
+    render_shell_report, render_timeline_report,
 };
 use super::text::report_title;
 use super::{render_context_report, render_help_report, render_status_card, safe_tool_name};
@@ -273,6 +273,10 @@ pub(super) fn block_lines(
             Block::Local(LocalResult::Status(report)) => {
                 lines.push(report_title("/status", theme));
                 lines.extend(render_status_card(report, width, theme));
+            }
+            Block::Local(LocalResult::Feedback(report)) => {
+                lines.push(report_title("/feedback", theme));
+                lines.extend(render_feedback_report(report, width, theme));
             }
             Block::Local(LocalResult::Diagnostics(report)) => {
                 lines.push(report_title("/diagnostics", theme));

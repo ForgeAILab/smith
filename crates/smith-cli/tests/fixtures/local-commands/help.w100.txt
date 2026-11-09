@@ -56,6 +56,8 @@
   /redo          Reapply the newest exact undone turn
   /revert        Selectively revert a file or hunk
                  [FILE]
+  /feedback      Review local harness feedback
+                 [ID]
 
   Advanced
   /diagnostics   Show detailed cache and recovery diagnostics

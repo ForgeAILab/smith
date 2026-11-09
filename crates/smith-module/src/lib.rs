@@ -106,7 +106,6 @@ pub struct ImageBinding {
 /// Session accounting for separately attributed vision provider work.
 pub trait VisionUsageRecorder: agent_runtime::harness::TurnCommitHook {
     /// Retains reported usage, including partial usage from interrupted calls.
-    /// Redact and bound a report while serializing duplicate checks and pruning.
     fn record(&self, session: &SessionId, record: agent_runtime_core::usage::UsageRecord);
 }
 

@@ -11,7 +11,9 @@ fn git(args: &[&str]) -> Option<String> {
 fn main() {
     let commit = git(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
     println!("cargo:rustc-env=GIT_COMMIT={commit}");
-    println!("cargo:rerun-if-changed=../../.git");
+    if let Some(path) = git(&["rev-parse", "--git-path", "packed-refs"]) {
+        println!("cargo:rerun-if-changed={path}");
+    }
     if let Some(path) = git(&["rev-parse", "--git-path", "HEAD"]) {
         println!("cargo:rerun-if-changed={path}");
     }

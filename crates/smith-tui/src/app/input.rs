@@ -308,8 +308,20 @@ impl App {
             KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 dialog.scroll = dialog.scroll.saturating_add(1).min(dialog.scroll_limit);
             }
-            KeyCode::Up => dialog.choice = 0,
-            KeyCode::Down => dialog.choice = 1,
+            KeyCode::Up => {
+                dialog.choice = if dialog.extra.is_some() {
+                    dialog.choice.saturating_sub(1)
+                } else {
+                    0
+                }
+            }
+            KeyCode::Down => {
+                dialog.choice = if dialog.extra.is_some() {
+                    (dialog.choice + 1).min(2)
+                } else {
+                    1
+                }
+            }
             KeyCode::PageUp => dialog.scroll = dialog.scroll.saturating_sub(10),
             KeyCode::PageDown => {
                 dialog.scroll = dialog.scroll.saturating_add(10).min(dialog.scroll_limit)
@@ -317,6 +329,25 @@ impl App {
             _ => {
                 if ignore_key {
                     return None;
+                }
+                if dialog.extra.is_some()
+                    && let KeyCode::Char(digit @ '1'..='3') = key.code
+                {
+                    dialog.choice = digit.to_digit(10)? as usize - 1;
+                    return None;
+                }
+                if dialog.extra.is_some()
+                    && key.code == KeyCode::Enter
+                    && dialog.choice == 2
+                {
+                    let Some(Overlay::Confirm(mut dialog)) = self.overlay.take() else {
+                        return None;
+                    };
+                    let (_, outcome) = dialog.extra.take()?;
+                    return match *outcome {
+                        ConfirmOutcome::Action(action) => Some(action),
+                        _ => None,
+                    };
                 }
                 let (accept, offered) = match key.code {
                     KeyCode::Enter => (dialog.choice == 0, (dialog.choice == 0).then_some(0)),

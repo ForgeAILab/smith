@@ -642,3 +642,16 @@ pub(super) fn render_plugins_report(
         theme.style(Tone::Default),
     )
 }
+
+/// Feedback text stays literal, including quoted Markdown and public previews.
+pub(super) fn render_feedback_report(
+    report: &smith_client::feedback_report::FeedbackReport,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    reports::text(
+        &smith_client::feedback_report::render_plain(report),
+        width,
+        theme.style(Tone::Default),
+    )
+}

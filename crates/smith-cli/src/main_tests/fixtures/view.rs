@@ -50,6 +50,9 @@ pub(super) fn fixture_raw_and_view(
                     _ => format!("{:?}", result.state()),
                 };
                 let content = match result {
+                    LocalResult::Feedback(report) => {
+                        smith_client::feedback_report::render_plain(report)
+                    }
                     LocalResult::Status(report) => {
                         smith_client::status_report::render_plain(report)
                     }
@@ -95,6 +98,7 @@ pub(super) fn fixture_raw_and_view(
                 ));
                 // Draw a normalized typed report, never a prose round-trip.
                 let normalized = match result {
+                    LocalResult::Feedback(report) => LocalResult::Feedback(report.clone()),
                     LocalResult::Status(report) => {
                         LocalResult::Status(Box::new(fixture_status_view(report, normalizer)))
                     }
@@ -218,6 +222,8 @@ pub(super) fn fixture_raw_and_view(
                 .warning
                 .as_ref()
                 .map(|(line, tone)| (normalizer.normalize(line), *tone));
+            normalized.extra = dialog.extra.clone();
+            normalized.choice = dialog.choice;
             normalized.accept_tone = dialog.accept_tone;
             normalized.cancel_key = dialog.cancel_key;
             normalized.cancel_label = dialog.cancel_label.clone();

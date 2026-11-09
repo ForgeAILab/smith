@@ -51,22 +51,22 @@ completed_at:
 
 ## 4. Review surfaces
 
-- [ ] 4.1 `FeedbackReport` in `smith-client` (list, detail, empty, error
+- [x] 4.1 `FeedbackReport` in `smith-client` (list, detail, empty, error
   states) with `render_plain`, following the existing `*_report.rs` pattern.
-- [ ] 4.2 `/feedback` and `/feedback <id>` as inline local results that never
+- [x] 4.2 `/feedback` and `/feedback <id>` as inline local results that never
   become model context; listing marks the shown reports as viewed.
-- [ ] 4.3 One-line session-start notice when unviewed queued reports exist,
+- [x] 4.3 One-line session-start notice when unviewed queued reports exist,
   delivered through the transcript.
-- [ ] 4.4 `smith feedback list [--json]`, `show <id>`, `dismiss <id>`; JSON
+- [x] 4.4 `smith feedback list [--json]`, `show <id>`, `dismiss <id>`; JSON
   is bounded and labels report text as untrusted.
 
 ## 5. GitHub filing
 
-- [ ] 5.1 Inline select on `/feedback <id>`: file on GitHub, dismiss, keep.
-- [ ] 5.2 Build the public title and body (no workspace path or session ids),
+- [x] 5.1 Inline select on `/feedback <id>`: file on GitHub, dismiss, keep.
+- [x] 5.2 Build the public title and body (no workspace path or session ids),
   enforce the 8,000-byte URL bound with section-boundary truncation, and show
   the exact text before confirmation.
-- [ ] 5.3 Open the prefilled URL through `browser::open_browser`; show the URL
+- [x] 5.3 Open the prefilled URL through `browser::open_browser`; show the URL
   as copyable text if the hand-off fails; mark `filed` only after a
   successful hand-off.
 
@@ -84,8 +84,8 @@ completed_at:
 - [x] 6.4 Fake-provider end-to-end test (activate nothing; the tool is
   pinned): a scripted tool failure, then a `harness_feedback` call, produces a
   report with the failed call as evidence.
-- [ ] 6.5 TUI fixtures for `/feedback` list, detail, filing preview and
+- [x] 6.5 TUI fixtures for `/feedback` list, detail, filing preview and
   notice; URL-building and truncation tests.
-- [ ] 6.6 Document the tool, `/feedback`, `smith feedback`, the store and the
+- [x] 6.6 Document the tool, `/feedback`, `smith feedback`, the store and the
   module switch in `docs/`.
 - [ ] 6.7 Full gate (`--no-fail-fast`, clippy, `--no-default-features` steps).

@@ -32,6 +32,8 @@ pub enum LocalResultState {
 /// A host or client command's local output, excluded from model history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalResult {
+    /// Local harness feedback review.
+    Feedback(Box<crate::feedback_report::FeedbackReport>),
     /// The session's status snapshot.
     Status(Box<StatusReport>),
     /// The session's detailed cache, context, and recovery snapshot.
@@ -72,6 +74,7 @@ impl LocalResult {
     /// Command or result title, without inferring the report's type.
     pub fn title(&self) -> &str {
         match self {
+            Self::Feedback(_) => "feedback",
             Self::Status(_) => "status",
             Self::Diagnostics(_) => "diagnostics",
             Self::Context(_) => "context",
@@ -95,6 +98,11 @@ impl LocalResult {
     /// The result's semantic state.
     pub fn state(&self) -> LocalResultState {
         match self {
+            Self::Feedback(report) => match report.as_ref() {
+                crate::feedback_report::FeedbackReport::Empty => LocalResultState::Empty,
+                crate::feedback_report::FeedbackReport::Error(_) => LocalResultState::Error,
+                _ => LocalResultState::Info,
+            },
             Self::Status(_) | Self::Diagnostics(_) | Self::Context(_) | Self::Help(_) => {
                 LocalResultState::Info
             }

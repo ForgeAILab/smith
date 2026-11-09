@@ -505,3 +505,82 @@ fn a_blocked_transient_request_reports_feedback_and_keeps_the_prompt_queue() {
     assert!(app.feedback_notice().is_none());
     assert_eq!(app.queued_prompt_count(), 1);
 }
+
+#[test]
+fn feedback_inline_choices_keep_preview_and_dismiss() {
+    use smith_client::commands::{FeedbackAction, HostCommand};
+    let mut app = App::new("model", "project");
+    app.confirm_feedback("hf-1".into());
+    elapse_prompt_guard(&mut app);
+    assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+    assert!(app.overlay.is_none());
+    app.confirm_feedback("hf-1".into());
+    elapse_prompt_guard(&mut app);
+    app.on_key(key(KeyCode::Up));
+    assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.choice == 0));
+    assert_eq!(
+        app.on_key(key(KeyCode::Enter)),
+        Some(Action::Command(HostCommand::Feedback(
+            FeedbackAction::Preview("hf-1".into())
+        )))
+    );
+    assert!(app.overlay.is_none());
+    app.confirm_feedback("hf-1".into());
+    elapse_prompt_guard(&mut app);
+    app.on_key(key(KeyCode::Down));
+    assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.choice == 2));
+    assert_eq!(
+        app.on_key(key(KeyCode::Enter)),
+        Some(Action::Command(HostCommand::Feedback(
+            FeedbackAction::Dismiss("hf-1".into())
+        )))
+    );
+    assert!(app.overlay.is_none());
+    app.confirm_feedback_filing(
+        "hf-1".into(),
+        "https://example.test".into(),
+        "Title".into(),
+        "Exact body".into(),
+    );
+    elapse_prompt_guard(&mut app);
+    assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+    assert!(app.overlay.is_none());
+}
+
+#[test]
+fn feedback_confirmation_digits_select_and_enter_answers_each_choice() {
+    use smith_client::commands::{FeedbackAction, HostCommand};
+    for (digit, choice, expected) in [
+        ('1', 0, Some(FeedbackAction::Preview("hf-1".into()))),
+        ('2', 1, None),
+        ('3', 2, Some(FeedbackAction::Dismiss("hf-1".into()))),
+    ] {
+        let mut app = App::new("model", "project");
+        app.confirm_feedback("hf-1".into());
+        elapse_prompt_guard(&mut app);
+        app.on_key(key(if digit == '1' {
+            KeyCode::Down
+        } else {
+            KeyCode::Up
+        }));
+        assert_eq!(app.on_key(key(KeyCode::Char(digit))), None);
+        assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.choice == choice));
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            expected.map(|action| Action::Command(HostCommand::Feedback(action)))
+        );
+        assert!(app.overlay.is_none());
+        assert_eq!(app.queued_prompt_count(), 0);
+    }
+}
+
+#[test]
+fn two_choice_confirmation_digit_shortcuts_still_answer_immediately() {
+    for (digit, expected) in [('1', Action::ApplyUndo), ('2', Action::CancelUndo)] {
+        let mut app = app();
+        app.confirm_undo(recovery_preview("reverse patch"));
+        elapse_prompt_guard(&mut app);
+        assert_eq!(app.on_key(key(KeyCode::Char(digit))), Some(expected));
+        assert!(app.overlay.is_none());
+    }
+}

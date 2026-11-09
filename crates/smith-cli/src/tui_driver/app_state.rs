@@ -76,6 +76,9 @@ pub(super) async fn seed_app(
         super::restore_transcript_with_activity(host, &mut app, &snapshot.history, &hosted);
     }
     seed_host_state(host, &mut app, project, resources, presentation).await;
+    if let Some(notice) = crate::local_command::feedback::startup_notice(host) {
+        app.transcript.push_notice(NoticeKind::Local, notice);
+    }
     if policy.reasoning.has_override() {
         app.transcript.push_notice(
             NoticeKind::Reasoning,

@@ -14,6 +14,7 @@ mod config_command;
 mod connection;
 mod connection_review;
 mod exit_deadline;
+mod feedback_command;
 mod harness_supervise;
 mod headless;
 mod interaction;
@@ -124,6 +125,10 @@ async fn execute(command: Command) -> Result<u8> {
         }
         Command::SessionsList { selection } => {
             list_sessions(&selection).await?;
+            Ok(0)
+        }
+        Command::Feedback(action) => {
+            feedback_command::run(action)?;
             Ok(0)
         }
         Command::Setup(args) => {

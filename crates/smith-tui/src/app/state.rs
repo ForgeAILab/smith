@@ -474,6 +474,8 @@ pub struct ConfirmDialog {
     pub body: Vec<String>,
     /// Existing accept label.
     pub accept_label: String,
+    /// Optional third local review choice.
+    pub extra: Option<(String, Box<ConfirmOutcome>)>,
     /// Existing accept-key tone.
     pub accept_tone: Tone,
     /// Existing cancellation wording.
@@ -513,6 +515,7 @@ impl ConfirmDialog {
             warning: None,
             body,
             accept_label: accept_label.to_owned(),
+            extra: None,
             accept_tone: tone,
             cancel_label: "cancel".to_owned(),
             cancel_key: "n/esc",

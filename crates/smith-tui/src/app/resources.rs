@@ -1031,6 +1031,58 @@ impl App {
         }
     }
 
+    /// Offers three inline dispositions for a stored feedback report.
+    pub fn confirm_feedback(&mut self, id: String) {
+        use smith_client::commands::{FeedbackAction, HostCommand};
+        let mut dialog = ConfirmDialog::new(
+            "review harness feedback",
+            Tone::Warning,
+            vec![format!("Report {id}")],
+            "file on GitHub",
+            ConfirmOutcome::Action(Action::Command(HostCommand::Feedback(
+                FeedbackAction::Preview(id.clone()),
+            ))),
+            ConfirmOutcome::Dismiss,
+        );
+        dialog.cancel_label = "keep".into();
+        dialog.extra = Some((
+            "dismiss report".into(),
+            Box::new(ConfirmOutcome::Action(Action::Command(
+                HostCommand::Feedback(FeedbackAction::Dismiss(id)),
+            ))),
+        ));
+        dialog.hint = "1 file on GitHub · 2 keep · 3 dismiss · enter select".into();
+        self.open_overlay(Overlay::Confirm(dialog));
+    }
+
+    /// Reviews the exact public text before opening its prefilled URL.
+    pub fn confirm_feedback_filing(
+        &mut self,
+        id: String,
+        url: String,
+        title: String,
+        body: String,
+    ) {
+        use smith_client::commands::{FeedbackAction, HostCommand};
+        let report = smith_client::feedback_report::FeedbackReport::Preview { title, body };
+        self.show_local_report(LocalResult::Feedback(Box::new(report.clone())));
+        let mut dialog = ConfirmDialog::new(
+            "open GitHub issue preview",
+            Tone::Warning,
+            smith_client::feedback_report::render_plain(&report)
+                .split('\n')
+                .map(str::to_owned)
+                .collect(),
+            "open prefilled GitHub issue",
+            ConfirmOutcome::Action(Action::Command(HostCommand::Feedback(
+                FeedbackAction::Open { id, url },
+            ))),
+            ConfirmOutcome::Dismiss,
+        );
+        dialog.cancel_label = "keep queued".into();
+        self.open_overlay(Overlay::Confirm(dialog));
+    }
+
     /// Shows an exact undo preview with no default action.
     pub fn confirm_undo(&mut self, report: RecoveryPreview) {
         let mut dialog = ConfirmDialog::new(

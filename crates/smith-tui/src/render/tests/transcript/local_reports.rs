@@ -729,3 +729,58 @@ async fn malformed_edit_arguments_fall_back_rather_than_show_an_empty_diff() {
         "an unreviewable edit must not claim a diff:\n{screen}"
     );
 }
+
+#[test]
+fn feedback_fixtures_list_detail_preview_and_notice() {
+    use smith_client::feedback_report::{FeedbackReport, FeedbackRow};
+    let cases = [
+        (
+            FeedbackReport::List {
+                rows: vec![FeedbackRow {
+                    id: "hf-20261109-ABCDEF".into(),
+                    age: "2m ago".into(),
+                    status: "queued".into(),
+                    kind: "bug".into(),
+                    area: "tools".into(),
+                    title: "Edit failed".into(),
+                    count: 2,
+                }],
+                malformed: vec!["broken.md".into()],
+            },
+            "Malformed report: broken.md",
+        ),
+        (
+            FeedbackReport::Detail {
+                id: "hf-20261109-ABCDEF".into(),
+                content: "What happened\nEdit failed\nEvidence\nSmith".into(),
+            },
+            "Edit failed",
+        ),
+        (
+            FeedbackReport::Preview {
+                title: "Edit failed".into(),
+                body: "## What happened\nEdit failed".into(),
+            },
+            "## What happened",
+        ),
+    ];
+    for (report, expected) in cases {
+        let mut app = App::new("model", "project");
+        app.show_local_report(LocalResult::Feedback(Box::new(report)));
+        for width in [44, 100] {
+            let screen = render(&app, width, 35, Theme::new().without_color());
+            assert!(screen.contains("/feedback"), "{screen}");
+            assert!(screen.contains(expected), "{screen}");
+        }
+    }
+    let mut app = App::new("model", "project");
+    app.transcript.push_notice(
+        smith_client::NoticeKind::Local,
+        "2 harness feedback reports queued — /feedback",
+    );
+    let screen = render(&app, 100, 20, Theme::new().without_color());
+    assert!(
+        screen.contains("2 harness feedback reports queued — /feedback"),
+        "{screen}"
+    );
+}

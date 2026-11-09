@@ -38,6 +38,8 @@ pub(crate) enum Command {
         provider: Option<String>,
         force: bool,
     },
+    /// Review local harness reports without starting a session.
+    Feedback(FeedbackAction),
     /// Manage user-owned plugin bundles without starting a session.
     Plugin(PluginAction),
     /// Enter guided user-scoped provider/model setup.
@@ -64,6 +66,14 @@ pub(crate) enum Command {
         program: OsString,
         args: Vec<OsString>,
     },
+}
+
+/// Local feedback queue operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FeedbackAction {
+    List { json: bool },
+    Show { id: String },
+    Dismiss { id: String },
 }
 
 /// Which guided setup path was requested.
@@ -272,6 +282,7 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command,
         Some("plugin") => plugin::parse(args),
         Some("config") => parse_config(args),
         Some("sessions") => parse_sessions(args),
+        Some("feedback") => parse_feedback(args),
         Some("setup") => parse_setup(args),
         Some("models") => parse_models(args),
         _ => parse_run(args),
@@ -482,6 +493,46 @@ fn parse_config(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
         Some(selection) => Ok(Command::ConfigExplain { key, selection }),
         None => Ok(Command::Help),
     }
+}
+
+fn parse_feedback(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
+    args.pop_front();
+    if args.front().is_some_and(|arg| is_help(arg.to_str())) {
+        return Ok(Command::Help);
+    }
+    let action = required_text(args.pop_front(), "an action after `feedback`")?;
+    if args.front().is_some_and(|arg| is_help(arg.to_str())) {
+        return Ok(Command::Help);
+    }
+    let action = match action.as_str() {
+        "list" => {
+            let json = args.front().is_some_and(|arg| arg == "--json");
+            if json {
+                args.pop_front();
+            }
+            FeedbackAction::List { json }
+        }
+        "show" | "dismiss" => {
+            let id = required_text(args.pop_front(), "a feedback report id")?;
+            if id.starts_with('-') {
+                return Err(ParseError::new("expected a feedback report id"));
+            }
+            if action == "show" {
+                FeedbackAction::Show { id }
+            } else {
+                FeedbackAction::Dismiss { id }
+            }
+        }
+        _ => {
+            return Err(ParseError::new(
+                "expected `smith feedback list [--json]`, `smith feedback show <id>` or `smith feedback dismiss <id>`",
+            ));
+        }
+    };
+    if !args.is_empty() {
+        return Err(ParseError::new("unexpected argument after feedback action"));
+    }
+    Ok(Command::Feedback(action))
 }
 
 fn parse_sessions(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
@@ -776,6 +827,9 @@ USAGE:
   smith help
   smith config explain <KEY> [SELECTION OPTIONS]
   smith config modules [SELECTION OPTIONS]
+  smith feedback list [--json]
+  smith feedback show <id>
+  smith feedback dismiss <id>
   smith sessions list [SELECTION OPTIONS]
   smith models sync [--provider <NAME>] [--force]
   smith plugin add <SOURCE> [--yes]
