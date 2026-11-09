@@ -248,13 +248,13 @@ async fn headless_listing_matches_runtime_module_outcomes_without_a_session() {
     let report = crate::config_command::modules_report(&prepared)
         .await
         .unwrap();
-    assert_eq!(report.rows.len(), 4);
+    assert_eq!(report.rows.len(), 5);
     for row in &report.rows {
         let state = if !prepared.resolution.config.modules[&row.id].compiled_in {
             smith_module::ModuleState::NotBuilt
         } else if !prepared.resolution.config.modules[&row.id].enabled.value {
             smith_module::ModuleState::Off
-        } else if row.id == "web" {
+        } else if matches!(row.id.as_str(), "web" | "harness-feedback") {
             smith_module::ModuleState::Mounted
         } else {
             smith_module::ModuleState::Inactive {
@@ -505,6 +505,8 @@ fn higher_layers_are_named_without_claiming_the_user_switch_took_effect() {
 }
 
 #[cfg(not(any(
+    feature = "module-harness-feedback",
+    feature = "module-web",
     feature = "module-image-generation",
     feature = "module-budget-notice",
     feature = "module-vision"

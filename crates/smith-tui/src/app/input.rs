@@ -336,10 +336,7 @@ impl App {
                     dialog.choice = digit.to_digit(10)? as usize - 1;
                     return None;
                 }
-                if dialog.extra.is_some()
-                    && key.code == KeyCode::Enter
-                    && dialog.choice == 2
-                {
+                if dialog.extra.is_some() && key.code == KeyCode::Enter && dialog.choice == 2 {
                     let Some(Overlay::Confirm(mut dialog)) = self.overlay.take() else {
                         return None;
                     };

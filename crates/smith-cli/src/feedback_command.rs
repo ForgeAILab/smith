@@ -31,7 +31,7 @@ fn run_with(
 
 #[cfg(feature = "module-harness-feedback")]
 mod enabled {
-    use super::*;
+    use super::{FeedbackAction, Result};
     use anyhow::Context;
     use smith_module_harness_feedback::{FeedbackStore, Status};
     use std::io::Read;

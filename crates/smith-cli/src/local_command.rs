@@ -106,10 +106,12 @@ pub(super) async fn handle_local_command(
 /// Kept in the CLI because focus and confirmation belong to this surface.
 pub(super) enum CommandReport {
     Show(LocalResult),
+    #[cfg(feature = "module-harness-feedback")]
     FeedbackDetail {
         id: String,
         report: smith_client::feedback_report::FeedbackReport,
     },
+    #[cfg(feature = "module-harness-feedback")]
     FeedbackPreview {
         id: String,
         url: String,
@@ -149,10 +151,12 @@ pub(super) enum CommandReport {
 impl CommandReport {
     fn present(self, app: &mut App) {
         match self {
+            #[cfg(feature = "module-harness-feedback")]
             Self::FeedbackDetail { id, report } => {
                 app.show_local_report(LocalResult::Feedback(Box::new(report)));
                 app.confirm_feedback(id);
             }
+            #[cfg(feature = "module-harness-feedback")]
             Self::FeedbackPreview {
                 id,
                 url,
