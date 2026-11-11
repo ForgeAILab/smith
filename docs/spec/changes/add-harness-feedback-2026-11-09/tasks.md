@@ -88,4 +88,4 @@ completed_at:
   notice; URL-building and truncation tests.
 - [x] 6.6 Document the tool, `/feedback`, `smith feedback`, the store and the
   module switch in `docs/`.
-- [ ] 6.7 Full gate (`--no-fail-fast`, clippy, `--no-default-features` steps).
+- [x] 6.7 Full gate (`--no-fail-fast`, clippy, `--no-default-features` steps).

@@ -47,7 +47,8 @@ fn the_full_runtime_facade_is_used_only_by_composition_and_module_contracts() {
             "crates/smith-wasm-host".to_owned(),
             "crates/modules/image-generation".to_owned(),
             "crates/modules/vision".to_owned(),
-            "crates/modules/budget-notice".to_owned()
+            "crates/modules/budget-notice".to_owned(),
+            "crates/modules/harness-feedback".to_owned()
         ]),
         "the facade is limited to runtime composition, the contract, and the ported modules"
     );
@@ -237,6 +238,7 @@ const PUBLIC_RUNTIME_MODULES: &[&str] = &[
     "session",
     "skills",
     "summary",
+    "tool_failures",
     "tool_output",
     "transport",
     "xai",

@@ -1,4 +1,4 @@
-use super::*;
+use super::FeedbackAction;
 
 fn command(args: &[&str]) -> crate::cli::Command {
     crate::cli::parse(args.iter().map(std::ffi::OsString::from)).unwrap()
@@ -67,7 +67,9 @@ fn feedback_help_is_available() {
 
 #[cfg(feature = "module-harness-feedback")]
 mod enabled {
-    use super::*;
+    use super::super::run_with;
+    use super::FeedbackAction;
+    use smith_config::resolve::ResolveRequest;
     use smith_module_harness_feedback::{Evidence, FeedbackStore, Kind, ReportInput, Status};
 
     fn fixture() -> (tempfile::TempDir, ResolveRequest, FeedbackStore, String) {
@@ -283,6 +285,9 @@ mod enabled {
 #[cfg(not(feature = "module-harness-feedback"))]
 #[test]
 fn feedback_without_feature_reports_unavailable() {
+    use super::run_with;
+    use smith_config::resolve::ResolveRequest;
+
     let home = tempfile::tempdir().unwrap();
     let request = ResolveRequest::new(home.path()).with_home_dir(home.path());
     for action in [
