@@ -50,12 +50,13 @@ jobs:
         include:
           # macos-13 was retired in December 2025; macos-15-intel is the
           # remaining x86_64 macOS image. GitHub drops Intel macOS entirely
-          # when macOS 15 retires in autumn 2027.
+          # when macOS 15 retires in autumn 2027. macos-14 was retired in
+          # November 2026, so arm64 builds on macos-15 as well.
           - target: x86_64-apple-darwin
             os: macos-15-intel
             artifact: smith-x86_64-macos
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
             artifact: smith-aarch64-macos
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
