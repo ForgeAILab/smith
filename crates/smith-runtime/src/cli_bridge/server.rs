@@ -13,7 +13,7 @@ use agent_runtime_core::{
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, DiscoverRequestMethod,
     DiscoverResult, ErrorData, Implementation, InitializeRequestParams, InitializeResult,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
@@ -80,7 +80,7 @@ impl Drop for QueuePermit {
 pub(super) struct BridgeServer {
     tools: Arc<Vec<Tool>>,
     dispatch: Arc<dyn BridgeDispatch>,
-    info: ServerInfo,
+    info: ServerConfig,
     connected: Arc<AtomicBool>,
     stop: Stop,
     queue: Arc<SerialQueue>,
@@ -114,10 +114,11 @@ impl BridgeServer {
         connected: Arc<AtomicBool>,
         stop: Stop,
     ) -> Self {
-        let mut info =
-            ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
-                Implementation::new(BRIDGE_SERVER_NAME, env!("CARGO_PKG_VERSION")),
-            );
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new(
+                BRIDGE_SERVER_NAME,
+                env!("CARGO_PKG_VERSION"),
+            ));
         if !guidance.is_empty() {
             info.instructions = Some(guidance);
         }
@@ -145,7 +146,7 @@ impl BridgeServer {
 }
 
 impl ServerHandler for BridgeServer {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         self.info.clone()
     }
 

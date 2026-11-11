@@ -40,7 +40,7 @@ jsonschema = { version = "=0.28.3", default-features = false }
 wit-bindgen = { version = "=0.46.0", default-features = false, features = ["macros", "realloc", "std"] }
 smith-wasm-host = { path = "crates/smith-wasm-host", version = "0.8.1" }
 # Patched LTS compatible with Rust 1.88; measured features only (see WASM design gate).
-wasmtime = { version = "=36.0.19", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
+wasmtime = { version = "=36.0.20", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
 smith-plugin = { path = "crates/smith-plugin", version = "0.8.1" }
 smith-test-module = { path = "crates/test-support/module-fixture", version = "0.8.1" }
 smith-module-harness-feedback = { path = "crates/modules/harness-feedback", version = "0.8.1" }
@@ -110,7 +110,7 @@ ratatui = { version = "0.30.2", default-features = false, features = ["crossterm
 # independent HTTP stacks into every binary; if `rmcp` moves, move with it.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "http2", "charset", "form"] }
 # Keep this version aligned with agent-runtime-mcp so the binary has one MCP implementation.
-rmcp = { version = "3.1", default-features = false, features = ["server"] }
+rmcp = { version = "3.9", default-features = false, features = ["server"] }
 rustix = { version = "1.1", features = ["fs", "process"] }
 fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }
