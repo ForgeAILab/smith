@@ -161,16 +161,27 @@ impl SessionTaskState {
 }
 
 /// One host-owned registry managing background shell tasks.
-#[derive(Default)]
 pub struct BackgroundTaskRegistry {
     sessions: RwLock<HashMap<SessionId, Arc<Mutex<SessionTaskState>>>>,
+    scrubbed_env_vars: RwLock<Arc<[String]>>,
+}
+
+impl Default for BackgroundTaskRegistry {
+    fn default() -> Self {
+        Self {
+            sessions: RwLock::new(HashMap::new()),
+            scrubbed_env_vars: RwLock::new(Arc::from([])),
+        }
+    }
 }
 
 impl fmt::Debug for BackgroundTaskRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let sessions = self.sessions.read().map(|sessions| sessions.len()).ok();
+        let scrubbed_env_vars = self.scrubbed_env_vars.read().map(|vars| vars.len()).ok();
         f.debug_struct("BackgroundTaskRegistry")
             .field("session_count", &sessions)
+            .field("scrubbed_env_var_count", &scrubbed_env_vars)
             .finish()
     }
 }
@@ -179,6 +190,32 @@ impl BackgroundTaskRegistry {
     /// Creates an isolated registry for one composed Smith host.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Removes these inherited environment variable names from spawned
+    /// background shell commands.
+    #[must_use]
+    pub fn with_scrubbed_env_vars(self, vars: Arc<[String]>) -> Self {
+        self.set_scrubbed_env_vars(vars);
+        self
+    }
+
+    /// Updates the set of inherited credential environment variable names
+    /// removed from spawned background shell commands.
+    pub fn set_scrubbed_env_vars(&self, vars: Arc<[String]>) {
+        *self
+            .scrubbed_env_vars
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = vars;
+    }
+
+    fn scrubbed_env_vars(&self) -> Arc<[String]> {
+        Arc::clone(
+            &self
+                .scrubbed_env_vars
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     fn get_or_create_session(&self, session_id: &SessionId) -> Arc<Mutex<SessionTaskState>> {
@@ -236,7 +273,8 @@ impl BackgroundTaskRegistry {
         let sanitized_id = task_id.replace(':', "_");
         let spool_path = spool_dir.join(format!("{sanitized_id}.log"));
 
-        let mut child = spawn_shell_cmd(&command, &cwd)?;
+        let scrubbed_env_vars = self.scrubbed_env_vars();
+        let mut child = spawn_shell_cmd(&command, &cwd, &scrubbed_env_vars)?;
         let group_pid = child.id();
 
         let stdout = child.stdout.take();
@@ -627,6 +665,14 @@ impl BackgroundServices {
         Self { registry, host }
     }
 
+    /// Removes these inherited environment variable names from spawned
+    /// background shell commands.
+    #[must_use]
+    pub fn with_scrubbed_env_vars(self, vars: Arc<[String]>) -> Self {
+        self.registry.set_scrubbed_env_vars(vars);
+        self
+    }
+
     /// Concrete lifecycle service used for registration, exit policy, and
     /// shutdown.
     pub fn registry(&self) -> &Arc<BackgroundTaskRegistry> {
@@ -738,8 +784,15 @@ impl smith_tools::background::BackgroundTaskHost for RegistryBackgroundTaskHost 
     }
 }
 
-fn spawn_shell_cmd(command: &str, cwd: &Path) -> Result<Child, RuntimeError> {
+fn spawn_shell_cmd(
+    command: &str,
+    cwd: &Path,
+    scrubbed_env_vars: &[String],
+) -> Result<Child, RuntimeError> {
     let mut builder = Command::new("sh");
+    for var in scrubbed_env_vars {
+        builder.env_remove(var);
+    }
     builder
         .arg("-c")
         .arg(command)

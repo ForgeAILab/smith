@@ -82,6 +82,7 @@ impl McpContext {
             .with_smith_executable(smith_executable)
             .with_plugin_servers(plugin_servers.clone())
             .with_credentials(credentials)
+            .with_scrubbed_env_vars(smith_runtime::factory::resolved_credential_env_vars(config))
             .with_max_output_bytes(
                 usize::try_from(config.limits.tool_output_limit_bytes.value).unwrap_or(usize::MAX),
             );

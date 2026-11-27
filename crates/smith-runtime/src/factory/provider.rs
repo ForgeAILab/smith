@@ -15,6 +15,7 @@ pub(super) use children::{
 pub(super) use credentials::{
     active_credential_reference, credential_pool_for, validate_pool_references,
 };
+pub use credentials::{request_credential_env_vars, resolved_credential_env_vars};
 pub(super) use resolution::prepare;
 pub(super) use resolution::prepare_metadata;
 

@@ -1,6 +1,102 @@
 //! Credential parsing, resolution, pooling, and renewal.
 
 use super::*;
+use smith_config::resolve::ResolvedMcpTransport;
+
+/// Collects every deduplicated environment variable name referenced via
+/// `CredentialRef::Env` across a resolved configuration (primary provider and
+/// pool, command-provider env, fallback routes, web-search credentials,
+/// checkpoint key credential, and MCP server credentials).
+pub fn resolved_credential_env_vars(config: &ResolvedConfig) -> Arc<[String]> {
+    let mut vars = BTreeSet::new();
+    collect_config_credential_env_vars(config, &mut vars);
+    Arc::from(vars.into_iter().collect::<Vec<_>>())
+}
+
+/// Collects every deduplicated environment variable name referenced via
+/// `CredentialRef::Env` across a runtime request, including its primary config
+/// and any pre-resolved vision, advisor, compaction, and child profile configs.
+pub fn request_credential_env_vars(request: &RuntimeRequest) -> Arc<[String]> {
+    let mut vars = BTreeSet::new();
+    collect_config_credential_env_vars(&request.config, &mut vars);
+    if let Some(vision) = &request.vision_profile {
+        collect_config_credential_env_vars(&vision.config, &mut vars);
+    }
+    if let Some(advisor) = &request.advisor_profile {
+        collect_config_credential_env_vars(&advisor.config, &mut vars);
+    }
+    if let Some(compaction) = &request.compaction_profile {
+        collect_config_credential_env_vars(&compaction.config, &mut vars);
+    }
+    for child in &request.child_profiles {
+        collect_config_credential_env_vars(&child.config, &mut vars);
+        if let Some(vision) = &child.vision_profile {
+            collect_config_credential_env_vars(&vision.config, &mut vars);
+        }
+    }
+    Arc::from(vars.into_iter().collect::<Vec<_>>())
+}
+
+fn collect_config_credential_env_vars(config: &ResolvedConfig, vars: &mut BTreeSet<String>) {
+    for reference in &config.provider.credentials {
+        collect_parsed_credential_ref(&reference.value, vars);
+    }
+    if let Some(command) = &config.provider.command {
+        collect_mcp_values(&command.env, vars);
+    }
+    for fallback in &config.fallback.models {
+        collect_config_credential_env_vars(&fallback.config, vars);
+    }
+    if let Some(api_key) = &config.web.search.api_key {
+        collect_credential_ref(&api_key.value, vars);
+    }
+    if let Some(checkpoint_key) = &config.persistence.checkpoint_key_credential {
+        collect_parsed_credential_ref(&checkpoint_key.value, vars);
+    }
+    for server in config.mcp.servers.values() {
+        collect_mcp_values(&server.env, vars);
+        match &server.transport {
+            ResolvedMcpTransport::Stdio { .. } => {}
+            ResolvedMcpTransport::StreamableHttp {
+                credential,
+                headers,
+                ..
+            } => {
+                if let Some(credential) = credential {
+                    collect_parsed_credential_ref(&credential.value, vars);
+                }
+                collect_mcp_values(headers, vars);
+            }
+        }
+    }
+}
+
+fn collect_mcp_values(values: &BTreeMap<String, Sourced<McpValue>>, vars: &mut BTreeSet<String>) {
+    for value in values.values() {
+        match &value.value {
+            McpValue::Credential(reference) => collect_parsed_credential_ref(reference, vars),
+            McpValue::Literal(_) => {}
+        }
+    }
+}
+
+fn collect_parsed_credential_ref(reference: &str, vars: &mut BTreeSet<String>) {
+    if let Ok(parsed) = CredentialRef::parse(reference) {
+        collect_credential_ref(&parsed, vars);
+    }
+}
+
+fn collect_credential_ref(reference: &CredentialRef, vars: &mut BTreeSet<String>) {
+    match reference {
+        CredentialRef::Env { variable } => {
+            vars.insert(variable.clone());
+        }
+        CredentialRef::Keychain { .. }
+        | CredentialRef::AuthFile { .. }
+        | CredentialRef::SessionJson { .. }
+        | CredentialRef::File { .. } => {}
+    }
+}
 
 /// The credential source an adapter leases from.
 ///

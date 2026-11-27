@@ -160,22 +160,16 @@ fn tools_with_children(
         .map(BackgroundServices::host)
         .unwrap_or_else(smith_tools::background::unavailable);
     let image_limits = super::image_limits_for_provider_kind(&request.config.provider.kind.value);
+    let scrubbed_env_vars = super::provider::request_credential_env_vars(request);
+    let tool_options = smith_tools::BuiltInToolOptions::new(background, image_limits)
+        .with_scrubbed_env_vars(scrubbed_env_vars);
     let mut tools = if request.built_in_tools {
-        request.change_recorder.as_ref().map_or_else(
-            || {
-                smith_tools::all_with_background_and_image_limits(
-                    background.clone(),
-                    image_limits.clone(),
-                )
-            },
-            |recorder| {
-                smith_tools::observed_tools_with_background_and_image_limits(
-                    recorder.clone(),
-                    background.clone(),
-                    image_limits.clone(),
-                )
-            },
-        )
+        match request.change_recorder.as_ref() {
+            Some(recorder) => {
+                smith_tools::observed_tools_with_options(recorder.clone(), tool_options)
+            }
+            None => smith_tools::all_with_options(tool_options),
+        }
     } else {
         Vec::new()
     };

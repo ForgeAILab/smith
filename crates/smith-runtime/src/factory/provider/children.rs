@@ -349,6 +349,8 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
             &route_request.config,
             route_request.smith_executable.as_deref(),
         );
+        let input_budget =
+            ContextBudget::from_limits(&profile.profile.limits, &context_policy).input_budget;
         let route_key =
             crate::delegation::profile_route_key(&agent_profile.name, &agent_profile.revision);
         let replaced = routes.insert(
@@ -391,7 +393,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
                         chatgpt: binding.chatgpt,
                     }),
                     vision.map(|vision| vision.binding),
-                    profile.profile.limits.max_input_tokens,
+                    input_budget,
                     request.semantic_summary.is_some() && request.artifact_store.is_some(),
                     session_history.clone(),
                 )?,

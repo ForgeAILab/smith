@@ -1055,6 +1055,7 @@ fn assemble_policy(policy: RuntimePolicy) -> PolicyStage {
 pub use construction::{build, preflight};
 pub use errors::FactoryError;
 pub use modules::module_report;
+pub use provider::{request_credential_env_vars, resolved_credential_env_vars};
 
 /// Protocol-v1 migration adapter for trusted embedders that still construct a
 /// [`RuntimeRequest`] directly.

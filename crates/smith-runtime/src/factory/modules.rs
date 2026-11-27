@@ -42,6 +42,11 @@ pub async fn module_report(
             .unwrap_or(false),
     )
     .await;
+    let input_budget = agent_runtime::context::ContextBudget::from_limits(
+        &prepared.profile.profile.limits,
+        &prepared.context_policy,
+    )
+    .input_budget;
     Ok(prepare(
         request,
         &web,
@@ -52,7 +57,7 @@ pub async fn module_report(
         ))
         .await?
         .map(|vision| vision.binding),
-        prepared.profile.profile.limits.max_input_tokens,
+        input_budget,
         request.semantic_summary.is_some(),
         Arc::new(crate::session_history::LiveSessionHistory::default()),
         None,

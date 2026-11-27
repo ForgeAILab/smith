@@ -125,6 +125,7 @@ pub(super) struct StdioTransport {
 pub(super) fn spawn(
     config: &McpServerConfig,
     smith_executable: Option<&Path>,
+    scrubbed_env_vars: &[String],
 ) -> io::Result<StdioTransport> {
     let McpTransport::Stdio {
         command,
@@ -148,6 +149,9 @@ pub(super) fn spawn(
         } else {
             Command::new(command)
         };
+        for var in scrubbed_env_vars {
+            invocation.env_remove(var);
+        }
         invocation
             .args(args)
             .envs(env)
@@ -350,6 +354,7 @@ mod tests {
                 },
             ),
             None,
+            &[],
         )
         .expect("spawn stdio server")
     }
@@ -402,6 +407,7 @@ exit 3"#
                 },
             ),
             None,
+            &[],
         )
         .expect("spawn stdio server");
         let output = transport.stderr();
@@ -563,7 +569,7 @@ read _
                 cwd: Some(directory.path().to_str().unwrap().into()),
             },
         );
-        let mut transport = spawn(&config, Some(&smith)).unwrap();
+        let mut transport = spawn(&config, Some(&smith), &[]).unwrap();
         assert!(transport.process.supervised);
         let pid = child_pid(&transport.process);
         tokio::time::timeout(Duration::from_secs(5), transport.receive())
@@ -576,7 +582,8 @@ read _
             .unwrap();
         assert_reaped(&transport.process, pid);
 
-        let mut transport = spawn(&config, Some(&directory.path().join("missing-smith"))).unwrap();
+        let mut transport =
+            spawn(&config, Some(&directory.path().join("missing-smith")), &[]).unwrap();
         assert!(!transport.process.supervised);
         let pid = child_pid(&transport.process);
         tokio::time::timeout(Duration::from_secs(5), transport.receive())
@@ -616,7 +623,7 @@ while :; do :; done
         for drop_transport in [false, true] {
             let marker = directory.path().join("stopped");
             let _ = std::fs::remove_file(&marker);
-            let mut transport = spawn(&config, Some(&smith)).unwrap();
+            let mut transport = spawn(&config, Some(&smith), &[]).unwrap();
             let pid = child_pid(&transport.process);
             tokio::time::timeout(Duration::from_secs(5), transport.receive())
                 .await
@@ -637,5 +644,69 @@ while :; do :; done
             .await
             .expect("watchdog stop handler must run and its process must be reaped");
         }
+    }
+
+    #[tokio::test]
+    async fn stdio_spawn_scrubs_inherited_env_vars_unless_explicitly_configured() {
+        let secret_var = ["CARGO_PKG_NAME", "CARGO_MANIFEST_DIR", "HOME", "USER"]
+            .into_iter()
+            .find(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()))
+            .expect("test process has an inherited non-PATH environment variable");
+        let scrubbed = [secret_var.to_owned()];
+
+        let scrubbed_config = McpServerConfig::new(
+            "stdio-scrub-test",
+            McpTransport::Stdio {
+                command: "sh".into(),
+                args: vec![
+                    "-c".into(),
+                    format!(
+                        r#"test -z "${{{secret_var}+x}}" || exit 91
+test -n "$PATH" || exit 92
+printf '%s\n' '{{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}}'
+read _"#
+                    ),
+                ],
+                env: Default::default(),
+                cwd: None,
+            },
+        );
+        let mut transport = spawn(&scrubbed_config, None, &scrubbed).expect("spawn scrubbed stdio");
+        tokio::time::timeout(Duration::from_secs(5), transport.receive())
+            .await
+            .unwrap()
+            .expect("scrubbed MCP child should observe unset var and preserved PATH");
+        tokio::time::timeout(Duration::from_secs(5), transport.close())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let explicit_config = McpServerConfig::new(
+            "stdio-explicit-test",
+            McpTransport::Stdio {
+                command: "sh".into(),
+                args: vec![
+                    "-c".into(),
+                    format!(
+                        r#"test "${{{secret_var}}}" = "explicit-server-value" || exit 93
+test -n "$PATH" || exit 94
+printf '%s\n' '{{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}}'
+read _"#
+                    ),
+                ],
+                env: [(secret_var.to_owned(), "explicit-server-value".to_owned())].into(),
+                cwd: None,
+            },
+        );
+        let mut transport =
+            spawn(&explicit_config, None, &scrubbed).expect("spawn explicit-env stdio");
+        tokio::time::timeout(Duration::from_secs(5), transport.receive())
+            .await
+            .unwrap()
+            .expect("explicit server env must override scrubbed inherited var");
+        tokio::time::timeout(Duration::from_secs(5), transport.close())
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

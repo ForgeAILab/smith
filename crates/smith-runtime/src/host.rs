@@ -126,7 +126,10 @@ impl HostSessionRequest {
     /// Creates a request for a fresh session rooted at `project_root`.
     pub fn new(mut runtime: RuntimeRequest, project_root: impl Into<PathBuf>) -> Self {
         if runtime.background_services.is_none() {
-            runtime.background_services = Some(crate::background_tasks::BackgroundServices::new());
+            let scrubbed = crate::factory::request_credential_env_vars(&runtime);
+            runtime.background_services = Some(
+                crate::background_tasks::BackgroundServices::new().with_scrubbed_env_vars(scrubbed),
+            );
         }
         Self {
             runtime,

@@ -683,7 +683,7 @@ async fn inheriting_children_mount_fresh_pipeline_state() {
     request.provider = Some(Arc::new(FakeProvider::new(
         "example-model",
         Capabilities::basic_streaming(),
-        [13_000, 100]
+        [20_000, 100]
             .into_iter()
             .map(|input| {
                 ScriptedStream::new(vec![

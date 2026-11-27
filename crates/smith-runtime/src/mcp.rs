@@ -144,6 +144,10 @@ pub struct McpOptions {
     /// Exact declarations admitted by the host's digest-bound plugin decision.
     /// Matching the full declaration prevents a name alone from granting trust.
     pub plugin_servers: BTreeMap<String, ResolvedMcpServer>,
+    /// Inherited credential environment variable names removed from spawned
+    /// stdio MCP server subprocesses before explicit server `env` overrides are
+    /// applied.
+    pub scrubbed_env_vars: Arc<[String]>,
 }
 
 /// One host-owned narrow MCP classification bound to exact reviewed identity.
@@ -177,6 +181,7 @@ impl std::fmt::Debug for McpOptions {
                 "reviewed_tool_policy_count",
                 &self.reviewed_tool_policies.len(),
             )
+            .field("scrubbed_env_var_count", &self.scrubbed_env_vars.len())
             .finish()
     }
 }
@@ -193,6 +198,7 @@ impl McpOptions {
             max_output_bytes: agent_runtime_mcp::config::DEFAULT_MAX_OUTPUT_BYTES,
             reviewed_tool_policies: Vec::new(),
             plugin_servers: BTreeMap::new(),
+            scrubbed_env_vars: Arc::from([]),
         }
     }
 
@@ -226,6 +232,14 @@ impl McpOptions {
         policies: impl IntoIterator<Item = SmithMcpToolPolicy>,
     ) -> Self {
         self.reviewed_tool_policies = policies.into_iter().collect();
+        self
+    }
+
+    /// Removes these inherited environment variable names from spawned stdio
+    /// MCP server processes before applying explicit server `env` overrides.
+    #[must_use]
+    pub fn with_scrubbed_env_vars(mut self, vars: Arc<[String]>) -> Self {
+        self.scrubbed_env_vars = vars;
         self
     }
 }
@@ -265,7 +279,9 @@ pub struct ClientConnector;
 #[async_trait]
 impl McpConnector for ClientConnector {
     async fn connect(&self, config: &McpServerConfig) -> Result<McpConnected, McpError> {
-        WatchdogConnector::new(None).connect(config).await
+        WatchdogConnector::new(None, Arc::from([]))
+            .connect(config)
+            .await
     }
 }
 
@@ -273,15 +289,18 @@ impl McpConnector for ClientConnector {
 struct WatchdogConnector {
     #[cfg_attr(not(unix), allow(dead_code))]
     smith_executable: Option<PathBuf>,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    scrubbed_env_vars: Arc<[String]>,
     /// Each server's latest process stderr, by registry name.
     #[cfg_attr(not(unix), allow(dead_code))]
     outputs: Mutex<BTreeMap<String, Arc<McpStderr>>>,
 }
 
 impl WatchdogConnector {
-    fn new(smith_executable: Option<PathBuf>) -> Self {
+    fn new(smith_executable: Option<PathBuf>, scrubbed_env_vars: Arc<[String]>) -> Self {
         Self {
             smith_executable,
+            scrubbed_env_vars,
             outputs: Mutex::default(),
         }
     }
@@ -291,24 +310,27 @@ impl WatchdogConnector {
 impl McpConnector for WatchdogConnector {
     async fn connect(&self, config: &McpServerConfig) -> Result<McpConnected, McpError> {
         #[cfg(unix)]
-        let connection =
-            match &config.transport {
-                McpTransport::Stdio { .. } => {
-                    let transport = stdio::spawn(config, self.smith_executable.as_deref())
-                        .map_err(|error| McpError::Startup {
-                            server: config.name.clone(),
-                            reason: error.to_string(),
-                        })?;
-                    self.outputs
-                        .lock()
-                        .expect("MCP stderr outputs")
-                        .insert(config.name.clone(), transport.stderr());
-                    McpClient::new()
-                        .connect_over(config.name.clone(), transport, config.startup_timeout)
-                        .await?
-                }
-                _ => McpClient::new().connect(config).await?,
-            };
+        let connection = match &config.transport {
+            McpTransport::Stdio { .. } => {
+                let transport = stdio::spawn(
+                    config,
+                    self.smith_executable.as_deref(),
+                    &self.scrubbed_env_vars,
+                )
+                .map_err(|error| McpError::Startup {
+                    server: config.name.clone(),
+                    reason: error.to_string(),
+                })?;
+                self.outputs
+                    .lock()
+                    .expect("MCP stderr outputs")
+                    .insert(config.name.clone(), transport.stderr());
+                McpClient::new()
+                    .connect_over(config.name.clone(), transport, config.startup_timeout)
+                    .await?
+            }
+            _ => McpClient::new().connect(config).await?,
+        };
         #[cfg(not(unix))]
         let connection = McpClient::new().connect(config).await?;
         let advertised = connection.list_tools().await?;
@@ -384,7 +406,10 @@ impl McpSupervisor {
         trust: &TrustStore,
         options: McpOptions,
     ) -> Result<Arc<Self>, RuntimeError> {
-        let connector = Arc::new(WatchdogConnector::new(options.smith_executable.clone()));
+        let connector = Arc::new(WatchdogConnector::new(
+            options.smith_executable.clone(),
+            Arc::clone(&options.scrubbed_env_vars),
+        ));
         Self::planned_with(mcp, trust, options, connector)
     }
 

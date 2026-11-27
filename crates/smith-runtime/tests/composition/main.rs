@@ -57,6 +57,7 @@ mod workspace;
 use workspace::LexicalWorkspace;
 
 mod compaction;
+mod credential_scrubbing;
 mod credentials;
 mod fallback;
 mod mcp;

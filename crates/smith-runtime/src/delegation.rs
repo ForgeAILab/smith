@@ -221,6 +221,7 @@ pub struct SmithChildFactory {
     pub(crate) skills: Vec<Arc<dyn Ability>>,
     pub(crate) memory: Option<MemoryContributor>,
     pub(crate) semantic_summary: Option<Arc<SemanticSummaryCoordinator>>,
+    pub(crate) scrubbed_env_vars: Arc<[String]>,
 }
 
 /// One fully preflighted provider/model/profile route available to children.
@@ -456,7 +457,8 @@ impl ChildRuntimeFactory for SmithChildFactory {
             route.execution.clone(),
             route.provider.clone(),
             route.model.clone(),
-            route.model_profile.limits.max_input_tokens,
+            ContextBudget::from_limits(&route.model_profile.limits, &route.context_policy)
+                .input_budget,
         ));
         module_context.model = Some(module_model.clone());
         module_context.workspace_root = Some(std::path::PathBuf::from(workspace.root()));
@@ -482,9 +484,12 @@ impl ChildRuntimeFactory for SmithChildFactory {
         crate::factory::modules::reject_sandbox_pipeline_ordering(&mut module_plan);
         let image_limits = crate::factory::image_limits_for_provider_kind(&route.provider_kind);
         let mut tools = if write_capable {
-            smith_tools::all_with_background_and_image_limits(
-                smith_tools::background::unavailable(),
-                image_limits,
+            smith_tools::all_with_options(
+                smith_tools::BuiltInToolOptions::new(
+                    smith_tools::background::unavailable(),
+                    image_limits,
+                )
+                .with_scrubbed_env_vars(Arc::clone(&self.scrubbed_env_vars)),
             )
         } else {
             smith_tools::read_only_with_image_limits(image_limits)

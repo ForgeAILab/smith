@@ -242,6 +242,13 @@ pub async fn start_with_modules(
             }
         }
     }
+    if let Some(background) = &request.runtime.background_services {
+        background
+            .registry()
+            .set_scrubbed_env_vars(crate::factory::request_credential_env_vars(
+                &request.runtime,
+            ));
+    }
     let spec = modules.into_iter().fold(
         crate::harness::HarnessSpec::trusted(request.runtime),
         crate::harness::HarnessSpec::with_module,

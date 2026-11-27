@@ -55,6 +55,7 @@ mod testing;
 pub use change::{
     ChangeRecorder, EditMutation, ToolMutation, TurnChangeSet, observed_tools,
     observed_tools_with_background, observed_tools_with_background_and_image_limits,
+    observed_tools_with_options,
 };
 pub use display::{
     ToolCallDisplay, external_tool_result_text, has_tool_call_display_schema,
@@ -83,20 +84,61 @@ use std::sync::Arc;
 
 use agent_runtime_core::tool::Tool;
 
+/// Host-supplied options for assembling Smith's built-in tool set.
+#[derive(Clone)]
+pub struct BuiltInToolOptions {
+    /// Session-owned background-task host for `shell`, `task_output`, and `task_stop`.
+    pub background: Arc<dyn background::BackgroundTaskHost>,
+    /// Active provider image ingestion limits for `read`.
+    pub image_limits: ImageLimits,
+    /// Inherited credential environment variable names removed from spawned shell children.
+    pub scrubbed_env_vars: Arc<[String]>,
+}
+
+impl std::fmt::Debug for BuiltInToolOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BuiltInToolOptions")
+            .field("image_limits", &self.image_limits)
+            .field("scrubbed_env_var_count", &self.scrubbed_env_vars.len())
+            .finish()
+    }
+}
+
+impl BuiltInToolOptions {
+    /// Creates options with the active background host and provider image limits.
+    pub fn new(
+        background: Arc<dyn background::BackgroundTaskHost>,
+        image_limits: ImageLimits,
+    ) -> Self {
+        Self {
+            background,
+            image_limits,
+            scrubbed_env_vars: Arc::from([]),
+        }
+    }
+
+    /// Removes these inherited environment variable names from spawned shell subprocesses.
+    #[must_use]
+    pub fn with_scrubbed_env_vars(mut self, vars: Arc<[String]>) -> Self {
+        self.scrubbed_env_vars = vars;
+        self
+    }
+}
+
 /// The bare tools, before any session observation is attached.
 ///
 /// Ordering is stable so the model sees the same tool list across runs — a
 /// changing order needlessly invalidates a provider's prompt cache.
-pub(crate) fn built_in(
-    background: Arc<dyn background::BackgroundTaskHost>,
-    image_limits: ImageLimits,
-) -> Vec<Arc<dyn Tool>> {
+pub(crate) fn built_in(options: BuiltInToolOptions) -> Vec<Arc<dyn Tool>> {
+    let background = options.background;
     vec![
-        Arc::new(ReadTool::new(image_limits)),
+        Arc::new(ReadTool::new(options.image_limits)),
         Arc::new(ListTool),
         Arc::new(SearchTool),
         Arc::new(EditTool),
-        Arc::new(ShellTool::new(background.clone())),
+        Arc::new(
+            ShellTool::new(background.clone()).with_scrubbed_env_vars(options.scrubbed_env_vars),
+        ),
         Arc::new(TaskOutputTool::new(background.clone())),
         Arc::new(TaskStopTool::new(background)),
     ]
@@ -127,7 +169,12 @@ pub fn all_with_background_and_image_limits(
     background: Arc<dyn background::BackgroundTaskHost>,
     image_limits: ImageLimits,
 ) -> Vec<Arc<dyn Tool>> {
-    change::observe_with_background(None, ReadRecorder::new(), background, image_limits)
+    all_with_options(BuiltInToolOptions::new(background, image_limits))
+}
+
+/// Built-in tools assembled with explicit host options, including shell env scrubbing.
+pub fn all_with_options(options: BuiltInToolOptions) -> Vec<Arc<dyn Tool>> {
+    change::observe_with_options(None, ReadRecorder::new(), options)
 }
 
 /// Only the tools that cannot change anything.

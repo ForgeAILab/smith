@@ -311,18 +311,25 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
             .unwrap_or(false),
     )
     .await;
+    let scrubbed_env_vars = provider::request_credential_env_vars(&request);
+    if let Some(background) = &request.background_services {
+        background
+            .registry()
+            .set_scrubbed_env_vars(Arc::clone(&scrubbed_env_vars));
+    }
+    let context_budget = ContextBudget::from_limits(&profile.profile.limits, &context_policy);
     let module_model = Arc::new(crate::module_model::ModuleModelService::new(
         crate::cli_agent::turn_execution(&request.config, request.smith_executable.as_deref()),
         provider.clone(),
         model.clone(),
-        profile.profile.limits.max_input_tokens,
+        context_budget.input_budget,
     ));
     let module_plan = modules::prepare(
         &request,
         &web,
         provider_stage.image_binding.clone(),
         vision.as_ref().map(|vision| vision.binding.clone()),
-        profile.profile.limits.max_input_tokens,
+        context_budget.input_budget,
         semantic_summary.is_some(),
         session_history.clone(),
         Some(module_model.clone()),
@@ -443,8 +450,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     let scope_inputs = capability_limits
         .apply(scope_inputs)
         .map_err(FactoryError::Runtime)?;
-    let capability_budget =
-        ContextBudget::from_limits(&profile.profile.limits, &context_policy).capability_budget;
+    let capability_budget = context_budget.capability_budget;
     // Skills are the asymmetric half of the capability budget. A tool schema
     // is a few hundred tokens; a reference skill is instruction prose and can
     // be thousands, and activation is monotonic — one bound speculatively on
@@ -657,7 +663,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         web.settings,
         provider_stage.image_binding,
         vision.as_ref().map(|vision| vision.binding.clone()),
-        profile.profile.limits.max_input_tokens,
+        context_budget.input_budget,
         semantic_summary.is_some(),
         session_history.clone(),
     )?;
@@ -734,6 +740,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                 semantic_summary: semantic_summary
                     .as_ref()
                     .map(|(coordinator, _)| coordinator.clone()),
+                scrubbed_env_vars,
             }),
             slot,
         }

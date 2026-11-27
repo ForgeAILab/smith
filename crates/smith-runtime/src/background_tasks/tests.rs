@@ -563,3 +563,41 @@ async fn adoption_carries_the_captured_prefix_and_keeps_draining_the_live_receiv
     );
     assert!(result.output.contains("after-adopt"), "{}", result.output);
 }
+
+#[tokio::test]
+async fn background_shell_scrubs_configured_env_vars_while_preserving_path() {
+    let secret_var = ["CARGO_PKG_NAME", "CARGO_MANIFEST_DIR", "HOME", "USER"]
+        .into_iter()
+        .find(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()))
+        .expect("test process has an inherited non-PATH environment variable");
+    let services =
+        BackgroundServices::new().with_scrubbed_env_vars(Arc::from([secret_var.to_owned()]));
+    let session = unique_session();
+    let command = format!(
+        "printf 'secret=%s\\npath=%s\\n' \"${{{secret_var}:-UNSET}}\" \"${{PATH:-UNSET}}\""
+    );
+
+    let (task_id, _) = services
+        .registry()
+        .spawn_background_task(&session, command, std::env::temp_dir(), None)
+        .await
+        .unwrap();
+    let status = wait_for_terminal(services.registry(), &session, &task_id).await;
+    assert_eq!(status, TaskStatus::Exited { code: Some(0) });
+
+    let result = services
+        .registry()
+        .get_task_output(&session, &task_id, 0, 65536)
+        .await
+        .unwrap();
+    assert!(
+        result.output.contains("secret=UNSET"),
+        "background shell must scrub `{secret_var}`: {}",
+        result.output
+    );
+    assert!(
+        !result.output.contains("path=UNSET"),
+        "background shell must preserve PATH: {}",
+        result.output
+    );
+}

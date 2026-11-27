@@ -91,6 +91,7 @@ const HOST_SHELL_ENVIRONMENT_POLICY: &str = "inherit-host-environment-v1";
 pub struct ShellTool {
     background: Arc<dyn background::BackgroundTaskHost>,
     auto_background_after: Duration,
+    scrubbed_env_vars: Arc<[String]>,
 }
 
 impl ShellTool {
@@ -99,6 +100,7 @@ impl ShellTool {
         Self {
             background,
             auto_background_after: AUTO_BACKGROUND_AFTER,
+            scrubbed_env_vars: Arc::from([]),
         }
     }
 
@@ -107,6 +109,15 @@ impl ShellTool {
     #[must_use]
     pub fn with_auto_background_after(mut self, after: Duration) -> Self {
         self.auto_background_after = after;
+        self
+    }
+
+    /// Removes these inherited environment variables from spawned child shell
+    /// processes so provider credentials resolved by Smith are not exposed to
+    /// subprocesses or their core dumps.
+    #[must_use]
+    pub fn with_scrubbed_env_vars(mut self, vars: Arc<[String]>) -> Self {
+        self.scrubbed_env_vars = vars;
         self
     }
 }
@@ -265,7 +276,7 @@ impl Tool for ShellTool {
             .max(1);
 
         let started = Instant::now();
-        let mut child = spawn(command, &cwd)?;
+        let mut child = spawn(command, &cwd, &self.scrubbed_env_vars)?;
 
         // stdout and stderr are merged in arrival order, because a compiler
         // writes diagnostics to stderr and progress to stdout, and reading them
@@ -655,8 +666,15 @@ async fn sleep_ms(millis: u64) {
 }
 
 #[cfg(unix)]
-fn spawn(command: &str, cwd: &std::path::Path) -> Result<tokio::process::Child, RuntimeError> {
+fn spawn(
+    command: &str,
+    cwd: &std::path::Path,
+    scrubbed_env_vars: &[String],
+) -> Result<tokio::process::Child, RuntimeError> {
     let mut builder = Command::new("sh");
+    for var in scrubbed_env_vars {
+        builder.env_remove(var);
+    }
     builder
         .arg("-c")
         .arg(command)
@@ -674,8 +692,16 @@ fn spawn(command: &str, cwd: &std::path::Path) -> Result<tokio::process::Child, 
 }
 
 #[cfg(not(unix))]
-fn spawn(command: &str, cwd: &std::path::Path) -> Result<tokio::process::Child, RuntimeError> {
-    Command::new("sh")
+fn spawn(
+    command: &str,
+    cwd: &std::path::Path,
+    scrubbed_env_vars: &[String],
+) -> Result<tokio::process::Child, RuntimeError> {
+    let mut builder = Command::new("sh");
+    for var in scrubbed_env_vars {
+        builder.env_remove(var);
+    }
+    builder
         .arg("-c")
         .arg(command)
         .current_dir(cwd)
@@ -1138,5 +1164,55 @@ mod tests {
         let effects = ShellTool::default().spec().effects;
         assert!(effects.spawns_process());
         assert!(effects.mutates());
+    }
+
+    #[tokio::test]
+    async fn scrubbed_env_vars_are_removed_from_child_shell_while_preserving_path() {
+        let secret_var = ["CARGO_PKG_NAME", "CARGO_MANIFEST_DIR", "HOME", "USER"]
+            .into_iter()
+            .find(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()))
+            .expect("test process has an inherited non-PATH environment variable");
+        let preserved_var = ["CARGO_MANIFEST_DIR", "CARGO_PKG_NAME", "HOME", "USER"]
+            .into_iter()
+            .find(|name| {
+                *name != secret_var && std::env::var(name).is_ok_and(|value| !value.is_empty())
+            })
+            .expect("test process has a second inherited environment variable");
+
+        let (_dir, ctx) = project();
+        let command = format!(
+            "printf 'secret=%s\\npreserved=%s\\npath=%s\\n' \"${{{secret_var}:-UNSET}}\" \"${{{preserved_var}:-UNSET}}\" \"${{PATH:-UNSET}}\""
+        );
+
+        let baseline = ShellTool::default()
+            .invoke(json!({"command": command}), &ctx)
+            .await
+            .unwrap();
+        assert!(!baseline.is_error);
+        let baseline_text = text_of(&baseline);
+        assert!(
+            !baseline_text.contains("secret=UNSET"),
+            "baseline shell should inherit `{secret_var}`: {baseline_text}"
+        );
+
+        let scrubbed = ShellTool::default()
+            .with_scrubbed_env_vars(Arc::from([secret_var.to_owned()]))
+            .invoke(json!({"command": command}), &ctx)
+            .await
+            .unwrap();
+        assert!(!scrubbed.is_error);
+        let scrubbed_text = text_of(&scrubbed);
+        assert!(
+            scrubbed_text.contains("secret=UNSET"),
+            "scrubbed shell must not inherit `{secret_var}`: {scrubbed_text}"
+        );
+        assert!(
+            !scrubbed_text.contains("preserved=UNSET"),
+            "scrubbed shell must preserve `{preserved_var}`: {scrubbed_text}"
+        );
+        assert!(
+            !scrubbed_text.contains("path=UNSET"),
+            "scrubbed shell must preserve PATH: {scrubbed_text}"
+        );
     }
 }

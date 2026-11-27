@@ -23,12 +23,18 @@ pub fn observed_tools_with_background_and_image_limits(
     background: Arc<dyn crate::background::BackgroundTaskHost>,
     image_limits: crate::ImageLimits,
 ) -> Vec<Arc<dyn Tool>> {
-    observe_with_background(
-        Some(recorder),
-        ReadRecorder::new(),
-        background,
-        image_limits,
+    observed_tools_with_options(
+        recorder,
+        crate::BuiltInToolOptions::new(background, image_limits),
     )
+}
+
+/// Observed tools assembled with explicit host options, including shell env scrubbing.
+pub fn observed_tools_with_options(
+    recorder: Arc<ChangeRecorder>,
+    options: crate::BuiltInToolOptions,
+) -> Vec<Arc<dyn Tool>> {
+    observe_with_options(Some(recorder), ReadRecorder::new(), options)
 }
 
 pub(crate) fn observe_with_background(
@@ -37,7 +43,19 @@ pub(crate) fn observe_with_background(
     background: Arc<dyn crate::background::BackgroundTaskHost>,
     image_limits: crate::ImageLimits,
 ) -> Vec<Arc<dyn Tool>> {
-    crate::built_in(background, image_limits)
+    observe_with_options(
+        recorder,
+        reads,
+        crate::BuiltInToolOptions::new(background, image_limits),
+    )
+}
+
+pub(crate) fn observe_with_options(
+    recorder: Option<Arc<ChangeRecorder>>,
+    reads: Arc<ReadRecorder>,
+    options: crate::BuiltInToolOptions,
+) -> Vec<Arc<dyn Tool>> {
+    crate::built_in(options)
         .into_iter()
         .map(|inner| {
             Arc::new(ObservedTool {

@@ -811,8 +811,9 @@ mod tests;
 mod observation;
 mod recovery;
 
-pub(crate) use observation::observe_with_background;
+pub(crate) use observation::{observe_with_background, observe_with_options};
 pub use observation::{
-    observed_tools, observed_tools_with_background, observed_tools_with_background_and_image_limits,
+    observed_tools, observed_tools_with_background,
+    observed_tools_with_background_and_image_limits, observed_tools_with_options,
 };
 use recovery::{redo_direction, redo_preview_text, undo_preview_text};
