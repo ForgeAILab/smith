@@ -7,20 +7,23 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Final
 
 BRIDGE_VERSION = "0.1.1"
 HARBOR_VERSION = "0.20.0"
 DATASET_NAME = "harbor-index/harbor-index-1.0"
 DATASET_REF = "sha256:9d4514cb93f6fafd9cf8ff352c784495ab675176c7f09671db523bd19b663584"
 DATASET_TASK_COUNT = 82
+PROFILE_NAMES: Final[tuple[str, ...]] = ("smoke", "context-probe", "dev", "full")
 APPROVAL = "allow-all"
 OUTPUT_SCHEMA_VERSION = 3
-RUNTIME_EVENT_SCHEMA_VERSION = 16
+RUNTIME_EVENT_SCHEMA_VERSION = 17
 ATIF_SCHEMA_VERSION = "ATIF-v1.7"
 
 CONTEXT_TOKENS = 272_000
 MAX_INPUT_TOKENS = 255_616
 MAX_OUTPUT_TOKENS = 16_384
+CAPABILITY_BUDGET: Final[int] = 12_000
 AUTH_FILE_MAX_BYTES = 1024 * 1024
 
 ZAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
@@ -110,13 +113,42 @@ class Serving:
             return "oauth_authfile_selected_entry"
         return f"env_{self.credential_env_var}"
 
-    def config_toml(self, request_output_tokens: int | None = None) -> str:
+    def effective_input_tokens(self, max_input_tokens: int | None = None) -> int:
+        """Validate and resolve the input-token ceiling for one benchmark run."""
+        if max_input_tokens is None:
+            return self.max_input_tokens
+        if max_input_tokens <= CAPABILITY_BUDGET:
+            raise ValueError(
+                f"max_input_tokens ({max_input_tokens}) must exceed "
+                f"capability_budget ({CAPABILITY_BUDGET})"
+            )
+        if max_input_tokens > self.max_input_tokens:
+            raise ValueError(
+                f"max_input_tokens ({max_input_tokens}) exceeds serving limit "
+                f"({self.max_input_tokens})"
+            )
+        return max_input_tokens
+
+    def effective_context_tokens(self, max_input_tokens: int | None = None) -> int:
+        """Return total context tokens matching the resolved input cap and output reserve."""
+        return self.effective_input_tokens(max_input_tokens) + self.max_output_tokens
+
+    def config_toml(
+        self,
+        request_output_tokens: int | None = None,
+        *,
+        max_input_tokens: int | None = None,
+        persistence: bool = False,
+    ) -> str:
         """Return the benchmark-local Smith configuration without credential values."""
         requested = (
             self.max_output_tokens if request_output_tokens is None else request_output_tokens
         )
         if not 1 <= requested <= self.max_output_tokens:
             raise ValueError("request output tokens exceed the serving model limit")
+        effective_input = self.effective_input_tokens(max_input_tokens)
+        effective_context = effective_input + self.max_output_tokens
+        persistence_literal = "true" if persistence else "false"
         response_block = (
             f'\n[providers.{self.provider}.response]\nreasoning_only = "text"\n'
             if self.reasoning_only_text
@@ -140,21 +172,21 @@ profile_order = ["harbor"]
 [profiles.harbor]
 provider = "{self.provider}"
 model = "{self.model}"
-max_output_tokens = {request_output_tokens}
+max_output_tokens = {requested}
 
 [providers.{self.provider}]
 kind = "{self.provider_kind}"
 base_url = "{self.base_url}"
 credential = "{self.credential}"{response_block}
 [models."{self.harbor_model}"]
-context_tokens = {self.context_tokens}
-max_input_tokens = {self.max_input_tokens}
+context_tokens = {effective_context}
+max_input_tokens = {effective_input}
 max_output_tokens = {self.max_output_tokens}
 {reasoning_block}
 [context]
-output_reserve = {request_output_tokens}
+output_reserve = {requested}
 reasoning_reserve = 0
-capability_budget = 12000
+capability_budget = {CAPABILITY_BUDGET}
 
 [limits]
 max_retries = 2
@@ -163,7 +195,7 @@ turn_time_limit_ms = 0
 tool_output_limit_bytes = 65536
 
 [persistence]
-enabled = false
+enabled = {persistence_literal}
 '''
 
 
@@ -228,6 +260,8 @@ def smith_config_toml(
     profile_instructions: str | None = None,
     delegation: bool = True,
     serving: Serving | None = None,
+    max_input_tokens: int | None = None,
+    persistence: bool = False,
 ) -> str:
     """Return the benchmark-local Smith configuration without credential values."""
     selected = serving or load_serving()
@@ -236,7 +270,11 @@ def smith_config_toml(
         if request_output_tokens is None
         else request_output_tokens
     )
-    config = selected.config_toml(requested)
+    config = selected.config_toml(
+        requested,
+        max_input_tokens=max_input_tokens,
+        persistence=persistence,
+    )
     instruction_line = (
         f"instructions = {json.dumps(profile_instructions)}\n"
         if profile_instructions is not None

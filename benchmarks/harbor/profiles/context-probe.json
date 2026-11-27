@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "context-probe",
+  "description": "Fast six-task multi-step context-pressure subset across coding, profiling, SQL, and research families",
+  "dataset": "harbor-index/harbor-index-1.0",
+  "dataset_ref": "sha256:9d4514cb93f6fafd9cf8ff352c784495ab675176c7f09671db523bd19b663584",
+  "tasks": [
+    "harbor-index/swebenchverified-fix-span-selector-axes-limits",
+    "harbor-index/swebenchpro-improve-process-signal-messages",
+    "harbor-index/featurebench-add-feature-xarray-backend-chunks",
+    "harbor-index/gso-speedup-numpy-strings",
+    "harbor-index/spider2-dbt-airport-arrivals",
+    "harbor-index/widesearch-list-bri-projects-2025"
+  ],
+  "rollouts": 1,
+  "concurrency": 1,
+  "timeout_multiplier": 1.0
+}

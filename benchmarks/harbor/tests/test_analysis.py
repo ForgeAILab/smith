@@ -125,3 +125,58 @@ def test_harbor_020_trial_directory_layout_is_loaded(tmp_path: Path) -> None:
 
     assert len(loaded.trials) == 1
     assert loaded.trials[0].reward == 0.5
+
+
+def test_cache_weighted_input_and_hit_rate_surface_cache_thrashing(tmp_path: Path) -> None:
+    def make_job(name: str, input_tokens: int, cache_tokens: int) -> Path:
+        job = tmp_path / name
+        job.mkdir()
+        (job / "smith-harbor-provenance.json").write_text(
+            json.dumps({"run_invariants": {"dataset": "frozen"}}),
+            encoding="utf-8",
+        )
+        trials = [
+            {
+                "task_name": f"task-{index}",
+                "verifier_result": {"rewards": {"reward": 1.0}},
+                "exception_info": None,
+                "agent_result": {
+                    "n_input_tokens": input_tokens,
+                    "n_cache_tokens": cache_tokens,
+                    "n_output_tokens": 1_000,
+                },
+            }
+            for index in range(3)
+        ]
+        (job / "result.json").write_text(json.dumps({"trial_results": trials}), encoding="utf-8")
+        return job
+
+    baseline = load_job(make_job("baseline", input_tokens=100_000, cache_tokens=90_000))
+    candidate = load_job(make_job("candidate", input_tokens=80_000, cache_tokens=10_000))
+
+    report = compare_jobs(baseline, candidate, seed=7)
+    metrics = report["metrics"]
+    assert metrics["token_percentage_change"]["verdict"] == "reduced"
+    assert metrics["cache_weighted_input_percentage_change"]["verdict"] == "increased"
+    assert metrics["cache_hit_rate_difference"]["verdict"] == "decreased"
+
+    markdown = render_markdown(report)
+    assert "Cache-weighted input change" in markdown
+    assert "Cache hit-rate difference" in markdown
+
+
+def test_paired_comparison_refuses_different_serving_limits() -> None:
+    baseline = LoadedJob(
+        Path("baseline"),
+        "baseline",
+        {"dataset": "frozen", "serving_limits": {"max_input_tokens": 255_616}},
+        _job("baseline", [1.0]).trials,
+    )
+    candidate = LoadedJob(
+        Path("candidate"),
+        "candidate",
+        {"dataset": "frozen", "serving_limits": {"max_input_tokens": 64_000}},
+        _job("candidate", [1.0]).trials,
+    )
+    with pytest.raises(AnalysisError, match="serving_limits"):
+        compare_jobs(baseline, candidate)

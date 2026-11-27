@@ -104,8 +104,20 @@ different servings are never compared pairwise; use `analyze
 --descriptive-only` for the cross-serving baseline.
 
 - `smoke`: 3 fixed tasks × 1 rollout.
+- `context-probe`: 6 fixed multi-step tasks (SWE-bench Verified/Pro, FeatureBench, GSO, Spider2, WideSearch) × 1 rollout for fast context-management ablations.
 - `dev`: 26 fixed tasks spanning the Index task families × 1 rollout.
 - `full`: all 82 pinned tasks × 3 rollouts.
+
+For fast context-management probes on `glm-5.3` (enabling in-sandbox persistence so `SmithArtifactStore` and `SemanticSummaryCoordinator` run, with an optional tight input budget and safe API-key concurrency):
+
+```sh
+uv run smith-harbor validate-profile context-probe --serving glm-5.3
+uv run smith-harbor run context-probe \
+  --serving glm-5.3 \
+  --enable-persistence \
+  --max-input-tokens 64000 \
+  --concurrency 3
+```
 
 To make a stable job name for handoff or resume:
 

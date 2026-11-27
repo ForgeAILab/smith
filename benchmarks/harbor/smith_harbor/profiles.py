@@ -33,6 +33,7 @@ from smith_harbor.constants import (
     DATASET_TASK_COUNT,
     HARBOR_VERSION,
     PACKAGE_ROOT,
+    PROFILE_NAMES,
     PROFILES_DIR,
     SUPPORTED_TARGETS,
     Serving,
@@ -165,8 +166,9 @@ def load_dataset_manifest() -> DatasetManifest:
 
 
 def load_profile(name: str) -> RunProfile:
-    if name not in {"smoke", "dev", "full"}:
-        raise ProfileError("profile must be one of smoke, dev, or full")
+    if name not in PROFILE_NAMES:
+        allowed = ", ".join(PROFILE_NAMES)
+        raise ProfileError(f"profile must be one of: {allowed}")
     raw = _load_json(PROFILES_DIR / f"{name}.json")
     if (
         raw.get("name") != name
@@ -222,9 +224,16 @@ def run_invariants(
     concurrency: int,
     variant: Variant | None = None,
     serving: Serving | None = None,
+    persistence: bool = False,
+    max_input_tokens: int | None = None,
 ) -> dict[str, object]:
     selected_variant = variant or load_variant("current")
     selected_serving = serving or load_serving()
+    try:
+        effective_input = selected_serving.effective_input_tokens(max_input_tokens)
+        effective_context = selected_serving.effective_context_tokens(max_input_tokens)
+    except ValueError as exc:
+        raise ProfileError(str(exc)) from exc
     return {
         "harbor_version": HARBOR_VERSION,
         "bridge_version": BRIDGE_VERSION,
@@ -239,12 +248,12 @@ def run_invariants(
         "effort": selected_serving.effort or "none",
         "credential_policy": selected_serving.credential_policy,
         "serving_limits": {
-            "context_tokens": selected_serving.context_tokens,
-            "max_input_tokens": selected_serving.max_input_tokens,
+            "context_tokens": effective_context,
+            "max_input_tokens": effective_input,
             "max_output_tokens": selected_serving.max_output_tokens,
         },
         "approval": APPROVAL,
-        "persistence": False,
+        "persistence": persistence,
         "rollouts": profile.rollouts,
         "timeout_multiplier": profile.timeout_multiplier,
         "resource_policy": "task_declared",
@@ -273,17 +282,21 @@ def job_config(
     concurrency: int = 1,
     variant: Variant | None = None,
     serving: Serving | None = None,
+    persistence: bool = False,
+    max_input_tokens: int | None = None,
 ) -> dict[str, object]:
     if concurrency < 1:
         raise ProfileError("concurrency must be positive")
-    unsafe = concurrency > 1
     selected_variant = variant or load_variant("current")
     selected_serving = serving or load_serving()
+    unsafe = concurrency > 1 and selected_serving.oauth
     invariants = run_invariants(
         profile,
         concurrency=concurrency,
         variant=selected_variant,
         serving=selected_serving,
+        persistence=persistence,
+        max_input_tokens=max_input_tokens,
     )
     return {
         "job_name": job_name,
@@ -314,6 +327,8 @@ def job_config(
                     "serving_name": selected_serving.name,
                     "run_invariants": invariants,
                     "allow_concurrent_oauth": unsafe,
+                    "persistence": persistence,
+                    "max_input_tokens": max_input_tokens,
                 },
             }
         ],
@@ -357,6 +372,9 @@ def write_job_provenance(
     concurrency: int,
     variant: Variant | None = None,
     serving: Serving | None = None,
+    *,
+    persistence: bool = False,
+    max_input_tokens: int | None = None,
 ) -> None:
     selected_variant = variant or load_variant("current")
     selected_serving = serving or load_serving()
@@ -385,6 +403,8 @@ def write_job_provenance(
             concurrency=concurrency,
             variant=selected_variant,
             serving=selected_serving,
+            persistence=persistence,
+            max_input_tokens=max_input_tokens,
         ),
         "variant": variant_provenance(selected_variant),
         "smith_artifacts": artifact_manifest,
@@ -401,27 +421,39 @@ def run_profile(
     *,
     job_name: str,
     jobs_dir: Path | None = None,
+    concurrency: int | None = None,
     unsafe_concurrency: int | None = None,
     print_config: bool = False,
     variant_name: str = "current",
     serving_name: str | None = None,
+    persistence: bool = False,
+    max_input_tokens: int | None = None,
 ) -> int:
     profile = load_profile(profile_name)
     variant = load_variant(variant_name)
     serving = load_serving(serving_name)
     jobs_dir = jobs_dir or default_jobs_dir()
-    concurrency = unsafe_concurrency or profile.concurrency
-    if concurrency > 1 and unsafe_concurrency is None:
-        raise ProfileError("concurrent OAuth copies require --unsafe-concurrency")
-    if concurrency > 1 and "unsafe-oauth" not in job_name:
-        raise ProfileError("concurrent OAuth job names must contain 'unsafe-oauth'")
+    effective_concurrency = (
+        unsafe_concurrency
+        if unsafe_concurrency is not None
+        else (concurrency if concurrency is not None else profile.concurrency)
+    )
+    if effective_concurrency < 1:
+        raise ProfileError("concurrency must be positive")
+    if effective_concurrency > 1 and serving.oauth:
+        if unsafe_concurrency is None:
+            raise ProfileError("concurrent OAuth copies require --unsafe-concurrency")
+        if "unsafe-oauth" not in job_name:
+            raise ProfileError("concurrent OAuth job names must contain 'unsafe-oauth'")
     config = job_config(
         profile,
         job_name=job_name,
         jobs_dir=jobs_dir,
-        concurrency=concurrency,
+        concurrency=effective_concurrency,
         variant=variant,
         serving=serving,
+        persistence=persistence,
+        max_input_tokens=max_input_tokens,
     )
     if print_config:
         print(json.dumps(config, indent=2, sort_keys=True))
@@ -442,7 +474,13 @@ def run_profile(
             job_dir = jobs_dir / job_name
             if job_dir.is_dir():
                 write_job_provenance(
-                    job_dir, profile, concurrency, variant, serving=serving
+                    job_dir,
+                    profile,
+                    effective_concurrency,
+                    variant,
+                    serving=serving,
+                    persistence=persistence,
+                    max_input_tokens=max_input_tokens,
                 )
     return return_code
 
@@ -485,6 +523,6 @@ def _profile_name_from_job(job_path: Path) -> str:
     provenance_path = job_path / "smith-harbor-provenance.json"
     raw = _load_json(provenance_path)
     profile = raw.get("profile")
-    if not isinstance(profile, dict) or profile.get("name") not in {"smoke", "dev", "full"}:
+    if not isinstance(profile, dict) or profile.get("name") not in PROFILE_NAMES:
         raise ProfileError("job provenance does not identify a frozen Smith profile")
     return str(profile["name"])

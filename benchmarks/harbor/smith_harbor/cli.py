@@ -16,6 +16,7 @@ from smith_harbor.build_artifacts import build_all
 from smith_harbor.constants import (
     ARTIFACT_MANIFEST_PATH,
     DEFAULT_SERVING_NAME,
+    PROFILE_NAMES,
     SERVINGS,
     SUPPORTED_TARGETS,
     default_jobs_dir,
@@ -26,9 +27,10 @@ from smith_harbor.profiles import load_profile, preflight, resume_job, run_profi
 from smith_harbor.variants import VARIANTS
 
 
-def _default_job_name(profile: str) -> str:
+def _default_job_name(profile: str, serving_name: str | None = None) -> str:
     timestamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
-    return f"smith-luna-max-{profile}-{timestamp}"
+    serving = serving_name or DEFAULT_SERVING_NAME
+    return f"smith-{serving}-{profile}-{timestamp}"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -40,6 +42,14 @@ def _parser() -> argparse.ArgumentParser:
     build = commands.add_parser("build", help="build both static Linux Smith artifacts")
     build.add_argument("--output-dir", type=Path, default=ARTIFACT_MANIFEST_PATH.parent)
     build.add_argument("--allow-dirty", action="store_true")
+    build.add_argument(
+        "--local-agent-runtime",
+        action="store_true",
+        help=(
+            "stage sibling ../agent-runtime and .cargo/config.toml "
+            "(requires --allow-dirty)"
+        ),
+    )
 
     verify = commands.add_parser("verify-artifacts", help="verify both pinned Smith artifacts")
     verify.add_argument("--manifest", type=Path, default=ARTIFACT_MANIFEST_PATH)
@@ -56,17 +66,33 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--variant", choices=sorted(VARIANTS), default="current")
 
     validate = commands.add_parser("validate-profile", help="validate a frozen run profile")
-    validate.add_argument("profile", choices=["smoke", "dev", "full"])
+    validate.add_argument("profile", choices=list(PROFILE_NAMES))
     validate.add_argument("--serving", choices=sorted(SERVINGS), default=None)
 
     run = commands.add_parser("run", help="run a frozen Harbor profile")
-    run.add_argument("profile", choices=["smoke", "dev", "full"])
+    run.add_argument("profile", choices=list(PROFILE_NAMES))
     run.add_argument("--job-name")
     run.add_argument("--jobs-dir", type=Path, default=default_jobs_dir())
+    run.add_argument(
+        "--concurrency",
+        type=int,
+        help="concurrent trials for API-key servings such as glm-5.3",
+    )
     run.add_argument("--unsafe-concurrency", type=int)
     run.add_argument("--print-config", action="store_true")
     run.add_argument("--variant", choices=sorted(VARIANTS), default="current")
     run.add_argument("--serving", choices=sorted(SERVINGS), default=None)
+    run.add_argument(
+        "--enable-persistence",
+        action="store_true",
+        help="enable in-sandbox session persistence, artifact offloading, and semantic compaction",
+    )
+    run.add_argument(
+        "--max-input-tokens",
+        type=int,
+        default=None,
+        help="override the serving input-token budget (e.g. 64000 for tight-context probes)",
+    )
 
     resume = commands.add_parser("resume", help="resume a Smith Harbor job")
     resume.add_argument("job_path", type=Path)
@@ -114,7 +140,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"schema_version": 1, "status": "ready", "entry": selected.entry}))
         return 0
     if args.command == "build":
-        print(build_all(args.output_dir, allow_dirty=args.allow_dirty))
+        print(
+            build_all(
+                args.output_dir,
+                allow_dirty=args.allow_dirty,
+                local_agent_runtime=args.local_agent_runtime,
+            )
+        )
         return 0
     if args.command == "verify-artifacts":
         for target in SUPPORTED_TARGETS:
@@ -150,15 +182,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     if args.command == "run":
-        job_name = args.job_name or _default_job_name(args.profile)
+        job_name = args.job_name or _default_job_name(args.profile, args.serving)
         return run_profile(
             args.profile,
             job_name=job_name,
             jobs_dir=args.jobs_dir,
+            concurrency=args.concurrency,
             unsafe_concurrency=args.unsafe_concurrency,
             print_config=args.print_config,
             variant_name=args.variant,
             serving_name=args.serving,
+            persistence=args.enable_persistence,
+            max_input_tokens=args.max_input_tokens,
         )
     if args.command == "resume":
         return resume_job(args.job_path)

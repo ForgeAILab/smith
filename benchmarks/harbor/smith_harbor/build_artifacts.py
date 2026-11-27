@@ -45,10 +45,13 @@ def source_state(allow_dirty: bool) -> tuple[str, bool]:
     return revision, dirty
 
 
-def _copy_tracked_worktree(source: Path, destination: Path) -> None:
-    """Stage actual tracked contents without Git metadata, build output, or secrets."""
+def _copy_worktree(source: Path, destination: Path, *, include_untracked: bool = False) -> None:
+    """Stage source files without Git metadata, ignored build output, or secrets."""
+    args = ["git", "ls-files", "-z"]
+    if include_untracked:
+        args = ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"]
     completed = subprocess.run(
-        ["git", "ls-files", "-z"],
+        args,
         cwd=source,
         check=True,
         capture_output=True,
@@ -67,26 +70,55 @@ def _copy_tracked_worktree(source: Path, destination: Path) -> None:
             shutil.copy2(source_path, destination_path)
 
 
-def _stage_build_context(root: Path) -> None:
-    """Stage only Smith's tracked build graph; ignored local Cargo patches stay local."""
-    _copy_tracked_worktree(REPOSITORY_ROOT, root / REPOSITORY_ROOT.name)
+def _stage_build_context(
+    root: Path,
+    *,
+    include_untracked: bool = False,
+    local_agent_runtime: bool = False,
+) -> None:
+    """Stage Smith's build graph (plus optional sibling agent-runtime for dev builds)."""
+    _copy_worktree(
+        REPOSITORY_ROOT, root / REPOSITORY_ROOT.name, include_untracked=include_untracked
+    )
+    if local_agent_runtime:
+        sibling = REPOSITORY_ROOT.parent / "agent-runtime"
+        if not sibling.is_dir():
+            raise RuntimeError(f"local agent-runtime checkout not found at {sibling}")
+        _copy_worktree(sibling, root / sibling.name, include_untracked=include_untracked)
+        patch_config = REPOSITORY_ROOT / ".cargo" / "config.toml"
+        if not patch_config.is_file():
+            raise RuntimeError(f"local Cargo patch file not found at {patch_config}")
+        target_cargo = root / REPOSITORY_ROOT.name / ".cargo"
+        target_cargo.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(patch_config, target_cargo / "config.toml")
 
 
-def _docker_build(target: str, output_dir: Path) -> tuple[Path, str, str]:
+def _docker_build(
+    target: str,
+    output_dir: Path,
+    *,
+    include_untracked: bool = False,
+    local_agent_runtime: bool = False,
+) -> tuple[Path, str, str]:
     container_repo = f"/workspace/{REPOSITORY_ROOT.name}"
     container_target = f"/tmp/smith-harbor-build/{target}"
+    locked_flag = "" if local_agent_runtime else "--locked "
     command = (
         "set -eu; "
         "apt-get update -qq; "
         f"DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {BUILD_PACKAGES} >/dev/null; "
         "CARGO_BUILD_JOBS=2 "
         f"CARGO_TARGET_DIR={container_target} "
-        f"cargo zigbuild --locked --release -p smith-cli --target {target}; "
+        f"cargo zigbuild {locked_flag}--release -p smith-cli --target {target}; "
         f"{container_target}/{target}/release/smith --version"
     )
     with tempfile.TemporaryDirectory(prefix="smith-harbor-build-context-") as raw_dir:
         staging = Path(raw_dir)
-        _stage_build_context(staging)
+        _stage_build_context(
+            staging,
+            include_untracked=include_untracked,
+            local_agent_runtime=local_agent_runtime,
+        )
         created = subprocess.run(
             [
                 "docker",
@@ -147,12 +179,26 @@ def _docker_build(target: str, output_dir: Path) -> tuple[Path, str, str]:
     return destination, version_lines[-1], command
 
 
-def build_all(output_dir: Path, *, allow_dirty: bool = False) -> Path:
+def build_all(
+    output_dir: Path,
+    *,
+    allow_dirty: bool = False,
+    local_agent_runtime: bool = False,
+) -> Path:
+    if local_agent_runtime and not allow_dirty:
+        raise RuntimeError("--local-agent-runtime requires --allow-dirty")
     revision, dirty = source_state(allow_dirty)
+    if local_agent_runtime:
+        dirty = True
     output_dir.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, Any]] = []
     for target in SUPPORTED_TARGETS:
-        binary, version, command = _docker_build(target, output_dir)
+        binary, version, command = _docker_build(
+            target,
+            output_dir,
+            include_untracked=allow_dirty,
+            local_agent_runtime=local_agent_runtime,
+        )
         records.append(
             {
                 "target": target,
@@ -187,8 +233,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=ARTIFACT_MANIFEST_PATH.parent)
     parser.add_argument("--allow-dirty", action="store_true")
+    parser.add_argument("--local-agent-runtime", action="store_true")
     args = parser.parse_args(argv)
-    manifest = build_all(args.output_dir, allow_dirty=args.allow_dirty)
+    manifest = build_all(
+        args.output_dir,
+        allow_dirty=args.allow_dirty,
+        local_agent_runtime=args.local_agent_runtime,
+    )
     print(manifest)
     return 0
 

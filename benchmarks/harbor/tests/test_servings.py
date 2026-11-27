@@ -89,6 +89,28 @@ def test_glm_serving_config_uses_env_credential_and_text_reasoning() -> None:
     assert "reasoning" not in model
 
 
+def test_serving_config_toml_default_and_context_overrides() -> None:
+    glm = load_serving("glm-5.3")
+
+    default_parsed = tomllib.loads(glm.config_toml())
+    assert default_parsed["profiles"]["harbor"]["max_output_tokens"] == glm.max_output_tokens
+    assert default_parsed["context"]["output_reserve"] == glm.max_output_tokens
+    assert default_parsed["persistence"]["enabled"] is False
+
+    capped = tomllib.loads(
+        smith_config_toml(
+            serving=glm,
+            persistence=True,
+            max_input_tokens=64_000,
+        )
+    )
+    assert capped["persistence"]["enabled"] is True
+    model = capped["models"]["zai/glm-5.3"]
+    assert model["max_input_tokens"] == 64_000
+    assert model["context_tokens"] == 64_000 + glm.max_output_tokens
+    assert model["max_output_tokens"] == glm.max_output_tokens
+
+
 def test_variant_lines_stay_inside_the_profile_block_for_either_serving() -> None:
     for name in SERVINGS:
         config = tomllib.loads(

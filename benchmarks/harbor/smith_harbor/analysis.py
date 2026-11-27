@@ -13,7 +13,9 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
+
+CACHE_INPUT_WEIGHT: Final[float] = 0.1
 
 COMPATIBILITY_KEYS = (
     "dataset",
@@ -21,6 +23,7 @@ COMPATIBILITY_KEYS = (
     "task_count",
     "task_set_sha256",
     "serving",
+    "serving_limits",
     "provider",
     "provider_kind",
     "model",
@@ -52,6 +55,10 @@ class TrialObservation:
     reported_success: bool
     verifier_success: bool
     failed: bool
+    input_tokens: float | None = None
+    cache_tokens: float | None = None
+    cache_hit_rate: float | None = None
+    cache_weighted_input: float | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +138,35 @@ def _tokens(contexts: Sequence[Mapping[str, object]]) -> float | None:
     return float(total) if observed else None
 
 
+def _cache_metrics(
+    contexts: Sequence[Mapping[str, object]],
+) -> tuple[float | None, float | None, float | None, float | None]:
+    """Extract input, cached, cache hit rate, and 0.1x cache-weighted input tokens."""
+    if not contexts:
+        return (None, None, None, None)
+    total_input = 0
+    total_cache = 0
+    input_observed = False
+    cache_observed = False
+    for context in contexts:
+        raw_input = context.get("n_input_tokens")
+        if isinstance(raw_input, int) and not isinstance(raw_input, bool) and raw_input >= 0:
+            total_input += raw_input
+            input_observed = True
+        raw_cache = context.get("n_cache_tokens")
+        if isinstance(raw_cache, int) and not isinstance(raw_cache, bool) and raw_cache >= 0:
+            total_cache += raw_cache
+            cache_observed = True
+    input_val = float(total_input) if input_observed else None
+    cache_val = float(total_cache) if cache_observed else None
+    if not (input_observed and cache_observed) or total_cache > total_input:
+        return (input_val, cache_val, None, None)
+    uncached = total_input - total_cache
+    weighted = float(uncached) + CACHE_INPUT_WEIGHT * float(total_cache)
+    hit_rate = (total_cache / total_input) if total_input > 0 else None
+    return (input_val, cache_val, hit_rate, weighted)
+
+
 def _reported_success(contexts: Sequence[Mapping[str, object]]) -> bool:
     statuses: list[bool] = []
     for context in contexts:
@@ -172,6 +208,7 @@ def load_job(path: Path) -> LoadedJob:
         contexts = _contexts(raw)
         failed = raw.get("exception_info") is not None
         reward = 0.0 if failed else _reward(raw)
+        input_tokens, cache_tokens, cache_hit_rate, cache_weighted_input = _cache_metrics(contexts)
         observations.append(
             TrialObservation(
                 task=task,
@@ -181,6 +218,10 @@ def load_job(path: Path) -> LoadedJob:
                 reported_success=_reported_success(contexts),
                 verifier_success=reward > 0.0,
                 failed=failed,
+                input_tokens=input_tokens,
+                cache_tokens=cache_tokens,
+                cache_hit_rate=cache_hit_rate,
+                cache_weighted_input=cache_weighted_input,
             )
         )
     return LoadedJob(
@@ -232,6 +273,10 @@ def task_means(job: LoadedJob) -> dict[str, dict[str, float | None]]:
         task: {
             "reward": statistics.fmean(trial.reward for trial in trials),
             "tokens": _mean_optional(trial.tokens for trial in trials),
+            "cache_weighted_input": _mean_optional(
+                trial.cache_weighted_input for trial in trials
+            ),
+            "cache_hit_rate": _mean_optional(trial.cache_hit_rate for trial in trials),
             "latency_seconds": _mean_optional(trial.latency_seconds for trial in trials),
             "failure_rate": statistics.fmean(float(trial.failed) for trial in trials),
             "reported_success_rate": statistics.fmean(
@@ -349,6 +394,18 @@ def compare_jobs(
         "tokens",
         lambda before, after: ((after / before) - 1) * 100 if before > 0 else math.nan,
     )
+    cache_weighted_changes = _paired_metric(
+        old,
+        new,
+        "cache_weighted_input",
+        lambda before, after: ((after / before) - 1) * 100 if before > 0 else math.nan,
+    )
+    cache_hit_changes = _paired_metric(
+        old,
+        new,
+        "cache_hit_rate",
+        lambda before, after: (after - before) * 100,
+    )
     latency_changes = _paired_metric(
         old,
         new,
@@ -357,6 +414,10 @@ def compare_jobs(
     )
     if token_changes is not None and any(not math.isfinite(value) for value in token_changes):
         token_changes = None
+    if cache_weighted_changes is not None and any(
+        not math.isfinite(value) for value in cache_weighted_changes
+    ):
+        cache_weighted_changes = None
     if latency_changes is not None and any(not math.isfinite(value) for value in latency_changes):
         latency_changes = None
     failure_changes = _paired_metric(
@@ -377,6 +438,16 @@ def compare_jobs(
         },
         "token_percentage_change": _interval_or_unavailable(
             token_changes, resamples=resamples, seed=seed, lower_is_better=True
+        ),
+        "cache_weighted_input_percentage_change": _interval_or_unavailable(
+            cache_weighted_changes, resamples=resamples, seed=seed, lower_is_better=True
+        ),
+        "cache_hit_rate_difference": _interval(
+            cache_hit_changes,
+            resamples=resamples,
+            seed=seed,
+            lower_is_better=False,
+            unit="percentage_points",
         ),
         "latency_percentage_change": _interval_or_unavailable(
             latency_changes, resamples=resamples, seed=seed, lower_is_better=True
@@ -467,6 +538,11 @@ def _descriptive(job: LoadedJob) -> dict[str, object]:
         "trials": len(job.trials),
         "tasks": len(_group(job)),
         "mean_reward": statistics.fmean(trial.reward for trial in job.trials),
+        "mean_tokens": _mean_optional(trial.tokens for trial in job.trials),
+        "mean_cache_weighted_input": _mean_optional(
+            trial.cache_weighted_input for trial in job.trials
+        ),
+        "mean_cache_hit_rate": _mean_optional(trial.cache_hit_rate for trial in job.trials),
         "failed_trials": sum(trial.failed for trial in job.trials),
         "reported_verifier_cross_tab": _cross_tab(job),
     }
@@ -493,6 +569,8 @@ def render_markdown(report: Mapping[str, object]) -> str:
     for label, key in [
         ("Reward difference", "reward_difference"),
         ("Token change", "token_percentage_change"),
+        ("Cache-weighted input change (0.1x cache)", "cache_weighted_input_percentage_change"),
+        ("Cache hit-rate difference", "cache_hit_rate_difference"),
         ("Latency change", "latency_percentage_change"),
         ("Failure-rate difference", "failure_rate_difference"),
         ("Reported-success difference", "reported_success_rate_difference"),

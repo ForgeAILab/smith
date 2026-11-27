@@ -64,6 +64,8 @@ class SmithAgent(BaseInstalledAgent):
         serving_name: str = "luna-max",
         run_invariants: Mapping[str, object] | None = None,
         allow_concurrent_oauth: bool = False,
+        persistence: bool = False,
+        max_input_tokens: int | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(logs_dir, version=BRIDGE_VERSION, **kwargs)
@@ -77,6 +79,10 @@ class SmithAgent(BaseInstalledAgent):
         self.variant = load_variant(variant_name)
         self.run_invariants = dict(run_invariants or {})
         self.allow_concurrent_oauth = allow_concurrent_oauth
+        self.persistence = persistence
+        self.max_input_tokens = max_input_tokens
+        if max_input_tokens is not None:
+            self.serving.effective_input_tokens(max_input_tokens)
         self._artifact: VerifiedArtifact | None = None
         self._selected_auth: SelectedAuth | None = None
         self._remote_auth_path: PurePosixPath | None = None
@@ -178,6 +184,8 @@ class SmithAgent(BaseInstalledAgent):
                     profile_instructions=self.variant.instructions,
                     delegation=self.variant.delegation,
                     serving=self.serving,
+                    max_input_tokens=self.max_input_tokens,
+                    persistence=self.persistence,
                 ),
                 encoding="utf-8",
             )
@@ -403,6 +411,17 @@ class SmithAgent(BaseInstalledAgent):
             'exit "$code"'
         )
 
+    def _run_environment(self) -> dict[str, str]:
+        """Build the per-trial process environment without leaking credentials to logs."""
+        env = {"SMITH_PERSISTENCE_ENABLED": "true" if self.persistence else "false"}
+        if (
+            not self.serving.oauth
+            and self.serving.credential_env_var is not None
+            and self._api_key is not None
+        ):
+            env[self.serving.credential_env_var] = self._api_key
+        return env
+
     @override
     async def run(
         self,
@@ -418,13 +437,7 @@ class SmithAgent(BaseInstalledAgent):
             await environment.upload_file(instruction_path, "/logs/agent/instruction.txt")
         smith_command = self._smith_command(instruction, self.serving)
         command = self._task_login_command(smith_command)
-        run_environment = {"SMITH_PERSISTENCE_ENABLED": "false"}
-        if (
-            not self.serving.oauth
-            and self.serving.credential_env_var is not None
-            and self._api_key is not None
-        ):
-            run_environment[self.serving.credential_env_var] = self._api_key
+        run_environment = self._run_environment()
         try:
             result = await environment.exec(
                 command=command,

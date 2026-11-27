@@ -16,7 +16,7 @@ from smith_harbor.profiles import (
 
 
 def test_frozen_profiles_have_expected_counts_and_serial_defaults(tmp_path: Path) -> None:
-    expected = {"smoke": (3, 1), "dev": (26, 1), "full": (82, 3)}
+    expected = {"smoke": (3, 1), "context-probe": (6, 1), "dev": (26, 1), "full": (82, 3)}
     for name, (tasks, rollouts) in expected.items():
         profile = load_profile(name)
         assert len(profile.tasks) == tasks
@@ -29,6 +29,58 @@ def test_frozen_profiles_have_expected_counts_and_serial_defaults(tmp_path: Path
         assert "oauth-secret" not in rendered
         assert config["artifacts"] == []
         assert config["n_concurrent_trials"] == 1
+
+
+def test_context_probe_supports_glm_persistence_input_cap_and_concurrency(tmp_path: Path) -> None:
+    from smith_harbor.constants import load_serving
+
+    profile = load_profile("context-probe")
+    glm = load_serving("glm-5.3")
+    config = job_config(
+        profile,
+        job_name="smith-glm-context-probe",
+        jobs_dir=tmp_path,
+        concurrency=3,
+        serving=glm,
+        persistence=True,
+        max_input_tokens=64_000,
+    )
+    assert config["n_concurrent_trials"] == 3
+    (agent,) = config["agents"]
+    kwargs = agent["kwargs"]
+    assert kwargs["persistence"] is True
+    assert kwargs["max_input_tokens"] == 64_000
+    invariants = kwargs["run_invariants"]
+    assert invariants["persistence"] is True
+    assert invariants["serving_limits"]["max_input_tokens"] == 64_000
+    assert invariants["serving_limits"]["context_tokens"] == 64_000 + glm.max_output_tokens
+    assert (
+        run_profile(
+            "context-probe",
+            job_name="smith-glm-context-probe",
+            jobs_dir=tmp_path,
+            concurrency=3,
+            print_config=True,
+            serving_name="glm-5.3",
+            persistence=True,
+            max_input_tokens=64_000,
+        )
+        == 0
+    )
+
+
+def test_max_input_tokens_override_must_exceed_capability_budget(tmp_path: Path) -> None:
+    from smith_harbor.constants import load_serving
+
+    profile = load_profile("context-probe")
+    with pytest.raises(ProfileError, match="max_input_tokens"):
+        job_config(
+            profile,
+            job_name="smith-glm-tiny",
+            jobs_dir=tmp_path,
+            serving=load_serving("glm-5.3"),
+            max_input_tokens=12_000,
+        )
 
 
 def test_unsafe_oauth_concurrency_requires_a_visible_job_label(tmp_path: Path) -> None:

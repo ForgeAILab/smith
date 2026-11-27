@@ -60,3 +60,25 @@ def test_task_command_falls_back_to_posix_shell_without_bash(tmp_path: Path) -> 
     )
 
     assert result.stdout == "fallback"
+
+
+def test_smith_agent_propagates_persistence_and_max_input_tokens(tmp_path: Path) -> None:
+    default_agent = SmithAgent(
+        tmp_path / "default",
+        model_name="zai/glm-5.3",
+        serving_name="glm-5.3",
+    )
+    assert default_agent.persistence is False
+    assert default_agent.max_input_tokens is None
+    assert default_agent._run_environment()["SMITH_PERSISTENCE_ENABLED"] == "false"
+
+    persisted_agent = SmithAgent(
+        tmp_path / "persisted",
+        model_name="zai/glm-5.3",
+        serving_name="glm-5.3",
+        persistence=True,
+        max_input_tokens=64_000,
+    )
+    assert persisted_agent.persistence is True
+    assert persisted_agent.max_input_tokens == 64_000
+    assert persisted_agent._run_environment()["SMITH_PERSISTENCE_ENABLED"] == "true"
