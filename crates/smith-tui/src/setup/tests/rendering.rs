@@ -311,10 +311,13 @@ fn embedded_review_scrolls_inside_the_session_pane() {
         assert_eq!(scroll.offset, scroll.limit);
         assert!(!text.contains("Smith setup"), "{text}");
         assert!(!text.contains("? for shortcuts"), "{text}");
+        // Inside a session the review ends with choices that stay on screen.
+        assert!(text.contains("1. Replace these values"), "{text}");
+        assert!(text.contains("2. Go back"), "{text}");
         assert!(
             rows.last()
                 .expect("hint row")
-                .starts_with("  enter confirm · esc back"),
+                .contains("enter confirm · esc back"),
             "{text}"
         );
         assert_eq!(backdrop.composer.text(), "retained draft");

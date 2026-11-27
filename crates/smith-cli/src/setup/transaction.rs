@@ -1,8 +1,8 @@
 use super::{
-    ApplyOutcome, ConfigReadiness, CredentialEnroller, CredentialEnrollmentError, CredentialRef,
-    EffectCancellation, EnrollmentReceipt, FactoryError, HostSurface, ResolveRequest, Result,
-    SetupContext, SetupSubmission, canonical_start, factory, inspect, prepare_user_config_edit,
-    setup_keychain_reference, setup_plan,
+    ApplyOutcome, ConfigFile, ConfigReadiness, CredentialEnroller, CredentialEnrollmentError,
+    CredentialRef, EffectCancellation, EnrollmentReceipt, FactoryError, HostSurface, Path,
+    ResolveRequest, Result, SetupContext, SetupSubmission, canonical_start, factory, inspect,
+    prepare_user_config_edit, setup_keychain_reference, setup_plan,
 };
 
 pub(super) async fn apply_submission(
@@ -45,6 +45,33 @@ pub(super) async fn apply_submission(
     match outcome {
         ApplyOutcome::Failed { message, .. } if message == CANCELLED => ApplyOutcome::Cancelled,
         outcome => outcome,
+    }
+}
+
+/// A new default joins the user's profile cycle instead of replacing it.
+///
+/// Read from the user file, which is the only layer setup writes. Without an
+/// explicit order the resolver already cycles every main profile, so writing
+/// one would only hide the profiles it leaves out.
+pub(super) fn merge_profile_order(user_dir: &Path, patch: &mut ConfigFile) {
+    let Some(added) = patch.profile_order.take() else {
+        return;
+    };
+    let Some(mut order) = std::fs::read_to_string(user_dir.join("config.toml"))
+        .ok()
+        .and_then(|text| ConfigFile::parse(&text).ok())
+        .and_then(|file| file.profile_order)
+    else {
+        return;
+    };
+    let before = order.len();
+    for name in added {
+        if !order.contains(&name) {
+            order.push(name);
+        }
+    }
+    if order.len() != before {
+        patch.profile_order = Some(order);
     }
 }
 
@@ -92,6 +119,7 @@ where
             };
         }
     };
+    merge_profile_order(&context.user_dir, &mut plan.patch);
     if let Some(model) = cache_backed_model {
         // Discovery publishes generated metadata in the scoped cache. An
         // unchanged selection must not turn it into a permanent TOML override.

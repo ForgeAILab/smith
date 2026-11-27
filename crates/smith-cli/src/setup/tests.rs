@@ -342,7 +342,7 @@ async fn anthropic_gateway_setup_publishes_a_provider_and_rolls_back_on_failure(
     assert!(resolve_model_limits(&context, &request).await.is_none());
     app.apply_resolved_limits(None);
     app.on_paste("64000");
-    app.on_key(setup_key(KeyCode::Enter));
+    // First run makes the gateway the default without asking.
     app.on_key(setup_key(KeyCode::Enter));
     let SetupEffect::Submit {
         submission,
@@ -705,6 +705,7 @@ fn xai_plan_writes_the_endpoint_the_catalog_binds_to() {
             secret,
         )),
         model: "grok-4.5".into(),
+        make_default: true,
     })
     .expect("a plan");
 
@@ -736,6 +737,7 @@ fn an_empty_xai_model_is_refused_rather_than_written() {
         setup_plan(SetupSubmission::QuickXai {
             credential: SetupCredential::Environment("XAI_API_KEY".into()),
             model: "  ".into(),
+            make_default: true,
         })
         .is_err()
     );
@@ -789,6 +791,7 @@ fn google_plan_uses_the_catalog_model_without_copying_endpoint_or_limits() {
     let plan = setup_plan(SetupSubmission::QuickGoogle {
         credential: SetupCredential::StoreInKeychain(Secret::new(secret)),
         model: "gemini-3.6-flash".to_owned(),
+        make_default: true,
     })
     .expect("a Google plan");
     let serialized = toml::to_string(&plan.patch).expect("TOML");
@@ -814,6 +817,7 @@ fn anthropic_plan_writes_the_official_endpoint_and_no_model_metadata() {
     let plan = setup_plan(SetupSubmission::QuickAnthropic {
         credential: SetupCredential::StoreInKeychain(Secret::new(secret)),
         model: "claude-opus-5-5".to_owned(),
+        make_default: true,
     })
     .expect("an Anthropic plan");
     let serialized = toml::to_string(&plan.patch).expect("TOML");
@@ -835,9 +839,99 @@ fn anthropic_plan_writes_the_official_endpoint_and_no_model_metadata() {
         setup_plan(SetupSubmission::QuickAnthropic {
             credential: SetupCredential::StoreInKeychain(Secret::new(secret)),
             model: " ".to_owned(),
+            make_default: true,
         })
         .is_err()
     );
+}
+
+#[test]
+fn keeping_the_default_writes_only_the_catalog_provider() {
+    for (submission, provider) in [
+        (
+            SetupSubmission::QuickAnthropic {
+                credential: SetupCredential::Environment("ANTHROPIC_API_KEY".into()),
+                model: "claude-opus-5-5".to_owned(),
+                make_default: false,
+            },
+            smith_config::setup::ANTHROPIC_PROVIDER,
+        ),
+        (
+            SetupSubmission::QuickGoogle {
+                credential: SetupCredential::Environment("GEMINI_API_KEY".into()),
+                model: "gemini-3.6-flash".to_owned(),
+                make_default: false,
+            },
+            GOOGLE_PROVIDER,
+        ),
+        (
+            SetupSubmission::QuickXai {
+                credential: SetupCredential::Environment("XAI_API_KEY".into()),
+                model: "grok-4.5".to_owned(),
+                make_default: false,
+            },
+            XAI_PROVIDER,
+        ),
+    ] {
+        let plan = setup_plan(submission).expect("a plan");
+        assert_eq!(
+            plan.patch.providers.keys().collect::<Vec<_>>(),
+            [provider],
+            "{provider}"
+        );
+        assert_eq!(plan.patch.default_profile, None, "{provider}");
+        assert_eq!(plan.patch.profile_order, None, "{provider}");
+        assert!(plan.patch.profiles.is_empty(), "{provider}");
+        assert!(plan.patch.models.is_empty(), "{provider}");
+    }
+}
+
+#[test]
+fn a_new_default_joins_the_existing_profile_order() {
+    let user = tempfile::tempdir().expect("user dir");
+    let config = user.path().join("config.toml");
+    let patch = || {
+        setup_plan(SetupSubmission::QuickAnthropic {
+            credential: SetupCredential::Environment("ANTHROPIC_API_KEY".into()),
+            model: "claude-opus-5-5".to_owned(),
+            make_default: true,
+        })
+        .expect("a plan")
+        .patch
+    };
+
+    // No user file, or one without an order: the derived order already
+    // cycles every main profile, so none is written.
+    let mut absent = patch();
+    super::transaction::merge_profile_order(user.path(), &mut absent);
+    assert_eq!(absent.profile_order, None);
+    std::fs::write(&config, "default_profile = \"code\"\n").expect("config");
+    let mut unset = patch();
+    super::transaction::merge_profile_order(user.path(), &mut unset);
+    assert_eq!(unset.profile_order, None);
+
+    std::fs::write(&config, "profile_order = [\"code\", \"sol\"]\n").expect("config");
+    let mut appended = patch();
+    super::transaction::merge_profile_order(user.path(), &mut appended);
+    assert_eq!(
+        appended.profile_order.as_deref(),
+        Some(
+            ["code", "sol", "claude", "claude-plan", "claude-review"]
+                .map(str::to_owned)
+                .as_slice()
+        )
+    );
+    assert_eq!(appended.default_profile.as_deref(), Some("claude"));
+
+    // Already listed: the order is left alone rather than rewritten.
+    std::fs::write(
+        &config,
+        "profile_order = [\"claude\", \"code\", \"claude-plan\", \"claude-review\"]\n",
+    )
+    .expect("config");
+    let mut listed = patch();
+    super::transaction::merge_profile_order(user.path(), &mut listed);
+    assert_eq!(listed.profile_order, None);
 }
 
 #[test]

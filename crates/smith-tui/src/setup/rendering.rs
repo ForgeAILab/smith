@@ -17,6 +17,12 @@ impl Screen for SetupApp {
     }
 
     fn content_height(&self, width: u16) -> u16 {
+        if let Some(picker) = self.review_picker() {
+            let rows = setup_content_rows(self, width, Theme::new()).len()
+                + 1
+                + choice_lines(picker, width, Theme::new()).len();
+            return u16::try_from(rows.saturating_add(2)).unwrap_or(u16::MAX);
+        }
         if let Some(picker) = self.model_picker() {
             return compact_picker_rows(picker, width, self.error.as_deref());
         }
@@ -40,6 +46,10 @@ impl Screen for SetupApp {
     fn footer(&self) -> Option<ScreenFooter> {
         let back = !self.history.is_empty();
         Some(match self.step {
+            Step::Review if self.picker.is_some() => self
+                .picker
+                .as_ref()
+                .map_or(ScreenFooter::Field { back }, ResourcePicker::footer),
             Step::Review => {
                 let scroll = self.review_scroll.get();
                 ScreenFooter::Review {
@@ -95,6 +105,10 @@ fn draw_setup_surface(
 ) {
     let back = !app.history.is_empty();
     let base_title = app.title.as_deref().unwrap_or("Smith setup");
+    if let Some(picker) = app.review_picker() {
+        draw_review_choices(frame, area, app, picker, base_title, theme, embedded);
+        return;
+    }
     if let Some(picker) = app.model_picker() {
         // The default-model choice is the session's model picker: the same
         // compact pane above the composer, or at the bottom of the screen
@@ -231,6 +245,50 @@ impl SetupApp {
             .as_ref()
             .filter(|_| self.step == Step::ModelChoice)
     }
+
+    /// The save/back choice under a review shown inside a session.
+    fn review_picker(&self) -> Option<&ResourcePicker> {
+        self.picker.as_ref().filter(|_| self.step == Step::Review)
+    }
+}
+
+/// Draws a review whose rows scroll above choices that always stay visible.
+fn draw_review_choices(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &SetupApp,
+    picker: &ResourcePicker,
+    base_title: &str,
+    theme: Theme,
+    embedded: bool,
+) {
+    let rows = setup_content_rows(app, area.width, theme);
+    let mut choices = vec![Line::default()];
+    choices.extend(choice_lines(picker, area.width, theme));
+    let body = draw_inline_screen(
+        frame,
+        area,
+        &format!("{base_title} · Review · nothing is written until you confirm"),
+        rows.len() + choices.len(),
+        (!embedded).then(|| picker.footer()),
+        theme,
+    );
+    let page = usize::from(body.height).saturating_sub(choices.len());
+    let limit = rows.len().saturating_sub(page);
+    let offset = app.review_scroll.get().offset.min(limit);
+    app.review_scroll.set(ReviewScroll {
+        offset,
+        limit,
+        page,
+    });
+    let visible = rows
+        .into_iter()
+        .skip(offset)
+        .take(page)
+        .chain(choices)
+        .take(usize::from(body.height))
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(visible), body);
 }
 
 fn setup_content_rows(app: &SetupApp, width: u16, theme: Theme) -> Vec<Line<'static>> {
@@ -248,7 +306,10 @@ fn setup_content_rows(app: &SetupApp, width: u16, theme: Theme) -> Vec<Line<'sta
                 ));
                 lines.push(Line::default());
             }
-            lines.extend(app.wrapped_review_lines(width));
+            // A connection that writes without a review does not show one while saving.
+            if !(app.step == Step::Busy && app.writes_without_review()) {
+                lines.extend(app.wrapped_review_lines(width));
+            }
         }
         _ => {
             let (_, help, masked) = app.prompt();
@@ -258,18 +319,18 @@ fn setup_content_rows(app: &SetupApp, width: u16, theme: Theme) -> Vec<Line<'sta
             }
             let field = if masked { &app.secret.0 } else { &app.input };
             let (visible, _) = field.viewport(usize::from(width).saturating_sub(2));
-            let value = if masked {
-                visible.clone()
-            } else if app.input.is_empty() {
-                "type a value".to_owned()
-            } else {
+            let value = if !field.is_empty() {
                 visible
+            } else if masked {
+                "paste your API key".to_owned()
+            } else {
+                "type a value".to_owned()
             };
             lines.push(Line::from(vec![
                 Span::styled("› ", theme.style(Tone::Accent)),
                 Span::styled(
                     value,
-                    theme.style(if !masked && app.input.is_empty() {
+                    theme.style(if field.is_empty() {
                         Tone::Dim
                     } else {
                         Tone::Default

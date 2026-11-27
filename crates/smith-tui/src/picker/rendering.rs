@@ -510,6 +510,15 @@ fn draw_picker_heading(
     }
 }
 
+/// Every row of a short choice list, for owners that draw it under their own content.
+pub(crate) fn choice_lines(
+    picker: &ResourcePicker,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    entry_view_capped(picker, usize::MAX, width, theme, false, usize::MAX).lines
+}
+
 /// Row measurement uses the production viewport logic, preserving the five-choice cap.
 pub(crate) fn compact_resource_picker_rows(picker: &ResourcePicker) -> u16 {
     let view = entry_view(picker, usize::MAX, u16::MAX, Theme::new(), true);

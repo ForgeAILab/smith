@@ -23,12 +23,16 @@ impl SetupApp {
         if self.step == Step::Busy {
             return SetupEffect::None;
         }
-        if self.step == Step::Review
-            && matches!(
+        // A review with choices keeps the arrows for choosing; only paging scrolls it.
+        let scrolls = if self.picker.is_some() {
+            matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
+        } else {
+            matches!(
                 key.code,
                 KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown
             )
-        {
+        };
+        if self.step == Step::Review && scrolls {
             let mut scroll = self.review_scroll.get();
             let page = scroll.page.max(1);
             scroll.offset = match key.code {
@@ -41,7 +45,10 @@ impl SetupApp {
             self.review_scroll.set(scroll);
             return SetupEffect::None;
         }
-        self.error = None;
+        // Moving between review choices must not erase why the review is shown.
+        if self.step != Step::Review {
+            self.error = None;
+        }
 
         if let Some(picker) = &mut self.picker {
             return match picker.on_key(key) {
@@ -249,11 +256,32 @@ impl SetupApp {
                 ],
                 "Choose whether to change the default.",
             )),
+            // Inside a session a review is a choice, not text that only takes Enter.
+            Step::Review if self.is_connection() => Some(ResourcePicker::choices(
+                "Review",
+                vec![
+                    if self.collision_preview.is_some() {
+                        ResourceEntry::new(
+                            "save",
+                            "Replace these values",
+                            "write the changes listed above",
+                        )
+                    } else {
+                        ResourceEntry::new("save", "Save connection", "write the values above")
+                    },
+                    ResourceEntry::new("back", "Go back", "change an earlier choice"),
+                ],
+                "Choose whether to save.",
+            )),
             _ => None,
         };
         if let Some(picker) = self.picker.take() {
             let mut picker = picker.with_back(!self.history.is_empty());
-            if let Some(id) = self.picker_selections.get(&self.step)
+            // Every review opens on saving, whatever was chosen last time.
+            let remembered = (self.step != Step::Review)
+                .then(|| self.picker_selections.get(&self.step))
+                .flatten();
+            if let Some(id) = remembered
                 && let Some(index) = picker.entries.iter().position(|entry| &entry.id == id)
             {
                 picker.selected = index;
@@ -410,7 +438,8 @@ impl SetupApp {
                     self.context_tokens = Some(limits.context_tokens);
                     self.max_input_tokens = Some(limits.max_input_tokens);
                     self.max_output_tokens = Some(limits.max_output_tokens);
-                    self.enter(Step::DefaultChoice, true);
+                    let next = self.default_step();
+                    self.enter(next, true);
                 } else if let Some((provider, model)) = id.split_once('/') {
                     self.provider = provider.to_owned();
                     self.model = model.to_owned();
@@ -419,17 +448,18 @@ impl SetupApp {
             }
             Step::ResponseBehavior => {
                 self.reasoning_only_text = id == "reasoning-text";
-                if matches!(self.mode, SetupMode::FirstRun) {
-                    self.make_default = true;
-                    self.enter(Step::Review, true);
-                } else {
-                    self.enter(Step::DefaultChoice, true);
-                }
+                let next = self.default_step();
+                self.enter(next, true);
             }
             Step::DefaultChoice => {
                 self.make_default = id == "yes";
                 self.enter(Step::Review, true);
+                if self.writes_without_review() {
+                    return self.submit_review();
+                }
             }
+            Step::Review if id == "save" => return self.submit_review(),
+            Step::Review if id == "back" => self.back(),
             _ => {}
         }
         SetupEffect::None
@@ -448,6 +478,52 @@ impl SetupApp {
         SetupEffect::DiscoverModels {
             provider: self.provider.clone(),
         }
+    }
+
+    /// Hands the reviewed choices to the CLI to write and check.
+    fn submit_review(&mut self) -> SetupEffect {
+        let Some(submission) = self.submission() else {
+            self.error = Some("Setup choices are incomplete; go Back and review them.".into());
+            return SetupEffect::None;
+        };
+        self.step = Step::Busy;
+        // The review's choices and its explanation end with the review.
+        self.picker = None;
+        self.error = None;
+        self.step_generation = self.step_generation.wrapping_add(1);
+        SetupEffect::Submit {
+            submission,
+            allow_collisions: self.allow_collisions,
+        }
+    }
+
+    /// The step after a model is settled. An empty install has no default to
+    /// keep, so first run makes the connection the default without asking.
+    pub(super) fn default_step(&mut self) -> Step {
+        if matches!(self.mode, SetupMode::FirstRun) {
+            self.make_default = true;
+            Step::Review
+        } else {
+            Step::DefaultChoice
+        }
+    }
+
+    /// Whether this flow was opened by a connection inside a session.
+    pub(super) fn is_connection(&self) -> bool {
+        self.title.is_some()
+    }
+
+    /// A catalog key connection inside a session has nothing typed but its key,
+    /// so it writes once the default is answered; a collision still reviews.
+    pub(super) fn writes_without_review(&self) -> bool {
+        self.is_connection()
+            && self.catalog_models
+            && matches!(
+                self.action,
+                Some(
+                    SetupAction::QuickXai | SetupAction::QuickGoogle | SetupAction::QuickAnthropic
+                )
+            )
     }
 
     pub(super) fn needs_response_behavior(&self) -> bool {
@@ -604,24 +680,13 @@ impl SetupApp {
                     if self.needs_response_behavior() {
                         self.enter(Step::ResponseBehavior, true);
                     } else {
-                        self.enter(Step::DefaultChoice, true);
+                        let next = self.default_step();
+                        self.enter(next, true);
                     }
                 }
                 Err(error) => self.error = Some(error),
             },
-            Step::Review => {
-                let Some(submission) = self.submission() else {
-                    self.error =
-                        Some("Setup choices are incomplete; go Back and review them.".into());
-                    return SetupEffect::None;
-                };
-                self.step = Step::Busy;
-                self.step_generation = self.step_generation.wrapping_add(1);
-                return SetupEffect::Submit {
-                    submission,
-                    allow_collisions: self.allow_collisions,
-                };
-            }
+            Step::Review => return self.submit_review(),
             _ => {}
         }
         SetupEffect::None
@@ -652,14 +717,17 @@ impl SetupApp {
             SetupAction::QuickXai => Some(SetupSubmission::QuickXai {
                 credential: credential()?,
                 model: self.model.clone(),
+                make_default: self.make_default,
             }),
             SetupAction::QuickGoogle => Some(SetupSubmission::QuickGoogle {
                 credential: credential()?,
                 model: self.model.clone(),
+                make_default: self.make_default,
             }),
             SetupAction::QuickAnthropic => Some(SetupSubmission::QuickAnthropic {
                 credential: credential()?,
                 model: self.model.clone(),
+                make_default: self.make_default,
             }),
             SetupAction::AddProvider => Some(SetupSubmission::AddProvider {
                 kind: self.provider_kind,

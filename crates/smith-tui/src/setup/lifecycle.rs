@@ -175,7 +175,7 @@ impl SetupApp {
                 let next = if self.needs_response_behavior() {
                     Step::ResponseBehavior
                 } else {
-                    Step::DefaultChoice
+                    self.default_step()
                 };
                 self.enter(next, true);
                 self.history.push(Step::ContextTokens);
@@ -211,8 +211,12 @@ impl SetupApp {
         self.review_scroll.set(ReviewScroll::default());
         self.allow_collisions = true;
         self.error = Some(
-            "Existing values differ. Review the additional lines, then press Enter again to replace only those values."
-                .into(),
+            if self.is_connection() {
+                "Existing values differ. Review the additional lines, then choose Replace these values to replace only those values."
+            } else {
+                "Existing values differ. Review the additional lines, then press Enter again to replace only those values."
+            }
+            .into(),
         );
         self.step = Step::Review;
         self.configure_picker();

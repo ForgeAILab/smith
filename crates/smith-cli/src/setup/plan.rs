@@ -61,7 +61,11 @@ pub(super) fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                 secret: enrollment_secret,
             })
         }
-        SetupSubmission::QuickXai { credential, model } => {
+        SetupSubmission::QuickXai {
+            credential,
+            model,
+            make_default,
+        } => {
             if model.trim().is_empty() {
                 anyhow::bail!("xAI setup requires a model selected from the frozen catalog");
             }
@@ -86,7 +90,9 @@ pub(super) fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                 )]),
                 ..ConfigFile::default()
             };
-            select_default(&mut patch, XAI_PROFILE, XAI_PROVIDER, &model, 8_192);
+            if make_default {
+                select_default(&mut patch, XAI_PROFILE, XAI_PROVIDER, &model, 8_192);
+            }
             if let Some(profile) = patch.profiles.get_mut(XAI_PROFILE) {
                 // The frozen Models.dev snapshot owns the limits; the user
                 // config stores no duplicate model metadata to drift from it.
@@ -99,7 +105,11 @@ pub(super) fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                 secret: enrollment_secret,
             })
         }
-        SetupSubmission::QuickGoogle { credential, model } => {
+        SetupSubmission::QuickGoogle {
+            credential,
+            model,
+            make_default,
+        } => {
             if model.trim().is_empty() {
                 anyhow::bail!("Google setup requires a model selected from the frozen catalog");
             }
@@ -120,7 +130,9 @@ pub(super) fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                 )]),
                 ..ConfigFile::default()
             };
-            select_default(&mut patch, GOOGLE_PROFILE, GOOGLE_PROVIDER, &model, 8_192);
+            if make_default {
+                select_default(&mut patch, GOOGLE_PROFILE, GOOGLE_PROVIDER, &model, 8_192);
+            }
             if let Some(profile) = patch.profiles.get_mut(GOOGLE_PROFILE) {
                 // The frozen Models.dev snapshot supplied to preflight/runtime
                 // owns the model limits; the user config stores no guessed
@@ -134,7 +146,11 @@ pub(super) fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                 secret: enrollment_secret,
             })
         }
-        SetupSubmission::QuickAnthropic { credential, model } => {
+        SetupSubmission::QuickAnthropic {
+            credential,
+            model,
+            make_default,
+        } => {
             if model.trim().is_empty() {
                 anyhow::bail!("Anthropic setup requires a model selected from the frozen catalog");
             }
@@ -159,13 +175,17 @@ pub(super) fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                 )]),
                 ..ConfigFile::default()
             };
-            select_default(
-                &mut patch,
-                ANTHROPIC_PROFILE,
-                ANTHROPIC_PROVIDER,
-                &model,
-                8_192,
-            );
+            // Keeping the current default writes the provider alone; its
+            // catalog keeps every model selectable through `/model`.
+            if make_default {
+                select_default(
+                    &mut patch,
+                    ANTHROPIC_PROFILE,
+                    ANTHROPIC_PROVIDER,
+                    &model,
+                    8_192,
+                );
+            }
             if let Some(profile) = patch.profiles.get_mut(ANTHROPIC_PROFILE) {
                 // The frozen Models.dev snapshot owns the limits; the user
                 // config stores no duplicate model metadata to drift from it.

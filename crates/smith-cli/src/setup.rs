@@ -81,11 +81,31 @@ fn completion_summary(submission: &SetupSubmission, destination: &Path) -> Strin
             if make_default { " as the default" } else { "" }
         )
     };
+    // A catalog connection that keeps the default writes no model.
+    let connected = |provider: &str, model: &str, make_default: bool| {
+        if make_default {
+            added(provider, model, true)
+        } else {
+            format!("connected {provider}; choose its models with /model")
+        }
+    };
     let change = match submission {
         SetupSubmission::QuickGlm { .. } => added(GLM_PROVIDER, GLM_5_3.model, true),
-        SetupSubmission::QuickXai { model, .. } => added(XAI_PROVIDER, model, true),
-        SetupSubmission::QuickGoogle { model, .. } => added(GOOGLE_PROVIDER, model, true),
-        SetupSubmission::QuickAnthropic { model, .. } => added(ANTHROPIC_PROVIDER, model, true),
+        SetupSubmission::QuickXai {
+            model,
+            make_default,
+            ..
+        } => connected(XAI_PROVIDER, model, *make_default),
+        SetupSubmission::QuickGoogle {
+            model,
+            make_default,
+            ..
+        } => connected(GOOGLE_PROVIDER, model, *make_default),
+        SetupSubmission::QuickAnthropic {
+            model,
+            make_default,
+            ..
+        } => connected(ANTHROPIC_PROVIDER, model, *make_default),
         SetupSubmission::AddProvider {
             provider,
             model,

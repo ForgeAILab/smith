@@ -64,8 +64,8 @@ fn anthropic_reuses_credentials_limits_and_review_with_its_native_kind() {
             app.on_paste("64000");
             app.on_key(key(KeyCode::Enter));
         }
-        assert_eq!(app.step, Step::DefaultChoice);
-        choose(&mut app, "yes");
+        // First run has no default to keep, so it never asks.
+        assert_eq!(app.step, Step::Review);
         let review = app.review_lines().join("\n");
         assert!(
             review
@@ -78,11 +78,10 @@ fn anthropic_reuses_credentials_limits_and_review_with_its_native_kind() {
         assert!(review.contains("anthropic/claude-reviewed"), "{review}");
         assert!(!review.contains("sk-anthropic-test-only"), "{review}");
         app.on_key(key(KeyCode::BackTab));
-        app.on_key(key(KeyCode::BackTab));
         assert_eq!(app.step, Step::ContextTokens);
         assert!(!app.input.is_empty(), "Back retains non-secret context");
         app.on_key(key(KeyCode::Enter));
-        choose(&mut app, "yes");
+        assert_eq!(app.step, Step::Review);
         assert!(matches!(
             app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             SetupEffect::Cancel
@@ -241,7 +240,7 @@ fn google_mode_chooses_a_catalog_model_without_collecting_an_endpoint() {
     assert!(matches!(
         app.on_key(key(KeyCode::Enter)),
         SetupEffect::Submit {
-            submission: SetupSubmission::QuickGoogle { model: selected, credential: SetupCredential::Environment(variable) },
+            submission: SetupSubmission::QuickGoogle { model: selected, credential: SetupCredential::Environment(variable), make_default: true },
             allow_collisions: false,
         } if selected == model && variable == "GEMINI_API_KEY"
     ));
@@ -732,4 +731,145 @@ fn glm_funnel_reaches_a_non_secret_review_and_submission() {
             allow_collisions: false,
         } if variable == "ZAI_API_KEY"
     ));
+}
+
+fn google_connection() -> SetupApp {
+    let model = "gemini-3.6-flash";
+    let limits = SetupModelLimits {
+        context_tokens: 1_048_576,
+        max_input_tokens: 1_048_576,
+        max_output_tokens: 65_536,
+    };
+    let mut app = setup_app(
+        direct_provider_mode("google"),
+        Vec::new(),
+        vec![ResourceEntry::new(
+            model,
+            "Gemini 3.6 Flash",
+            "catalog limits",
+        )],
+    )
+    .with_catalog_model_limits(BTreeMap::from([(model.to_owned(), limits)]))
+    .with_title("Connect Google Gemini");
+    choose(&mut app, "environment");
+    app.on_paste("GEMINI_API_KEY");
+    app.on_key(key(KeyCode::Enter));
+    choose(&mut app, model);
+    assert_eq!(app.step, Step::DefaultChoice);
+    app
+}
+
+fn render_embedded(app: &SetupApp, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            app.draw_embedded(frame, area, Theme::new().without_color().without_motion());
+        })
+        .expect("draw");
+    setup_screen(terminal.backend().buffer())
+}
+
+#[test]
+fn a_connection_keeping_the_default_writes_without_a_review() {
+    let mut app = google_connection();
+    let effect = app.select_picker("no".to_owned());
+    assert!(
+        matches!(
+            &effect,
+            SetupEffect::Submit {
+                submission: SetupSubmission::QuickGoogle {
+                    make_default: false,
+                    ..
+                },
+                allow_collisions: false,
+            }
+        ),
+        "{effect:?}"
+    );
+    assert!(app.is_busy());
+    let saving = render_embedded(&app, 100, 12);
+    assert!(!saving.contains("Models.dev frozen catalog"), "{saving}");
+}
+
+#[test]
+fn a_connection_collision_is_a_numbered_choice() {
+    let mut app = google_connection();
+    assert!(matches!(
+        app.select_picker("yes".to_owned()),
+        SetupEffect::Submit {
+            submission: SetupSubmission::QuickGoogle {
+                make_default: true,
+                ..
+            },
+            allow_collisions: false,
+        }
+    ));
+    app.review_collisions("~ default_profile: \"code\" -> \"gemini\"");
+    assert_eq!(app.step, Step::Review);
+    let rendered = render_embedded(&app, 100, 30);
+    assert!(rendered.contains("1. Replace these values"), "{rendered}");
+    assert!(rendered.contains("2. Go back"), "{rendered}");
+    assert!(rendered.contains("default_profile"), "{rendered}");
+    assert!(
+        matches!(
+            app.footer(),
+            Some(ScreenFooter::List {
+                choices: Some(2),
+                ..
+            })
+        ),
+        "{:?}",
+        app.footer()
+    );
+
+    // Arrows choose rather than scroll, and choosing Back writes nothing.
+    assert!(matches!(app.on_key(key(KeyCode::Down)), SetupEffect::None));
+    assert!(matches!(app.on_key(key(KeyCode::Enter)), SetupEffect::None));
+    assert_eq!(app.step, Step::DefaultChoice);
+
+    // Confirming the collision is what allows replacing existing values.
+    app.select_picker("yes".to_owned());
+    app.review_collisions("~ default_profile: \"code\" -> \"gemini\"");
+    assert!(matches!(
+        app.on_key(key(KeyCode::Char('1'))),
+        SetupEffect::Submit {
+            allow_collisions: true,
+            ..
+        }
+    ));
+    let saving = render_embedded(&app, 100, 30);
+    assert!(!saving.contains("Existing values differ"), "{saving}");
+    assert!(!saving.contains("Replace these values"), "{saving}");
+}
+
+#[test]
+fn a_tall_connection_review_keeps_its_choices_on_screen() {
+    let mut app = google_connection();
+    app.select_picker("yes".to_owned());
+    let preview = (0..40)
+        .map(|index| format!("+ profiles.gemini.line{index} = \"value\""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.review_collisions(preview);
+    let rendered = render_embedded(&app, 100, 14);
+    assert!(rendered.contains("1. Replace these values"), "{rendered}");
+    assert!(rendered.contains("2. Go back"), "{rendered}");
+    app.on_key(key(KeyCode::PageDown));
+    let scrolled = render_embedded(&app, 100, 14);
+    assert_ne!(rendered, scrolled);
+    assert!(scrolled.contains("2. Go back"), "{scrolled}");
+}
+
+#[test]
+fn an_empty_key_field_says_what_to_paste() {
+    let mut app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+    choose(&mut app, "glm");
+    choose(&mut app, "keychain");
+    let empty = render_setup(&app, 100, 20);
+    assert!(empty.contains("› paste your API key"), "{empty}");
+    app.on_paste("sk-test-key");
+    let typed = render_setup(&app, 100, 20);
+    assert!(!typed.contains("paste your API key"), "{typed}");
+    assert!(!typed.contains("sk-test-key"), "{typed}");
 }

@@ -18,9 +18,9 @@ use ratatui::widgets::Paragraph;
 use smith_client::compact_tokens;
 
 use crate::picker::{
-    PickerContext, PickerOutcome, ResourceEntry, ResourcePicker, ScreenFooter, compact_picker_rows,
-    draw_bottom_picker, draw_compact_picker, draw_inline_screen, draw_picker_context,
-    indented_words, picker_content_height,
+    PickerContext, PickerOutcome, ResourceEntry, ResourcePicker, ScreenFooter, choice_lines,
+    compact_picker_rows, draw_bottom_picker, draw_compact_picker, draw_inline_screen,
+    draw_picker_context, indented_words, picker_content_height,
 };
 use crate::screen::{Screen, ScreenEvent, Step as ScreenStep};
 use crate::theme::{Theme, Tone};
@@ -244,6 +244,8 @@ pub enum SetupSubmission {
         credential: SetupCredential,
         /// Exact model selected from the frozen xAI catalog.
         model: String,
+        /// Whether this connection becomes the default.
+        make_default: bool,
     },
     /// Native Google Gemini connection and its reviewed catalog model.
     QuickGoogle {
@@ -251,6 +253,8 @@ pub enum SetupSubmission {
         credential: SetupCredential,
         /// Exact model selected from the frozen Google catalog.
         model: String,
+        /// Whether this connection becomes the default.
+        make_default: bool,
     },
     /// Native Anthropic connection and its reviewed catalog model.
     QuickAnthropic {
@@ -258,6 +262,8 @@ pub enum SetupSubmission {
         credential: SetupCredential,
         /// Exact model selected from the frozen Anthropic catalog.
         model: String,
+        /// Whether this connection becomes the default.
+        make_default: bool,
     },
     /// A provider and its first model collected by the shared wizard.
     AddProvider {
