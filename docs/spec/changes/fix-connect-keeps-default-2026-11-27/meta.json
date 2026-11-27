@@ -1,0 +1,11 @@
+{
+  "change_id": "fix-connect-keeps-default",
+  "change_ref": "fix-connect-keeps-default-2026-11-27",
+  "created_at": "2026-11-27T20:40:00Z",
+  "updated_at": "2026-11-27T20:40:00Z",
+  "completed_at": null,
+  "status": "approved",
+  "depends_on": [
+    "add-anthropic-provider-2026-11-27"
+  ]
+}
