@@ -19,7 +19,8 @@
 //!   gone when it does not. That is both simpler than a claim flag and more
 //!   useful: a model that ignored the warning on one turn sees it on the next.
 //!
-//! Pressure is observed at turn commit, where the usage ledger is available,
+//! Pressure is observed both before each provider attempt (`before_provider`)
+//! and at turn commit (`after_commit`), where the usage ledger is available,
 //! and projected at context assembly, where it is not.
 
 use std::fmt;
@@ -31,8 +32,8 @@ use agent_runtime::context::{
     FragmentSource, Sensitivity,
 };
 use agent_runtime::harness::{
-    ComponentDescriptor, ContextContributor, ContextPatch, ContextView, SessionStatePatch,
-    TurnCommitHook, TurnCommitPatch, TurnCommitView,
+    BeforeProviderPatch, ComponentDescriptor, ContextContributor, ContextPatch, ContextView,
+    SessionStatePatch, TurnCommitHook, TurnCommitPatch, TurnCommitView,
 };
 use agent_runtime::registry::RegistryRevision;
 use agent_runtime_core::error::RuntimeError;
@@ -61,6 +62,7 @@ struct NoticeState {
 pub(crate) struct BudgetNoticeComponent {
     input_budget_tokens: u64,
     threshold_tokens: u64,
+    semantic_summary_enabled: bool,
     active: Arc<AtomicBool>,
 }
 
@@ -70,6 +72,7 @@ impl fmt::Debug for BudgetNoticeComponent {
             .debug_struct("BudgetNoticeComponent")
             .field("input_budget_tokens", &self.input_budget_tokens)
             .field("threshold_tokens", &self.threshold_tokens)
+            .field("semantic_summary_enabled", &self.semantic_summary_enabled)
             .finish()
     }
 }
@@ -93,8 +96,14 @@ impl BudgetNoticeComponent {
         Ok(Self {
             input_budget_tokens,
             threshold_tokens,
+            semantic_summary_enabled: true,
             active: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    pub(crate) fn with_semantic_summary_enabled(mut self, enabled: bool) -> Self {
+        self.semantic_summary_enabled = enabled;
+        self
     }
 
     fn descriptor_value() -> ComponentDescriptor {
@@ -114,37 +123,8 @@ impl BudgetNoticeComponent {
         Some(self.input_budget_tokens.saturating_sub(latest))
     }
 
-    fn decode(&self, state: &VersionedSessionState) -> Result<NoticeState, RuntimeError> {
-        let descriptor = Self::descriptor_value();
-        if state.revision != *descriptor.revision() {
-            return Err(RuntimeError::conflict(format!(
-                "budget notice state revision `{}` is incompatible with `{}`",
-                state.revision,
-                descriptor.revision()
-            )));
-        }
-        serde_json::from_value(state.value.clone())
-            .map_err(|error| RuntimeError::internal(format!("budget notice state: {error}")))
-    }
-
-    fn body(remaining: u64) -> String {
-        format!(
-            "About {remaining} input tokens remain before this conversation is compacted. \
-             Bring the current thread to a natural stopping point, and persist anything you \
-             will need afterwards — findings to a file, progress to the plan — rather than \
-             relying on earlier messages staying verbatim."
-        )
-    }
-}
-
-#[async_trait]
-impl TurnCommitHook for BudgetNoticeComponent {
-    fn descriptor(&self) -> ComponentDescriptor {
-        Self::descriptor_value()
-    }
-
-    async fn after_commit(&self, view: &TurnCommitView) -> Result<TurnCommitPatch, RuntimeError> {
-        let Some(remaining) = self.remaining(&view.usage) else {
+    fn observe_usage(&self, usage: &[UsageRecord]) -> Result<TurnCommitPatch, RuntimeError> {
+        let Some(remaining) = self.remaining(usage) else {
             return Ok(TurnCommitPatch::default());
         };
         let state = NoticeState {
@@ -164,6 +144,58 @@ impl TurnCommitHook for BudgetNoticeComponent {
             }),
             ..TurnCommitPatch::default()
         })
+    }
+
+    fn decode(&self, state: &VersionedSessionState) -> Result<NoticeState, RuntimeError> {
+        let descriptor = Self::descriptor_value();
+        if state.revision != *descriptor.revision() {
+            return Err(RuntimeError::conflict(format!(
+                "budget notice state revision `{}` is incompatible with `{}`",
+                state.revision,
+                descriptor.revision()
+            )));
+        }
+        serde_json::from_value(state.value.clone())
+            .map_err(|error| RuntimeError::internal(format!("budget notice state: {error}")))
+    }
+
+    fn body(&self, remaining: u64) -> String {
+        if self.semantic_summary_enabled {
+            format!(
+                "About {remaining} input tokens remain before this conversation is compacted. \
+                 Bring the current thread to a natural stopping point, and persist anything you \
+                 will need afterwards — findings to a file, progress to the plan — rather than \
+                 relying on earlier messages staying verbatim."
+            )
+        } else {
+            format!(
+                "About {remaining} input tokens remain before this conversation reaches its input \
+                 limit and older context is structurally compacted. Bring the current thread to a \
+                 natural stopping point, and persist anything you will need afterwards — findings \
+                 to a file, progress to the plan — rather than relying on earlier messages staying \
+                 verbatim."
+            )
+        }
+    }
+}
+
+#[async_trait]
+impl TurnCommitHook for BudgetNoticeComponent {
+    fn descriptor(&self) -> ComponentDescriptor {
+        Self::descriptor_value()
+    }
+
+    async fn before_provider(
+        &self,
+        view: &TurnCommitView,
+    ) -> Result<BeforeProviderPatch, RuntimeError> {
+        Ok(BeforeProviderPatch::continue_with(
+            self.observe_usage(&view.usage)?,
+        ))
+    }
+
+    async fn after_commit(&self, view: &TurnCommitView) -> Result<TurnCommitPatch, RuntimeError> {
+        self.observe_usage(&view.usage)
     }
 }
 
@@ -194,7 +226,7 @@ impl ContextContributor for BudgetNoticeComponent {
             FragmentKind::Continuation,
             FragmentSource::Host,
             RegistryRevision::new("smith-budget-notice-v1"),
-            FragmentContent::Text(Self::body(state.remaining_tokens)),
+            FragmentContent::Text(self.body(state.remaining_tokens)),
         )
         // Last lane, last position: nothing may follow, so nothing this
         // fragment does can shorten another block's cached prefix.
@@ -369,5 +401,75 @@ mod tests {
         let component = BudgetNoticeComponent::new(100_000, 12_000).expect("valid");
         let patch = component.contribute(&view(None)).await.expect("a patch");
         assert!(patch.fragments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn before_provider_updates_state_and_emits_mid_turn_notice() {
+        use agent_runtime_core::clock::Timestamp;
+        use agent_runtime_core::event::TurnFinish;
+        use agent_runtime_core::ids::{SessionId, TurnId};
+
+        let component = BudgetNoticeComponent::new(100_000, 12_000).expect("valid");
+        let mut commit = TurnCommitView {
+            session: SessionId::new("s"),
+            turn: TurnId::new("t"),
+            finish: TurnFinish::Completed,
+            provider_error_kind: None,
+            visible_output: false,
+            history: Arc::from([]),
+            state: None,
+            usage: Arc::from([]),
+            started_at: Timestamp(0),
+            committed_at: Timestamp(0),
+        };
+
+        // Step 0 with no provider attempt yet: no state change, no active warning.
+        let initial = component.before_provider(&commit).await.expect("admission");
+        assert!(initial.block.is_none());
+        assert!(!initial.retry_admission);
+        assert!(initial.patch.state.is_none());
+        assert!(component.current().is_none());
+
+        // Mid-turn step after a provider attempt brings remaining tokens under threshold.
+        commit.usage = Arc::from([attempt(UsageSource::ProviderAttempt, 92_000)]);
+        let mid_turn = component.before_provider(&commit).await.expect("admission");
+        assert!(mid_turn.block.is_none());
+        assert!(!mid_turn.retry_admission);
+        let state_patch = mid_turn
+            .patch
+            .state
+            .expect("before_provider must persist remaining token state");
+        assert_eq!(state_patch.value, state(8_000).value);
+        assert!(
+            component.current().is_some(),
+            "mid-turn pressure must arm live status immediately"
+        );
+
+        let persisted = VersionedSessionState {
+            revision: state_patch.revision,
+            sensitivity: state_patch.sensitivity,
+            value: state_patch.value,
+        };
+        let context_patch = component
+            .contribute(&view(Some(persisted)))
+            .await
+            .expect("context patch");
+        let [fragment] = context_patch.fragments.as_slice() else {
+            panic!("expected mid-turn notice fragment: {context_patch:?}");
+        };
+        assert_eq!(
+            fragment.position,
+            ContextPosition::new(ContextLane::TailContext, 0)
+        );
+        match &fragment.content {
+            FragmentContent::Text(body) => assert!(body.contains("8000"), "{body}"),
+            other => panic!("expected text: {other:?}"),
+        }
+
+        // Subsequent before_provider with empty usage must not clear active state.
+        commit.usage = Arc::from([]);
+        let empty = component.before_provider(&commit).await.expect("admission");
+        assert!(empty.patch.state.is_none());
+        assert!(component.current().is_some());
     }
 }

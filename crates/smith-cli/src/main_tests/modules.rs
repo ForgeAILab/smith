@@ -254,16 +254,14 @@ async fn headless_listing_matches_runtime_module_outcomes_without_a_session() {
             smith_module::ModuleState::NotBuilt
         } else if !prepared.resolution.config.modules[&row.id].enabled.value {
             smith_module::ModuleState::Off
-        } else if matches!(row.id.as_str(), "web" | "harness-feedback") {
+        } else if matches!(row.id.as_str(), "web" | "harness-feedback" | "budget-notice") {
             smith_module::ModuleState::Mounted
         } else {
             smith_module::ModuleState::Inactive {
                 reason: if row.id == "image-generation" {
                     "the active provider has no image binding".into()
-                } else if row.id == "vision" {
-                    "no vision model is configured".into()
                 } else {
-                    "semantic summaries are disabled".into()
+                    "no vision model is configured".into()
                 },
                 setup_hint: match row.id.as_str() {
                     "vision" => Some(

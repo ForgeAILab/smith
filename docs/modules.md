@@ -32,8 +32,8 @@ The legacy `tools.image_generation.enabled` is the same switch. If the user
 file already contains it, `/modules` edits it in place. If both spellings
 exist, the edit keeps them aligned. Different values in the same layer are an
 error; across layers the ordinary precedence decides. Other image settings
-keep their existing keys. `budget-notice` defaults on and is inactive when
-semantic summaries are disabled or the input budget cannot fit its threshold.
+keep their existing keys. `budget-notice` defaults on and is inactive only when
+the input budget cannot fit its threshold.
 
 ## Harness feedback
 
