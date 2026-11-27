@@ -1013,3 +1013,30 @@ fn empty_catalog_input_metadata_keeps_the_runtime_text_default() {
         .expect("profile");
     assert_eq!(profile.input_modalities, [Modality::Text]);
 }
+
+#[tokio::test]
+async fn a_cache_written_before_the_anthropic_catalog_falls_back_to_the_seed() {
+    // Every existing install holds a last-good cache without `anthropic`.
+    let mut old = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
+    old.providers.remove("anthropic");
+    let canonical = serde_json::to_vec(&serde_json::to_value(&old.providers).unwrap()).unwrap();
+    old.content_digest = format!("sha256:{:x}", Sha256::digest(&canonical));
+    let error = parse_snapshot(&serde_json::to_vec(&old).unwrap()).expect_err("older shape");
+    assert!(error.to_string().contains("provider"), "{error}");
+
+    let directory = tempfile::tempdir().unwrap();
+    let cache_path = directory.path().join("models-dev-v1.json");
+    std::fs::write(&cache_path, serde_json::to_vec(&old).unwrap()).unwrap();
+    let fetcher = Arc::new(ScriptedFetcher::returning(
+        CatalogFetchResponse::NotModified,
+    ));
+    let loader = CatalogLoader::new(
+        cache_path,
+        Arc::<str>::from(EMBEDDED_MODELS_DEV_SEED),
+        fetcher,
+        Arc::new(FixedClock(old.retrieved_at_ms)),
+    );
+    let prepared = loader.prepare(false).await.unwrap();
+    assert_eq!(prepared.origin, CatalogLoadOrigin::Embedded);
+    assert!(prepared.snapshot.provider("anthropic").is_some());
+}

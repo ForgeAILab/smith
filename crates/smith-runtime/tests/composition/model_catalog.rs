@@ -232,3 +232,102 @@ mode = "allow-all"
             .is_none()
     );
 }
+
+/// A fake that reports controllable reasoning, as the real Anthropic adapter
+/// does once Smith gives it the catalog-resolved profile.
+#[derive(Debug)]
+struct ReasoningCapable(Arc<FakeProvider>);
+
+#[async_trait]
+impl Provider for ReasoningCapable {
+    fn describe(&self) -> Vec<agent_runtime_core::provider::ModelDescriptor> {
+        self.0.describe()
+    }
+
+    fn capabilities(&self, model: &ModelId) -> Option<Capabilities> {
+        self.0.capabilities(model).map(|mut capabilities| {
+            capabilities.reasoning = agent_runtime_core::provider::ReasoningSupport::Controllable;
+            capabilities
+        })
+    }
+
+    async fn stream(
+        &self,
+        request: agent_runtime_core::provider::ProviderRequest,
+        ctx: agent_runtime_core::provider::ProviderCallContext,
+    ) -> Result<
+        agent_runtime_core::provider::ProviderStream,
+        agent_runtime_core::provider::ProviderError,
+    > {
+        self.0.stream(request, ctx).await
+    }
+}
+
+/// A `/connect anthropic` profile: no model record, the official endpoint.
+const ANTHROPIC_CATALOG_CONFIG: &str = r#"
+default_profile = "claude"
+
+[profiles.claude]
+provider = "anthropic"
+model = "claude-opus-5-5"
+
+[providers.anthropic]
+kind = "anthropic-messages"
+base_url = "https://api.anthropic.com/v1"
+credential = "env:ANTHROPIC_API_KEY"
+
+[approval]
+mode = "allow-all"
+"#;
+
+#[tokio::test]
+async fn official_anthropic_turn_resolves_catalog_limits_and_sends_the_default_effort() {
+    let fixture = Fixture::new(ANTHROPIC_CATALOG_CONFIG);
+    let snapshot: CatalogSnapshot =
+        serde_json::from_str(EMBEDDED_MODELS_DEV_SEED).expect("embedded snapshot");
+    let source = runtime_catalog_source(
+        &snapshot,
+        "anthropic",
+        "anthropic-messages",
+        Some("https://api.anthropic.com/v1"),
+    )
+    .expect("Anthropic catalog source");
+    let provider = Arc::new(FakeProvider::text_reply("done"));
+    let recorder = RecordingObserver::shared();
+    let request = RuntimeRequest {
+        credentials: Some(resolver(Some(TOKEN))),
+        provider: Some(Arc::new(ReasoningCapable(provider.clone())) as Arc<dyn Provider>),
+        catalog_sources: vec![source],
+        model_catalog: Some(Arc::new(snapshot)),
+        observers: vec![Arc::clone(&recorder) as Arc<dyn EventObserver>],
+        ..request(&fixture, HostSurface::Headless)
+    };
+
+    let smith = factory::build_request(request)
+        .await
+        .expect("catalog-backed Anthropic runtime");
+    assert_eq!(
+        smith.policy().model_profile.limits,
+        ModelLimits::new(1_000_000, 1_000_000, 128_000)
+    );
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    let outcome = session.run(UserInput::text("hello")).await.expect("a turn");
+    let requests = provider.requests();
+    assert!(
+        !requests.is_empty(),
+        "no provider request: {outcome:?} {:?}",
+        recorder.events()
+    );
+    assert_eq!(
+        requests[0]
+            .reasoning
+            .as_ref()
+            .and_then(|reasoning| reasoning.effort.as_deref()),
+        Some("high"),
+        "the official binding sends its default effort on a main turn"
+    );
+}
