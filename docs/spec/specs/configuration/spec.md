@@ -493,7 +493,8 @@ Explicit setup SHALL support adding a provider with its first model and adding
 another model to an existing named provider. It MUST preserve existing
 provider/model records, validate each model against that provider, and change
 the default profile or model only when the user explicitly confirms that
-selection.
+selection. This applies equally to built-in catalog key connections. Making a
+new default MUST NOT remove existing profiles from `profile_order`.
 
 #### Scenario: Add a second model to an existing provider
 
@@ -519,6 +520,30 @@ selection.
 - **THEN** the existing default profile and active model remain unchanged
 - **AND** the new configuration is available for later `/provider`, `/model`,
   or `/profile` selection
+
+#### Scenario: Keep the current default for a catalog key connection
+
+- **GIVEN** an install whose default profile is `code`
+- **WHEN** the user connects Anthropic, Google, or xAI with an API key and
+  chooses Keep current default
+- **THEN** Smith writes only that provider's section and credential
+- **AND** `default_profile`, `profile_order`, and every profile are unchanged
+- **AND** the provider's catalog models are selectable through `/model`
+
+#### Scenario: A new default joins the existing profile order
+
+- **GIVEN** user configuration sets `profile_order = ["code", "sol"]`
+- **WHEN** setup makes a new `claude` profile the default
+- **THEN** `profile_order` becomes `["code", "sol", "claude", "claude-plan",
+  "claude-review"]`
+- **AND** an absent `profile_order` stays absent
+
+#### Scenario: First run always sets the default
+
+- **GIVEN** an empty install
+- **WHEN** first-run setup connects a provider
+- **THEN** setup does not offer Keep current default
+- **AND** the connection's profile becomes the default
 
 ### Requirement: Locally selectable runtime inventory
 
