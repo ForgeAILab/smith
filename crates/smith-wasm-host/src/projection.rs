@@ -218,18 +218,38 @@ pub(crate) fn fragments(
         })
         .collect()
 }
+fn usage_source(source: agent_runtime_core::usage::UsageSource) -> w::UsageSource {
+    use agent_runtime_core::usage::UsageSource as S;
+    match source {
+        S::ProviderAttempt => w::UsageSource::ProviderAttempt,
+        S::ToolLoop => w::UsageSource::ToolLoop,
+        // Frozen v0.1/v0.2 WIT has no dedicated semantic-summary variant;
+        // project separately attributed summary spend as rollup for ABI safety.
+        S::SemanticSummary | S::Rollup => w::UsageSource::Rollup,
+        S::ExternalAgent => w::UsageSource::ExternalAgent,
+    }
+}
+
+fn counter_kind(kind: agent_runtime_core::usage::CounterKind) -> Option<w::CounterKind> {
+    use agent_runtime_core::usage::CounterKind as K;
+    match kind {
+        K::InputUncached => Some(w::CounterKind::InputUncached),
+        K::InputCached => Some(w::CounterKind::InputCached),
+        K::CacheWrite => Some(w::CounterKind::CacheWrite),
+        K::Output => Some(w::CounterKind::Output),
+        K::Reasoning => Some(w::CounterKind::Reasoning),
+        // Non-token hosted-search counts have no v0.1/v0.2 WIT counter variant.
+        K::WebSearchRequests => None,
+    }
+}
+
 pub(crate) fn usage_counters(
     delta: &agent_runtime_core::usage::UsageDelta,
 ) -> Result<Vec<w::UsageCounter>, WasmError> {
-    delta
+    Ok(delta
         .iter()
-        .map(|(kind, value)| {
-            Ok(w::UsageCounter {
-                kind: enum_to_wit(kind)?,
-                value,
-            })
-        })
-        .collect()
+        .filter_map(|(kind, value)| counter_kind(kind).map(|kind| w::UsageCounter { kind, value }))
+        .collect())
 }
 
 pub(crate) fn usage(
@@ -240,7 +260,7 @@ pub(crate) fn usage(
         .map(|record| {
             let p = &record.provenance;
             Ok(w::UsageRecord {
-                source: enum_to_wit(record.source)?,
+                source: usage_source(record.source),
                 provenance: w::UsageProvenance {
                     request: p.request.as_ref().map(ToString::to_string),
                     attempt: p.attempt.as_ref().map(ToString::to_string),
@@ -253,16 +273,7 @@ pub(crate) fn usage(
                         .map(|c| c.digest().as_str().into()),
                     failed: p.failed,
                 },
-                counters: record
-                    .delta
-                    .iter()
-                    .map(|(kind, value)| {
-                        Ok(w::UsageCounter {
-                            kind: enum_to_wit(kind)?,
-                            value,
-                        })
-                    })
-                    .collect::<Result<_, WasmError>>()?,
+                counters: usage_counters(&record.delta)?,
             })
         })
         .collect()
@@ -341,6 +352,10 @@ fn local_schema(value: &serde_json::Value) -> Result<(), WasmError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_runtime_core::usage::{
+        CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource,
+    };
+
     #[test]
     fn schemas_cannot_load_host_files_or_remote_resources() {
         for reference in [
@@ -354,6 +369,34 @@ mod tests {
                 &serde_json::json!({"type":"object", "properties":{"id":{"type":"string"}}})
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn usage_projects_semantic_summary_and_skips_non_token_search_counters() {
+        let records = [UsageRecord {
+            source: UsageSource::SemanticSummary,
+            provenance: Provenance::default(),
+            delta: UsageDelta::new()
+                .with(CounterKind::InputUncached, 1_200)
+                .with(CounterKind::Output, 300)
+                .with(CounterKind::WebSearchRequests, 2),
+        }];
+        let projected = usage(&records).expect("semantic summary usage must project safely");
+        assert_eq!(projected.len(), 1);
+        assert!(matches!(projected[0].source, w::UsageSource::Rollup));
+        assert_eq!(projected[0].counters.len(), 2);
+        assert!(
+            projected[0]
+                .counters
+                .iter()
+                .any(|c| matches!(c.kind, w::CounterKind::InputUncached) && c.value == 1_200)
+        );
+        assert!(
+            projected[0]
+                .counters
+                .iter()
+                .any(|c| matches!(c.kind, w::CounterKind::Output) && c.value == 300)
         );
     }
 }

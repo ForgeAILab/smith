@@ -550,9 +550,9 @@ async fn context_contributor_runs_without_history_and_survives_an_unfittable_vie
     let mut cfg = config(root.path());
     cfg.granted_capabilities = vec![grant(C::HostRead, &["session-history"], &[])];
     cfg.requested_capabilities = cfg.granted_capabilities.clone();
+    let payload_bytes = cfg.limits.payload_bytes;
     let granted = contributor(cfg);
-    let long: Vec<_> = (0..257).map(|_| Message::user("turn")).collect();
-    view.history = Arc::from(long);
+    view.history = Arc::from([Message::user("x".repeat(payload_bytes + 1))]);
     for _ in 0..4 {
         let patch = granted.contribute(&view).await.unwrap();
         assert!(patch.fragments.is_empty());
@@ -560,6 +560,8 @@ async fn context_contributor_runs_without_history_and_survives_an_unfittable_vie
     view.history = Arc::from([Message::user("short")]);
     assert_eq!(granted.contribute(&view).await.unwrap().fragments.len(), 1);
 }
+
+mod long_session;
 
 #[tokio::test]
 async fn output_processor_replaces_outcome_and_failure_passes_original() {

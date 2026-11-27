@@ -778,6 +778,153 @@ impl Tool for GuestTool {
         .map_err(|_| RuntimeError::tool("module host worker failed"))?
     }
 }
+const MAX_PROTOCOL_LIST_LEN: usize = 256;
+
+#[derive(serde::Serialize)]
+struct ContextViewRef<'a> {
+    session: &'a str,
+    turn: &'a str,
+    history: &'a [w::Message],
+    activation: &'a str,
+    state: &'a Option<w::ComponentState>,
+}
+
+#[derive(serde::Serialize)]
+struct ToolOutputViewRef<'a> {
+    session: &'a str,
+    turn: &'a str,
+    request: &'a str,
+    call: &'a w::ToolCall,
+    state: &'a Option<w::ComponentState>,
+    usage: &'a [w::UsageRecord],
+    now_monotonic_ms: u64,
+    outcome_json: &'a str,
+}
+
+fn bounded_context_view(
+    view: &ContextView,
+    include_history: bool,
+    limits: &WasmLimits,
+) -> Result<w::ContextView, WasmError> {
+    let session = view.session.to_string();
+    let turn = view.turn.to_string();
+    let activation: String = view.activation.as_str().into();
+    let state = crate::projection::state(&view.state)?;
+    let mut history = if include_history && !view.history.is_empty() {
+        let start = view.history.len().saturating_sub(MAX_PROTOCOL_LIST_LEN);
+        crate::projection::messages(&view.history[start..])?
+    } else {
+        Vec::new()
+    };
+
+    let fits = |slice: &[w::Message]| {
+        bounded(
+            &ContextViewRef {
+                session: &session,
+                turn: &turn,
+                history: slice,
+                activation: &activation,
+                state: &state,
+            },
+            limits,
+        )
+    };
+
+    if !history.is_empty() && fits(&history).is_err() {
+        let last = history.len() - 1;
+        // If not even the newest message fits, withhold the view rather than
+        // presenting an empty history to a history-reading contributor.
+        fits(&history[last..])?;
+        let mut lo = 1;
+        let mut hi = last;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if fits(&history[mid..]).is_ok() {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        history.drain(..lo);
+    }
+
+    let input = w::ContextView {
+        session,
+        turn,
+        history,
+        activation,
+        state,
+    };
+    bounded(&input, limits)?;
+    Ok(input)
+}
+
+fn bounded_tool_output_view(
+    view: &ToolOutputView,
+    outcome: &ToolOutcome,
+    session: &Session,
+) -> Result<w::ToolOutputView, WasmError> {
+    let limits = &session.store.data().limits;
+    let session_id = view.session.to_string();
+    let turn = view.turn.to_string();
+    let request = view.request.to_string();
+    let call = w::ToolCall {
+        id: view.call.id.to_string(),
+        name: view.call.name.clone(),
+        arguments_json: view.call.arguments.to_string(),
+    };
+    let state = crate::projection::state(&view.state)?;
+    let start = view.usage.len().saturating_sub(MAX_PROTOCOL_LIST_LEN);
+    let mut usage = crate::projection::usage(&view.usage[start..])?;
+    let now_monotonic_ms = session.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    let outcome_json = serde_json::to_string(outcome)
+        .map_err(|_| WasmError::MalformedResult("outcome encoding".into()))?;
+
+    let fits = |slice: &[w::UsageRecord]| {
+        bounded(
+            &ToolOutputViewRef {
+                session: &session_id,
+                turn: &turn,
+                request: &request,
+                call: &call,
+                state: &state,
+                usage: slice,
+                now_monotonic_ms,
+                outcome_json: &outcome_json,
+            },
+            limits,
+        )
+    };
+
+    if !usage.is_empty() && fits(&usage).is_err() {
+        fits(&[])?;
+        let mut lo = 1;
+        let mut hi = usage.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if fits(&usage[mid..]).is_ok() {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        usage.drain(..lo);
+    }
+
+    let input = w::ToolOutputView {
+        session: session_id,
+        turn,
+        request,
+        call,
+        state,
+        usage,
+        now_monotonic_ms,
+        outcome_json,
+    };
+    bounded(&input, limits)?;
+    Ok(input)
+}
+
 #[derive(Debug)]
 struct GuestPipeline {
     session: Arc<Mutex<Session>>,
@@ -796,29 +943,20 @@ impl ContextContributor for GuestPipeline {
         Ok(tokio::task::spawn_blocking(move || {
             let mut session = session.lock().unwrap_or_else(|e| e.into_inner());
             session.bind_session(view.session.clone());
+            if session.health.failure().is_some() {
+                return ContextPatch::default();
+            }
             // A contributor without history authority still runs on an empty
             // history. Host-side view limits must not disable healthy guests.
-            let input = (|| {
-                let history = if session
-                    .store
-                    .data()
-                    .granted(ModuleCapability::HostRead, "session-history")
-                {
-                    crate::projection::messages(&view.history)?
-                } else {
-                    Vec::new()
-                };
-                let input = w::ContextView {
-                    session: view.session.to_string(),
-                    turn: view.turn.to_string(),
-                    history,
-                    activation: view.activation.as_str().into(),
-                    state: crate::projection::state(&view.state)?,
-                };
-                bounded(&input, &session.store.data().limits)?;
-                Ok::<_, WasmError>(input)
-            })();
-            let input = match input {
+            let include_history = session
+                .store
+                .data()
+                .granted(ModuleCapability::HostRead, "session-history");
+            let input = match bounded_context_view(
+                &view,
+                include_history,
+                &session.store.data().limits,
+            ) {
                 Ok(input) => input,
                 Err(error) => {
                     tracing::warn!(error = %error, "context view withheld from sandboxed module");
@@ -861,27 +999,18 @@ impl ToolOutputProcessor for GuestPipeline {
         let output = tokio::task::spawn_blocking(move || {
             let mut session = session.lock().unwrap_or_else(|e| e.into_inner());
             session.bind_session(view.session.clone());
-            let result = (|| {
-                if let Some(reason) = session.health.failure() {
-                    return Err(WasmError::Disabled(reason));
+            if session.health.failure().is_some() {
+                return None;
+            }
+            // Host-side view limits must not blame or disable healthy guests.
+            let input = match bounded_tool_output_view(&view, &outcome, &session) {
+                Ok(input) => input,
+                Err(error) => {
+                    tracing::warn!(error = %error, "tool output view withheld from sandboxed module");
+                    return None;
                 }
-                let input = w::ToolOutputView {
-                    session: view.session.to_string(),
-                    turn: view.turn.to_string(),
-                    request: view.request.to_string(),
-                    call: w::ToolCall {
-                        id: view.call.id.to_string(),
-                        name: view.call.name.clone(),
-                        arguments_json: view.call.arguments.to_string(),
-                    },
-                    state: crate::projection::state(&view.state)?,
-                    usage: crate::projection::usage(&view.usage)?,
-                    now_monotonic_ms: session.started.elapsed().as_millis().min(u64::MAX as u128)
-                        as u64,
-                    outcome_json: serde_json::to_string(&outcome)
-                        .map_err(|_| WasmError::MalformedResult("outcome encoding".into()))?,
-                };
-                bounded(&input, &session.store.data().limits)?;
+            };
+            let result = (|| {
                 let deadline = session.store.data().limits.component_deadline;
                 let patch = session
                     .call(deadline, |guest, store| {
@@ -896,11 +1025,11 @@ impl ToolOutputProcessor for GuestPipeline {
                 crate::limits::bounded_outcome(&result, &session.store.data().limits)?;
                 Ok(result)
             })();
-            session.finish(result)
+            session.finish(result).ok()
         })
         .await;
         Ok(ToolOutputPatch::outcome(
-            output.ok().and_then(Result::ok).unwrap_or(fallback),
+            output.ok().flatten().unwrap_or(fallback),
         ))
     }
 }
