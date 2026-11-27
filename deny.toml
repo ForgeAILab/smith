@@ -12,7 +12,12 @@ targets = [
 all-features = false
 
 [advisories]
-ignore = []
+ignore = [
+    # chrono is reached only through rmcp, which stays pinned to the version
+    # agent-runtime-mcp builds against. Unmaintained, not vulnerable; drop
+    # this when the runtime moves to an rmcp release without chrono.
+    { id = "RUSTSEC-2026-0543", reason = "transitive via rmcp; pinned with agent-runtime-mcp" },
+]
 
 [licenses]
 allow = [

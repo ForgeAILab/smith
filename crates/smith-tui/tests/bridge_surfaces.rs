@@ -38,13 +38,23 @@ fn live_headless_harness_stream_and_tui_have_the_same_tools_text_and_outcome() {
     let smith = std::env::var_os("CLI_SURFACE_SMITH_BINARY")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
-            std::env::current_exe()
-                .expect("test executable")
-                .parent()
-                .expect("deps directory")
-                .parent()
-                .expect("target profile")
-                .join("smith")
+            // The profile directory holding `smith` is an ancestor of this
+            // test executable, but not always its grandparent: Cargo's
+            // build-directory layout can nest tests under
+            // `build/<package>/<hash>/deps/`.
+            let executable = std::env::current_exe().expect("test executable");
+            executable
+                .ancestors()
+                .skip(1)
+                .map(|directory| directory.join("smith"))
+                .find(|candidate| candidate.is_file())
+                .unwrap_or_else(|| {
+                    executable
+                        .parent()
+                        .and_then(std::path::Path::parent)
+                        .expect("target profile")
+                        .join("smith")
+                })
         });
     let stand_in = smith
         .parent()

@@ -384,14 +384,12 @@ fn recorded_failed(kind: Kind, context: &str) -> Vec<Value> {
 }
 
 fn stand_in(context: &str) -> PathBuf {
-    // Required location is relative to this test executable, including a
-    // non-default target directory or Cargo profile.
-    let executable = std::env::current_exe()
-        .unwrap_or_else(|error| panic!("{context}: test executable: {error}"));
-    let path = executable
+    // Examples sit beside the built `smith` binary in the profile directory.
+    // The test executable's own location is not a reliable guide: Cargo's
+    // build-directory layout can place it under `build/<package>/<hash>/`.
+    let path = Path::new(env!("CARGO_BIN_EXE_smith"))
         .parent()
-        .and_then(Path::parent)
-        .unwrap_or_else(|| panic!("{context}: test executable has no profile directory"))
+        .unwrap_or_else(|| panic!("{context}: smith binary has no profile directory"))
         .join("examples/cli_stand_in");
     assert!(
         path.is_file(),
