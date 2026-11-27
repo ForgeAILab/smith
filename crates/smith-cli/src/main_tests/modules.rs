@@ -254,7 +254,10 @@ async fn headless_listing_matches_runtime_module_outcomes_without_a_session() {
             smith_module::ModuleState::NotBuilt
         } else if !prepared.resolution.config.modules[&row.id].enabled.value {
             smith_module::ModuleState::Off
-        } else if matches!(row.id.as_str(), "web" | "harness-feedback" | "budget-notice") {
+        } else if matches!(
+            row.id.as_str(),
+            "web" | "harness-feedback" | "budget-notice"
+        ) {
             smith_module::ModuleState::Mounted
         } else {
             smith_module::ModuleState::Inactive {
