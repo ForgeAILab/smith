@@ -36,11 +36,23 @@ impl ModelInterceptor for ReasoningInterceptor {
 pub(crate) struct ReasoningDialectProvider {
     inner: Arc<dyn Provider>,
     dialect: ReasoningDialect,
+    /// Selection for a request that arrives without one (for example a
+    /// semantic-summary call through this provider). Absent for bindings that
+    /// leave such requests at the provider default.
+    fallback: Option<ReasoningConfig>,
 }
 
 impl ReasoningDialectProvider {
-    pub(crate) fn new(inner: Arc<dyn Provider>, dialect: ReasoningDialect) -> Self {
-        Self { inner, dialect }
+    pub(crate) fn new(
+        inner: Arc<dyn Provider>,
+        dialect: ReasoningDialect,
+        fallback: Option<ReasoningConfig>,
+    ) -> Self {
+        Self {
+            inner,
+            dialect,
+            fallback,
+        }
     }
 }
 
@@ -73,6 +85,9 @@ impl Provider for ReasoningDialectProvider {
         mut request: ProviderRequest,
         ctx: ProviderCallContext,
     ) -> Result<ProviderStream, ProviderError> {
+        if request.reasoning.is_none() {
+            request.reasoning = self.fallback.clone();
+        }
         adapt_request(&mut request, self.dialect)?;
         self.inner.stream(request, ctx).await
     }

@@ -25,6 +25,21 @@ fn setup_key(code: KeyCode) -> KeyEvent {
 }
 
 #[test]
+fn anthropic_catalog_choices_lead_with_the_recommended_model() {
+    let context = setup_context_for(PathBuf::from("<HOME>"), PathBuf::from("<PROJECT>"));
+    let (entries, limits) = catalog_model_entries(&context, "anthropic", "anthropic", "Anthropic")
+        .expect("catalog models");
+    assert_eq!(entries[0].id, "claude-opus-5-5");
+    assert_eq!(limits["claude-opus-5-5"].context_tokens, 1_000_000);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| !entry.id.starts_with("claude-opus-4-5")),
+        "deprecated models never reach the catalog"
+    );
+}
+
+#[test]
 fn catalog_model_choices_use_the_model_picker_rows_and_compact_limits() {
     let context = setup_context_for(PathBuf::from("<HOME>"), PathBuf::from("<PROJECT>"));
     let (entries, limits) =
@@ -286,7 +301,7 @@ fn quick_start_display_matches_the_written_model_and_trusted_revision() {
 }
 
 #[tokio::test]
-async fn anthropic_setup_publishes_a_native_provider_and_rolls_back_on_failure() {
+async fn anthropic_gateway_setup_publishes_a_provider_and_rolls_back_on_failure() {
     let root = tempfile::tempdir().expect("home");
     let project = tempfile::tempdir().expect("project");
     let user_dir = root.path().join(".smith");
@@ -295,7 +310,7 @@ async fn anthropic_setup_publishes_a_native_provider_and_rolls_back_on_failure()
     let index = actions
         .iter()
         .position(|entry| entry.id == KIND_ANTHROPIC_MESSAGES)
-        .expect("Anthropic action");
+        .expect("Anthropic gateway action");
     let mut app = SetupApp::new(
         SetupMode::FirstRun,
         Vec::new(),
@@ -308,6 +323,11 @@ async fn anthropic_setup_publishes_a_native_provider_and_rolls_back_on_failure()
         app.on_key(setup_key(KeyCode::Down));
     }
     app.on_key(setup_key(KeyCode::Enter));
+    // A gateway names itself and its endpoint before authentication.
+    app.on_paste("gateway");
+    app.on_key(setup_key(KeyCode::Enter));
+    app.on_paste("https://gateway.example/v1");
+    app.on_key(setup_key(KeyCode::Enter));
     for _ in 0..3 {
         app.on_key(setup_key(KeyCode::Down));
     }
@@ -316,7 +336,7 @@ async fn anthropic_setup_publishes_a_native_provider_and_rolls_back_on_failure()
     app.on_key(setup_key(KeyCode::Enter));
     app.on_paste("claude-test-only");
     let SetupEffect::ResolveModelLimits { request } = app.on_key(setup_key(KeyCode::Enter)) else {
-        panic!("native provider reaches shared limit resolution");
+        panic!("gateway provider reaches shared limit resolution");
     };
     assert!(!request.use_endpoint_listing);
     assert!(resolve_model_limits(&context, &request).await.is_none());
@@ -359,11 +379,11 @@ async fn anthropic_setup_publishes_a_native_provider_and_rolls_back_on_failure()
         &std::fs::read_to_string(user_dir.join("config.toml")).expect("published config"),
     )
     .expect("valid TOML");
-    let provider = &written.providers["anthropic"];
+    let provider = &written.providers["gateway"];
     assert_eq!(provider.kind.as_deref(), Some(KIND_ANTHROPIC_MESSAGES));
     assert_eq!(
         provider.base_url.as_deref(),
-        Some(smith_config::model::ANTHROPIC_DEFAULT_ENDPOINT)
+        Some("https://gateway.example/v1")
     );
     assert_eq!(
         provider.credential.as_deref(),
@@ -372,14 +392,14 @@ async fn anthropic_setup_publishes_a_native_provider_and_rolls_back_on_failure()
     assert!(provider.response.is_none());
     assert!(written.default_profile.is_some());
     assert_eq!(
-        written.models["anthropic/claude-test-only"].context_tokens,
+        written.models["gateway/claude-test-only"].context_tokens,
         Some(64_000)
     );
     let request = ResolveRequest::new(project.path())
         .with_known_modules(crate::modules::known_modules())
         .with_home_dir(root.path());
     let ConfigReadiness::Ready(resolution) = inspect(&request) else {
-        panic!("the published native provider must be locally runnable");
+        panic!("the published gateway provider must be locally runnable");
     };
     assert_eq!(
         resolution.config.provider.kind.value,
@@ -515,14 +535,14 @@ async fn a_gateway_spelled_claude_fable_alias_resolves_from_the_embedded_catalog
     };
     let resolved = resolve_model_limits(&context, &request)
         .await
-        .expect("the separator-normalized catalog alias resolves");
+        .expect("the bare Claude ID resolves from the catalog");
     assert_eq!(resolved.context_tokens, 1_000_000);
     assert_eq!(resolved.max_input_tokens, 1_000_000);
     assert_eq!(resolved.max_output_tokens, 128_000);
+    // The Anthropic catalog uses the API's own IDs, so the exact entry wins
+    // over OpenRouter's separator-normalized alias.
     assert!(
-        resolved
-            .source
-            .contains("openrouter/anthropic/claude-fable-5.1"),
+        resolved.source.contains("anthropic/claude-fable-5-1"),
         "{}",
         resolved.source
     );
@@ -785,6 +805,38 @@ fn google_plan_uses_the_catalog_model_without_copying_endpoint_or_limits() {
     assert_eq!(
         plan.patch.profiles[GOOGLE_PROFILE].model.as_deref(),
         Some("gemini-3.6-flash")
+    );
+}
+
+#[test]
+fn anthropic_plan_writes_the_official_endpoint_and_no_model_metadata() {
+    let secret = "sk-ant-plan-do-not-print";
+    let plan = setup_plan(SetupSubmission::QuickAnthropic {
+        credential: SetupCredential::StoreInKeychain(Secret::new(secret)),
+        model: "claude-opus-5-5".to_owned(),
+    })
+    .expect("an Anthropic plan");
+    let serialized = toml::to_string(&plan.patch).expect("TOML");
+    assert!(!serialized.contains(secret), "{serialized}");
+    assert!(serialized.contains("keychain:smith/anthropic"));
+    let provider = &plan.patch.providers[smith_config::setup::ANTHROPIC_PROVIDER];
+    assert_eq!(provider.kind.as_deref(), Some(KIND_ANTHROPIC_MESSAGES));
+    assert_eq!(
+        provider.base_url.as_deref(),
+        Some(smith_config::setup::ANTHROPIC_ENDPOINT)
+    );
+    assert!(plan.patch.models.is_empty());
+    let profile = &plan.patch.profiles[smith_config::setup::ANTHROPIC_PROFILE];
+    assert_eq!(profile.max_output_tokens, None);
+    assert_eq!(profile.context, None);
+    assert_eq!(profile.model.as_deref(), Some("claude-opus-5-5"));
+
+    assert!(
+        setup_plan(SetupSubmission::QuickAnthropic {
+            credential: SetupCredential::StoreInKeychain(Secret::new(secret)),
+            model: " ".to_owned(),
+        })
+        .is_err()
     );
 }
 

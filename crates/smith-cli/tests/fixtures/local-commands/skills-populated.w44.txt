@@ -42,6 +42,11 @@ ily-synchronization · active · Smith configu
 ration reference, section "Model discovery a
 nd daily synchronization". authenticated `/m
 odels` listing.
+  smith.configuration.model-limits-and-reaso
+ning-controls · active · Smith configuration
+ reference, section "Model limits and reason
+ing controls". embedded metadata, or a valid
+ated endpoint-bound catalog.
   smith.configuration.policy-keys-and-defaul
 ts · active · Smith configuration reference,
  section "Policy keys and defaults". instruc

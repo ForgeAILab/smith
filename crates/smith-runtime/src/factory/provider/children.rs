@@ -300,9 +300,11 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
                 .map(|policy| policy.value),
         );
         let provider = match reasoning.dialect {
-            Some(dialect) => {
-                Arc::new(ReasoningDialectProvider::new(provider, dialect)) as Arc<dyn Provider>
-            }
+            Some(dialect) => Arc::new(ReasoningDialectProvider::new(
+                provider,
+                dialect,
+                reasoning.fallback_request_config(),
+            )) as Arc<dyn Provider>,
             None => provider,
         };
         let web = super::super::web::prepare(

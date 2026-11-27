@@ -80,11 +80,18 @@ replaces older history while later turns keep their blocks.
   that has an effort. A mismatched block is dropped and the request proceeds
   instead of failing. Gateways are left alone, because they may reject the
   beta.
-- **One-shot calls inherit the effort.** The dialect wrapper is created with
-  the binding's request config. When a request reaches it with no reasoning
-  config (semantic summary, advisor, or module one-shot on the same provider),
-  it fills in that config, so these calls carry the binding too. Requests
-  that already have a reasoning config are unchanged.
+- **Requests without a selection get the lowest effort.** The dialect wrapper
+  holds a fallback: the lowest advertised effort (`low` on every current
+  ladder). When a request reaches it with no reasoning config, for example the
+  semantic-summary call on the same provider, the wrapper fills that in, so
+  the request carries the binding too. The lowest level keeps a short summary's
+  output budget from going to thinking. Requests that already have a reasoning
+  config, including main turns and advisor calls, are unchanged.
+- **The default is sent, not selected.** The policy gains a
+  `sends_default_effort` flag. `request_config` sends `default_effort` when it
+  is set and nothing is selected. Status and pickers still treat the level as
+  a default: `/effort` labels the row `default (high)`, and startup shows no
+  override notice.
 - **Budget-only models.** Toggle-only catalog models (Haiku 4.5) get
   presence-only reasoning and no controls. They produce no thinking blocks
   unless asked, and the adapter's `budget_tokens` path stays reachable only
@@ -102,8 +109,8 @@ replaces older history while later turns keep their blocks.
 ## Risks / Trade-offs
 
 - **Cost of the default.** A default of `high` raises Opus 5.5 and Haiku 5.5
-  above their API default (`medium`), and summary calls on the same provider
-  also run at the selected effort. Users who want cheaper turns lower it with
+  above their API default (`medium`). Summary calls on the same provider now
+  always think, at `low`. Users who want cheaper turns lower the level with
   `/effort`.
 - **Dropped thinking.** `drop_block` removes the first mismatched thinking
   block and every later one for that request. After a compaction or summary

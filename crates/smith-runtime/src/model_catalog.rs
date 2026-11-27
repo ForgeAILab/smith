@@ -20,10 +20,10 @@ use reqwest::header::{ETAG, IF_NONE_MATCH, USER_AGENT};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use smith_config::catalog::{
-    CATALOG_SCHEMA_REVISION, CatalogLimits, CatalogModality, CatalogModel, CatalogModelCost,
-    CatalogProvider, CatalogReasoningControls, CatalogSnapshot, GOOGLE_CATALOG_PROVIDER,
-    MODELS_DEV_SOURCE_URL, OPENAI_CATALOG_PROVIDER, OPENROUTER_CATALOG_PROVIDER,
-    XAI_CATALOG_PROVIDER, ZAI_CODING_PLAN_CATALOG_PROVIDER,
+    ANTHROPIC_CATALOG_PROVIDER, CATALOG_SCHEMA_REVISION, CatalogLimits, CatalogModality,
+    CatalogModel, CatalogModelCost, CatalogProvider, CatalogReasoningControls, CatalogSnapshot,
+    GOOGLE_CATALOG_PROVIDER, MODELS_DEV_SOURCE_URL, OPENAI_CATALOG_PROVIDER,
+    OPENROUTER_CATALOG_PROVIDER, XAI_CATALOG_PROVIDER, ZAI_CODING_PLAN_CATALOG_PROVIDER,
 };
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -52,12 +52,13 @@ const MAX_MODALITIES: usize = 16;
 const MAX_REASONING_OPTION_ENTRIES: usize = 8;
 const MAX_REASONING_EFFORTS: usize = 10;
 const MAX_REASONING_EFFORT_BYTES: usize = 32;
-const EXPECTED_PROVIDERS: [&str; 5] = [
+const EXPECTED_PROVIDERS: [&str; 6] = [
     OPENAI_CATALOG_PROVIDER,
     OPENROUTER_CATALOG_PROVIDER,
     XAI_CATALOG_PROVIDER,
     ZAI_CODING_PLAN_CATALOG_PROVIDER,
     GOOGLE_CATALOG_PROVIDER,
+    ANTHROPIC_CATALOG_PROVIDER,
 ];
 
 /// Why catalog preparation or refresh failed.

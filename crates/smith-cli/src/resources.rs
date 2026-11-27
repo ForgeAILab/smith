@@ -752,10 +752,16 @@ fn effort_entries(
     reasoning: &smith_runtime::reasoning::ReasoningRuntimePolicy,
 ) -> Vec<ResourceEntry> {
     let capability_reason = || reasoning_capability_reason(reasoning);
+    // A binding that sends its own default names it, so "default" never
+    // reads as the provider's unknown level.
+    let default_label = match (&reasoning.default_effort, reasoning.sends_default_effort) {
+        (Some(effort), true) => format!("default ({effort})"),
+        _ => "provider default".to_owned(),
+    };
     let mut efforts = vec![
         ResourceEntry::new(
             "default",
-            "provider default",
+            default_label,
             "clear the session effort override",
         )
         .active(reasoning.selected_effort.is_none()),

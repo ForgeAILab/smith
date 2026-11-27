@@ -65,8 +65,8 @@ endpoints MUST NOT receive this control.
 - **GIVEN** a session on the official binding has replayable thinking blocks
 - **WHEN** Smith sends a semantic-summary or other one-shot request through the
   same provider without its own reasoning config
-- **THEN** that request carries the binding's effort, adaptive thinking, and
-  `drop_block`
+- **THEN** that request carries the lowest advertised effort, adaptive
+  thinking, and `drop_block`
 - **AND** a request that already has a reasoning config keeps it unchanged
 
 #### Scenario: Gateway request is unchanged

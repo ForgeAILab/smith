@@ -13,7 +13,8 @@ prompts, so tell the user to run it.
 | --- | --- |
 | ChatGPT subscription | `/connect chatgpt` |
 | xAI browser login | `/connect xai` |
-| OpenRouter, Google AI Studio | `/connect openrouter`, `/connect google` |
+| OpenRouter, Google AI Studio, Claude API | `/connect openrouter`, `/connect google`, `/connect anthropic` |
+| An Anthropic-compatible gateway | `smith setup`, then **Anthropic-compatible endpoint** |
 | Any other endpoint | `smith setup add-provider` |
 | A model on a custom endpoint | `smith setup add-model --provider <name>` |
 | New or rotated key | `smith setup credential --provider <name>` |
@@ -36,7 +37,8 @@ References are `env:VAR`, `keychain:service/account`, and
 yourself, and never put one in a project file. Common `kind` values are
 `openai-compatible`, `openai-responses`, `anthropic-messages`, and
 `gemini-interactions`. Known endpoints (OpenAI, OpenRouter, xAI, the Z.AI
-Coding Plan, Google) take their model limits from the built-in catalog.
+Coding Plan, Google, Anthropic) take their model limits from the built-in
+catalog.
 Other endpoints need `smith setup add-model` or a `[models]` table.
 
 Verify with `smith config explain model --profile <name>`. It fails with

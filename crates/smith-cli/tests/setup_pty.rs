@@ -386,7 +386,7 @@ fn setup_entry_advances_and_cancels(query: &str, next_step: &str) {
     let index =
         smith_config::setup::provider_descriptors(smith_runtime::factory::AVAILABLE_ADAPTER_KINDS)
             .iter()
-            .position(|entry| entry.setup_id.contains(query))
+            .position(|entry| entry.setup_id == query)
             .expect("setup action")
             + 1;
     for args in ["--no-color --no-motion", "setup --no-color --no-motion"] {
@@ -440,6 +440,11 @@ expect {{
 #[test]
 fn anthropic_setup_entry_reaches_authentication_and_cancels_without_writes() {
     setup_entry_advances_and_cancels("anthropic", "Authentication");
+}
+
+#[test]
+fn anthropic_gateway_setup_entry_asks_for_its_name_and_cancels_without_writes() {
+    setup_entry_advances_and_cancels("anthropic-messages", "Provider name");
 }
 
 #[test]
@@ -1180,9 +1185,9 @@ credential = "env:ZAI_API_KEY"
 [context]
 output_reserve = 8192
 "#,
-            "glm-5-turbo",
-            "GLM-5-Turbo",
-            "zai/glm-5-turbo",
+            "glm-5.4",
+            "GLM-5.4",
+            "zai/glm-5.4",
         ),
         (
             r#"

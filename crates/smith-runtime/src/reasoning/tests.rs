@@ -1270,3 +1270,196 @@ fn an_invocation_off_effort_is_refused_by_openrouter_as_a_non_effort_value() {
         "{error}"
     );
 }
+
+fn anthropic_config(base_url_is_official: bool) -> ResolvedConfig {
+    let mut config = resolved_config();
+    config.provider.kind.value = smith_config::model::KIND_ANTHROPIC_MESSAGES.to_owned();
+    if !base_url_is_official {
+        config.provider.name.value = "gateway".to_owned();
+    }
+    config
+}
+
+fn claude_ladder() -> CatalogReasoningControls {
+    CatalogReasoningControls {
+        toggle: false,
+        efforts: ["low", "medium", "high", "xhigh", "max"]
+            .map(str::to_owned)
+            .to_vec(),
+    }
+}
+
+#[test]
+fn official_anthropic_catalog_ladder_is_mandatory_with_a_high_default() {
+    let policy = resolve_reasoning_policy(
+        &anthropic_config(true),
+        &model_profile(ReasoningSupport::Fixed),
+        Some(ANTHROPIC_CATALOG_ENDPOINT),
+        Some(&claude_ladder()),
+    )
+    .expect("the official binding resolves catalog controls");
+    assert_eq!(policy.support, ReasoningSupport::Controllable);
+    assert_eq!(policy.switch, ReasoningSwitch::MandatoryOn);
+    assert_eq!(policy.efforts, claude_ladder().efforts);
+    assert_eq!(policy.dialect, Some(ReasoningDialect::AnthropicEffort));
+    assert_eq!(policy.default_effort.as_deref(), Some("high"));
+    assert!(policy.capability_source.contains("Models.dev"));
+    // With no selection the default still reaches the wire, so the adapter
+    // can attach its block-binding control to every main request.
+    assert_eq!(
+        policy
+            .request_config()
+            .and_then(|reasoning| reasoning.effort),
+        Some("high".to_owned())
+    );
+    assert_eq!(policy.selection_source, "Smith Anthropic binding default");
+    assert_eq!(policy.effective_state(), "on");
+    assert_eq!(policy.effective_effort(), "high");
+    // The default is not a user choice, so startup does not announce it.
+    assert!(!policy.has_override());
+    // Requests without their own selection get the cheapest level.
+    assert_eq!(
+        policy
+            .fallback_request_config()
+            .and_then(|reasoning| reasoning.effort),
+        Some("low".to_owned())
+    );
+}
+
+#[test]
+fn official_anthropic_selection_wins_and_off_is_refused() {
+    let mut config = anthropic_config(true);
+    config.reasoning.effort = Some(Sourced::new(
+        "xhigh".to_owned(),
+        Source::flag("reasoning.effort"),
+    ));
+    let policy = resolve_reasoning_policy(
+        &config,
+        &model_profile(ReasoningSupport::Fixed),
+        Some(ANTHROPIC_CATALOG_ENDPOINT),
+        Some(&claude_ladder()),
+    )
+    .expect("a supported selection resolves");
+    assert_eq!(
+        policy
+            .request_config()
+            .and_then(|reasoning| reasoning.effort),
+        Some("xhigh".to_owned())
+    );
+    assert_ne!(policy.selection_source, "Smith Anthropic binding default");
+
+    config.reasoning.effort = Some(Sourced::new(
+        "ultra".to_owned(),
+        Source::flag("reasoning.effort"),
+    ));
+    let error = resolve_reasoning_policy(
+        &config,
+        &model_profile(ReasoningSupport::Fixed),
+        Some(ANTHROPIC_CATALOG_ENDPOINT),
+        Some(&claude_ladder()),
+    )
+    .expect_err("an unadvertised effort fails locally");
+    assert!(
+        error.contains("supported values: low, medium, high, xhigh, max"),
+        "{error}"
+    );
+
+    config.reasoning.effort = None;
+    config.reasoning.enabled = Some(Sourced::new(false, Source::session("reasoning.enabled")));
+    let error = resolve_reasoning_policy(
+        &config,
+        &model_profile(ReasoningSupport::Fixed),
+        Some(ANTHROPIC_CATALOG_ENDPOINT),
+        Some(&claude_ladder()),
+    )
+    .expect_err("thinking stays on at the official binding");
+    assert!(error.contains("mandatory-on"), "{error}");
+}
+
+#[test]
+fn anthropic_catalog_controls_need_the_official_endpoint_and_a_ladder() {
+    // A gateway serving a Claude-named model inherits no controls.
+    let gateway = resolve_reasoning_policy(
+        &anthropic_config(false),
+        &model_profile(ReasoningSupport::Fixed),
+        Some("https://gateway.example/v1"),
+        Some(&claude_ladder()),
+    )
+    .expect("presence-only reasoning");
+    assert_eq!(gateway.dialect, None);
+    assert_eq!(gateway.fallback_effort, None);
+    assert!(gateway.request_config().is_none());
+
+    // A toggle-only catalog model (Haiku 4.5) gets no effort controls.
+    let toggle_only = CatalogReasoningControls {
+        toggle: true,
+        efforts: Vec::new(),
+    };
+    let haiku = resolve_reasoning_policy(
+        &anthropic_config(true),
+        &model_profile(ReasoningSupport::Fixed),
+        Some(ANTHROPIC_CATALOG_ENDPOINT),
+        Some(&toggle_only),
+    )
+    .expect("presence-only reasoning");
+    assert_eq!(haiku.dialect, None);
+    assert!(haiku.request_config().is_none());
+    assert!(haiku.fallback_request_config().is_none());
+
+    // The official URL under another adapter kind is not the binding.
+    let mut compatible = resolved_config();
+    compatible.provider.kind.value = KIND_OPENAI_COMPATIBLE.to_owned();
+    let policy = resolve_reasoning_policy(
+        &compatible,
+        &model_profile(ReasoningSupport::Fixed),
+        Some(ANTHROPIC_CATALOG_ENDPOINT),
+        Some(&claude_ladder()),
+    )
+    .expect("presence-only reasoning");
+    assert_ne!(policy.dialect, Some(ReasoningDialect::AnthropicEffort));
+}
+
+#[tokio::test]
+async fn dialect_wrapper_fills_only_requests_without_a_selection() {
+    use agent_runtime::provider::fake::FakeProvider;
+    use agent_runtime_core::cancel::Cancellation;
+    use agent_runtime_core::clock::Deadline;
+    use agent_runtime_core::ids::{AttemptId, RequestId, SessionId};
+
+    let context = || ProviderCallContext {
+        session: SessionId::new("s1"),
+        request_id: RequestId::new("r1"),
+        attempt_id: AttemptId::new("a1"),
+        cache_identity: None,
+        purpose: agent_runtime_core::provider::ProviderAttemptPurpose::Ordinary,
+        cancel: Cancellation::new(),
+        deadline: Deadline::never(),
+    };
+    let fake = Arc::new(FakeProvider::text_reply("ok"));
+    let provider = ReasoningDialectProvider::new(
+        fake.clone(),
+        ReasoningDialect::AnthropicEffort,
+        Some(ReasoningConfig {
+            effort: Some("low".to_owned()),
+            max_tokens: None,
+        }),
+    );
+    let mut bare = request("unused");
+    bare.reasoning = None;
+    drop(provider.stream(bare, context()).await.expect("stream"));
+    drop(
+        provider
+            .stream(request("xhigh"), context())
+            .await
+            .expect("stream"),
+    );
+    let efforts = fake
+        .requests()
+        .iter()
+        .map(|request| request.reasoning.as_ref().and_then(|r| r.effort.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        efforts,
+        vec![Some("low".to_owned()), Some("xhigh".to_owned())]
+    );
+}

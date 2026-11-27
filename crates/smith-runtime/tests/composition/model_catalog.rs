@@ -6,7 +6,7 @@ default_profile = "glm"
 
 [profiles.glm]
 provider = "zai"
-model = "glm-5-turbo"
+model = "glm-5.4"
 
 [providers.zai]
 kind = "openai-compatible"
@@ -42,7 +42,7 @@ async fn catalog_only_selection_resolves_frozen_limits_before_any_provider_reque
         .expect("catalog-backed runtime");
     assert_eq!(
         smith.policy().model_profile.limits,
-        ModelLimits::new(200_000, 200_000, 131_072)
+        ModelLimits::new(1_000_000, 1_000_000, 131_072)
     );
     let provenance = smith
         .policy()

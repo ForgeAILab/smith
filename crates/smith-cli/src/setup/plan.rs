@@ -1,11 +1,11 @@
 use super::{
-    AgentPosture, BTreeMap, ConfigFile, ConfigSecret, ContextSection, GLM_5_3, GLM_ENDPOINT,
-    GLM_PROFILE, GLM_PROVIDER, GOOGLE_PROFILE, GOOGLE_PROVIDER, KIND_ANTHROPIC_MESSAGES,
-    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, ModelSection,
-    PlannedCredential, ProfileSection, ProfileUse, ProviderResponseSection, ProviderSection,
-    ReasoningOnlyBehavior, Result, SetupCredential, SetupModelLimits, SetupPlan, SetupProviderKind,
-    SetupSubmission, XAI_ENDPOINT, XAI_PROFILE, XAI_PROVIDER, setup_environment_reference,
-    setup_keychain_reference,
+    ANTHROPIC_ENDPOINT, ANTHROPIC_PROFILE, ANTHROPIC_PROVIDER, AgentPosture, BTreeMap, ConfigFile,
+    ConfigSecret, ContextSection, GLM_5_3, GLM_ENDPOINT, GLM_PROFILE, GLM_PROVIDER, GOOGLE_PROFILE,
+    GOOGLE_PROVIDER, KIND_ANTHROPIC_MESSAGES, KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE,
+    KIND_OPENAI_RESPONSES, ModelSection, PlannedCredential, ProfileSection, ProfileUse,
+    ProviderResponseSection, ProviderSection, ReasoningOnlyBehavior, Result, SetupCredential,
+    SetupModelLimits, SetupPlan, SetupProviderKind, SetupSubmission, XAI_ENDPOINT, XAI_PROFILE,
+    XAI_PROVIDER, setup_environment_reference, setup_keychain_reference,
 };
 
 pub(super) fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
@@ -125,6 +125,50 @@ pub(super) fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                 // The frozen Models.dev snapshot supplied to preflight/runtime
                 // owns the model limits; the user config stores no guessed
                 // endpoint or duplicate model metadata.
+                profile.max_output_tokens = None;
+                profile.context = None;
+            }
+            Ok(SetupPlan {
+                patch,
+                credential_reference: reference,
+                secret: enrollment_secret,
+            })
+        }
+        SetupSubmission::QuickAnthropic { credential, model } => {
+            if model.trim().is_empty() {
+                anyhow::bail!("Anthropic setup requires a model selected from the frozen catalog");
+            }
+            let PlannedCredential {
+                reference,
+                api_key,
+                enrollment_secret,
+            } = credential_plan(ANTHROPIC_PROVIDER, credential)?;
+            let mut patch = ConfigFile {
+                providers: BTreeMap::from([(
+                    ANTHROPIC_PROVIDER.into(),
+                    ProviderSection {
+                        kind: Some(KIND_ANTHROPIC_MESSAGES.into()),
+                        // Written rather than left to the adapter default so
+                        // the binding to the catalog that supplies the
+                        // model's limits is visible in configuration.
+                        base_url: Some(ANTHROPIC_ENDPOINT.into()),
+                        credential: reference.as_ref().map(ToString::to_string),
+                        api_key,
+                        ..ProviderSection::default()
+                    },
+                )]),
+                ..ConfigFile::default()
+            };
+            select_default(
+                &mut patch,
+                ANTHROPIC_PROFILE,
+                ANTHROPIC_PROVIDER,
+                &model,
+                8_192,
+            );
+            if let Some(profile) = patch.profiles.get_mut(ANTHROPIC_PROFILE) {
+                // The frozen Models.dev snapshot owns the limits; the user
+                // config stores no duplicate model metadata to drift from it.
                 profile.max_output_tokens = None;
                 profile.context = None;
             }

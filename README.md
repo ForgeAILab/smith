@@ -280,6 +280,16 @@ reference), and select a catalog-backed Gemini model. Smith uses Google's native
 Gemini Interactions API with a fixed endpoint; it does not ask for an endpoint,
 limits, headers, or hosted-tool settings, and it writes no explicit model record.
 
+Anthropic Claude is built in the same way. Create an API key in the
+[Claude Console](https://platform.claude.com/settings/keys), run
+`/connect anthropic`, choose protected API-key storage (or an environment
+reference), and pick a catalog-backed Claude model (`claude-opus-5-5` is listed
+first). Smith writes the fixed `https://api.anthropic.com/v1` endpoint and no
+model record. Thinking is always on at effort `high` unless you choose another
+level with `/effort`. For a gateway that speaks the Anthropic Messages API,
+choose **Anthropic-compatible endpoint** in `smith setup` instead; it asks for
+the gateway's endpoint and the model's limits.
+
 ChatGPT subscription login is deliberately different and explicitly
 experimental. `/connect chatgpt` offers Smith-owned browser PKCE or device-code
 login in a bounded popup, stores one renewable token bundle in the `chatgpt`
@@ -425,6 +435,7 @@ endpoints:
 | `https://openrouter.ai/api/v1` | Models.dev `openrouter` |
 | `https://api.z.ai/api/coding/paas/v4` | Models.dev `zai-coding-plan` |
 | native `gemini-interactions` provider | Models.dev `google` |
+| `anthropic-messages` at `https://api.anthropic.com/v1` (or no `base_url`) | Models.dev `anthropic` |
 
 The configured provider name remains authoritative. A provider named `router`
 at the OpenRouter endpoint therefore exposes choices such as

@@ -60,6 +60,12 @@ pub(super) fn catalog_model_entries(
     if entries.is_empty() {
         anyhow::bail!("the {label} model catalog has no tool-capable text model with limits");
     }
+    if let Some(recommended) = smith_config::setup::recommended_catalog_model(catalog_provider)
+        && let Some(index) = entries.iter().position(|entry| entry.id == recommended)
+    {
+        let entry = entries.remove(index);
+        entries.insert(0, entry);
+    }
     Ok((entries, limits_by_model))
 }
 
@@ -119,6 +125,7 @@ pub(crate) fn provider_setup_flow(
                     QuickKeySetup::Glm => SetupQuickKey::Glm,
                     QuickKeySetup::Xai => SetupQuickKey::Xai,
                     QuickKeySetup::Google => SetupQuickKey::Google,
+                    QuickKeySetup::Anthropic => SetupQuickKey::Anthropic,
                 },
                 provider: provider.to_owned(),
                 endpoint: endpoint.to_owned(),

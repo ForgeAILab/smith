@@ -8,8 +8,8 @@
 use std::collections::BTreeSet;
 
 use crate::model::{
-    ANTHROPIC_DEFAULT_ENDPOINT, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES,
-    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, ReasoningOnlyBehavior,
+    KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_GEMINI_INTERACTIONS,
+    KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, ReasoningOnlyBehavior,
 };
 
 /// Revision of the trusted model data shipped with this Smith build.
@@ -75,6 +75,16 @@ pub const GOOGLE_PROVIDER: &str = "google";
 pub const GOOGLE_PROFILE: &str = "gemini";
 /// Native Gemini Interactions API-version base URL.
 pub const GOOGLE_ENDPOINT: &str = crate::catalog::GEMINI_ENDPOINT;
+
+/// Provider name used by the native Anthropic connection.
+pub const ANTHROPIC_PROVIDER: &str = "anthropic";
+/// Default profile created by the native Anthropic connection.
+pub const ANTHROPIC_PROFILE: &str = "claude";
+/// Official Anthropic Messages API base URL the connection binds.
+pub const ANTHROPIC_ENDPOINT: &str = crate::catalog::ANTHROPIC_CATALOG_ENDPOINT;
+/// The model the Anthropic connection recommends. Its limits and effort
+/// levels come from the Models.dev catalog, never from this constant.
+pub const ANTHROPIC_DEFAULT_MODEL: &str = "claude-opus-5-5";
 
 /// The credential enrollment paths a setup descriptor permits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +158,8 @@ pub enum QuickKeySetup {
     Xai,
     /// Native Google catalog model.
     Google,
+    /// Native Anthropic catalog model.
+    Anthropic,
 }
 
 /// Review wording that accompanies provider setup data.
@@ -485,7 +497,7 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
         flow: ProviderSetupFlow::CustomEndpoint,
         connectable: true,
         connection: Some(ProviderConnectionDescriptor {
-            order: 4,
+            order: 5,
             label: "OpenAI-compatible endpoint",
             description: "API key · any OpenAI-compatible base URL · adds a first reviewed model",
             flow: ProviderConnectFlow::Setup,
@@ -508,23 +520,25 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
         reasoning_only: None,
     },
     ProviderSetupDescriptor {
+        // The official endpoint is the catalog-backed `anthropic` connection;
+        // this path is for gateways that speak the same protocol elsewhere.
         id: "anthropic-messages",
         setup_id: "anthropic-messages",
         flow: ProviderSetupFlow::CustomEndpoint,
         connectable: false,
         connection: None,
         review: ProviderSetupReview {
-            action: "Add Anthropic Messages provider",
+            action: "Add Anthropic-compatible gateway",
             adapter: KIND_ANTHROPIC_MESSAGES,
             endpoint: None,
             reasoning: None,
         },
-        label: "Anthropic Messages API",
-        description: "Native Claude endpoint with images and thinking; enter a model ID and limits",
-        provider: Some("anthropic"),
+        label: "Anthropic-compatible endpoint",
+        description: "A gateway that speaks the Anthropic Messages API; enter its endpoint, a model ID, and limits",
+        provider: None,
         profile: None,
         adapter: KIND_ANTHROPIC_MESSAGES,
-        endpoint: Some(ANTHROPIC_DEFAULT_ENDPOINT),
+        endpoint: None,
         credentials: CREDENTIAL_METHODS,
         models: &[],
         reasoning_only: None,
@@ -619,7 +633,43 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
         models: &[],
         reasoning_only: None,
     },
+    ProviderSetupDescriptor {
+        id: ANTHROPIC_PROVIDER,
+        setup_id: ANTHROPIC_PROVIDER,
+        flow: ProviderSetupFlow::QuickKey(QuickKeySetup::Anthropic),
+        connectable: true,
+        connection: Some(ProviderConnectionDescriptor {
+            order: 4,
+            label: "Anthropic Claude",
+            description: "Claude API key · fixed Anthropic endpoint · catalog-backed model",
+            flow: ProviderConnectFlow::Setup,
+            catalog_provider: Some(crate::catalog::ANTHROPIC_CATALOG_PROVIDER),
+        }),
+        review: ProviderSetupReview {
+            action: "Connect Anthropic Claude",
+            adapter: KIND_ANTHROPIC_MESSAGES,
+            endpoint: Some("fixed Anthropic Messages endpoint"),
+            reasoning: Some(
+                "adaptive thinking at the selected catalog model's effort levels, high by default",
+            ),
+        },
+        label: "Connect Anthropic Claude",
+        description: "Claude API key with the fixed Anthropic Messages endpoint",
+        provider: Some(ANTHROPIC_PROVIDER),
+        profile: Some(ANTHROPIC_PROFILE),
+        adapter: KIND_ANTHROPIC_MESSAGES,
+        endpoint: Some(ANTHROPIC_ENDPOINT),
+        credentials: CREDENTIAL_METHODS,
+        models: &[],
+        reasoning_only: None,
+    },
 ];
+
+/// The model a catalog-backed connection lists first, when Smith recommends one.
+pub fn recommended_catalog_model(catalog_provider: &str) -> Option<&'static str> {
+    (catalog_provider == crate::catalog::ANTHROPIC_CATALOG_PROVIDER)
+        .then_some(ANTHROPIC_DEFAULT_MODEL)
+}
 
 /// Returns setup choices whose adapter is present in the pinned runtime.
 ///
@@ -708,6 +758,7 @@ mod tests {
             KIND_CHATGPT_RESPONSES,
             KIND_OPENAI_RESPONSES,
             KIND_GEMINI_INTERACTIONS,
+            KIND_ANTHROPIC_MESSAGES,
         ]);
         assert_eq!(
             descriptors
@@ -719,6 +770,7 @@ mod tests {
                 "chatgpt",
                 "xai",
                 "google",
+                "anthropic",
                 "openai-compatible"
             ]
         );
@@ -882,6 +934,49 @@ mod tests {
             );
             assert_eq!(record.max_output_tokens, 16_384);
         }
+    }
+
+    #[test]
+    fn anthropic_descriptor_uses_the_official_catalog_backed_endpoint() {
+        let descriptors = provider_descriptors(&[KIND_ANTHROPIC_MESSAGES]);
+        let anthropic = descriptors
+            .iter()
+            .find(|choice| choice.id == ANTHROPIC_PROVIDER)
+            .expect("Anthropic descriptor");
+        assert_eq!(
+            anthropic.flow,
+            ProviderSetupFlow::QuickKey(QuickKeySetup::Anthropic)
+        );
+        assert_eq!(anthropic.provider, Some(ANTHROPIC_PROVIDER));
+        assert_eq!(anthropic.profile, Some(ANTHROPIC_PROFILE));
+        assert_eq!(anthropic.endpoint, Some(ANTHROPIC_ENDPOINT));
+        assert_eq!(
+            anthropic.connection.and_then(|c| c.catalog_provider),
+            Some(crate::catalog::ANTHROPIC_CATALOG_PROVIDER)
+        );
+        assert_eq!(
+            recommended_catalog_model(crate::catalog::ANTHROPIC_CATALOG_PROVIDER),
+            Some(ANTHROPIC_DEFAULT_MODEL)
+        );
+        assert_eq!(recommended_catalog_model("google"), None);
+
+        // The gateway path collects its own identity and endpoint, so the
+        // official endpoint has exactly one setup route.
+        let gateway = descriptors
+            .iter()
+            .find(|choice| choice.id == "anthropic-messages")
+            .expect("gateway descriptor");
+        assert_eq!(gateway.flow, ProviderSetupFlow::CustomEndpoint);
+        assert_eq!(gateway.provider, None);
+        assert_eq!(gateway.endpoint, None);
+        assert!(!gateway.connectable);
+        assert_eq!(
+            descriptors
+                .iter()
+                .filter(|choice| choice.endpoint == Some(ANTHROPIC_ENDPOINT))
+                .count(),
+            1
+        );
     }
 
     #[test]

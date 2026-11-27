@@ -48,7 +48,9 @@ impl SetupApp {
                 ),
                 ("Default", format!("profile {}", self.quick_start.profile)),
             ],
-            Some(SetupAction::QuickXai | SetupAction::QuickGoogle) => {
+            Some(
+                SetupAction::QuickXai | SetupAction::QuickGoogle | SetupAction::QuickAnthropic,
+            ) => {
                 let review = self
                     .key_review
                     .as_ref()
@@ -58,10 +60,10 @@ impl SetupApp {
                     ("Provider", format!("{} · {}", self.provider, self.endpoint)),
                     (
                         "Connection",
-                        if self.action == Some(SetupAction::QuickGoogle) {
-                            "Gemini API"
-                        } else {
-                            "xAI API"
+                        match self.action {
+                            Some(SetupAction::QuickGoogle) => "Gemini API",
+                            Some(SetupAction::QuickAnthropic) => "Anthropic API",
+                            _ => "xAI API",
                         }
                         .into(),
                     ),

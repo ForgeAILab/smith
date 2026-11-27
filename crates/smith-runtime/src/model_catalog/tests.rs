@@ -144,6 +144,22 @@ fn remote_fixture() -> Vec<u8> {
                 }
             }
         },
+        "anthropic": {
+            "id": "anthropic",
+            "name": "Anthropic",
+            "models": {
+                "claude-fixture": {
+                    "id": "claude-fixture",
+                    "name": "Claude Fixture",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "reasoning_options": [{"type": "effort", "values": ["low", "medium", "high", "xhigh", "max"]}],
+                    "structured_output": true,
+                    "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]},
+                    "limit": {"context": 1000000, "output": 128000}
+                }
+            }
+        },
         "google": {
             "id": "google",
             "name": "Google",
@@ -214,6 +230,37 @@ fn embedded_seed_is_strictly_valid_and_contains_all_supported_catalogs() {
 }
 
 #[test]
+fn embedded_anthropic_catalog_carries_api_ids_and_effort_ladders() {
+    let snapshot = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
+    let anthropic = snapshot.provider("anthropic").expect("Anthropic catalog");
+    let opus = &anthropic.models["claude-opus-5-5"];
+    let limits = opus.limits.expect("limits");
+    assert_eq!(limits.context_tokens, 1_000_000);
+    assert_eq!(limits.max_output_tokens, 128_000);
+    assert!(opus.tool_call);
+    assert_eq!(
+        opus.reasoning_controls
+            .as_ref()
+            .map(|controls| controls.efforts.clone()),
+        Some(
+            ["low", "medium", "high", "xhigh", "max"]
+                .map(str::to_owned)
+                .to_vec()
+        )
+    );
+    // Deprecated budget-only models are dropped during normalization, so
+    // every ladder-bearing entry accepts adaptive thinking.
+    assert!(!anthropic.models.contains_key("claude-opus-4-5"));
+    assert!(!anthropic.models.contains_key("claude-sonnet-4-5"));
+    // A gateway listing a bare Claude ID now finds the exact Anthropic entry.
+    let (provider, model) = snapshot
+        .resolve_model_by_id("claude-fable-5-1")
+        .expect("ID fallback match");
+    assert_eq!(provider, "anthropic");
+    assert_eq!(model.id, "claude-fable-5-1");
+}
+
+#[test]
 fn runtime_source_preserves_local_alias_and_nested_model_identity() {
     let snapshot = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
     let source = runtime_catalog_source(
@@ -225,10 +272,10 @@ fn runtime_source_preserves_local_alias_and_nested_model_identity() {
     .unwrap();
 
     let record = source
-        .lookup("coding", &ModelId::new("glm-4.7"))
+        .lookup("coding", &ModelId::new("glm-5.4"))
         .expect("catalog record under the local provider alias");
-    assert_eq!(record.context_tokens, Some(204_800));
-    assert_eq!(record.max_input_tokens, Some(204_800));
+    assert_eq!(record.context_tokens, Some(1_000_000));
+    assert_eq!(record.max_input_tokens, Some(1_000_000));
     assert_eq!(record.max_output_tokens, Some(131_072));
     assert_eq!(
         record.revision.as_deref(),
@@ -236,7 +283,7 @@ fn runtime_source_preserves_local_alias_and_nested_model_identity() {
     );
     assert!(
         source
-            .lookup("zai-coding-plan", &ModelId::new("glm-4.7"))
+            .lookup("zai-coding-plan", &ModelId::new("glm-5.4"))
             .is_none()
     );
 }

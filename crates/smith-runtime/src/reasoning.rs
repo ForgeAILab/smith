@@ -17,10 +17,10 @@ use agent_runtime_core::store::{SessionStateSensitivity, VersionedSessionState};
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 use smith_config::catalog::{
-    CatalogReasoningControls, GEMINI_ENDPOINT, OPENAI_ENDPOINT, OPENROUTER_ENDPOINT,
-    XAI_CATALOG_ENDPOINT, ZAI_CODING_PLAN_ENDPOINT,
+    ANTHROPIC_CATALOG_ENDPOINT, CatalogReasoningControls, GEMINI_ENDPOINT, OPENAI_ENDPOINT,
+    OPENROUTER_ENDPOINT, XAI_CATALOG_ENDPOINT, ZAI_CODING_PLAN_ENDPOINT,
 };
-use smith_config::model::{KIND_OPENAI_COMPATIBLE, ReasoningDialect};
+use smith_config::model::{KIND_ANTHROPIC_MESSAGES, KIND_OPENAI_COMPATIBLE, ReasoningDialect};
 use smith_config::resolve::{Layer, ResolvedConfig, ResolvedModelReasoning, Source, Sourced};
 use smith_config::setup::{CHATGPT_ENDPOINT, CHATGPT_PROVIDER, trusted_model};
 
@@ -40,6 +40,11 @@ const OPENROUTER_EFFORTS: [&str; 3] = ["low", "medium", "high"];
 /// model that supports one can advertise it through explicit
 /// `[models."provider/model".reasoning]` metadata.
 const OPENAI_EFFORTS: [&str; 3] = ["low", "medium", "high"];
+
+/// The effort Smith sends at the official Anthropic endpoint when none is
+/// selected. It is the API's own default on most Claude models and the floor
+/// the API recommends for coding work.
+const ANTHROPIC_DEFAULT_EFFORT: &str = "high";
 
 /// Additive redaction-safe reasoning override stored with a session.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -207,6 +212,17 @@ pub struct ReasoningRuntimePolicy {
     pub capability_source: String,
     /// Bounded source of the active selection.
     pub selection_source: String,
+    /// Effort for a provider request that arrives without its own reasoning
+    /// selection, such as a semantic-summary call on the same provider.
+    ///
+    /// Set only where every request must carry thinking controls: the
+    /// official Anthropic endpoint, whose thinking blocks fail a replay after
+    /// the earlier history changes unless the request carries block binding.
+    pub fallback_effort: Option<String>,
+    /// Whether the default effort is sent when nothing is selected, rather
+    /// than leaving the provider's own default in place. A default sent this
+    /// way is not a user selection, so it is not reported as an override.
+    pub sends_default_effort: bool,
 }
 
 struct ResolvedReasoningControls {
@@ -232,6 +248,8 @@ impl Default for ReasoningRuntimePolicy {
             dialect: None,
             capability_source: "no trusted reasoning capability metadata".to_owned(),
             selection_source: "provider/model default".to_owned(),
+            fallback_effort: None,
+            sends_default_effort: false,
         }
     }
 }
@@ -293,7 +311,7 @@ impl ReasoningRuntimePolicy {
             }
             ReasoningDialect::GeminiThinking | ReasoningDialect::AnthropicEffort => {
                 self.selected_effort.clone().or_else(|| {
-                    (self.selected_enabled == Some(true))
+                    (self.selected_enabled == Some(true) || self.sends_default_effort)
                         .then(|| self.default_effort.clone())
                         .flatten()
                 })
@@ -301,6 +319,14 @@ impl ReasoningRuntimePolicy {
         }?;
         Some(ReasoningConfig {
             effort: Some(effort),
+            max_tokens: None,
+        })
+    }
+
+    /// The reasoning selection for a request that carries none of its own.
+    pub(crate) fn fallback_request_config(&self) -> Option<ReasoningConfig> {
+        self.fallback_effort.as_ref().map(|effort| ReasoningConfig {
+            effort: Some(effort.clone()),
             max_tokens: None,
         })
     }
@@ -505,6 +531,30 @@ pub fn resolve_reasoning_policy(
                 "OpenRouter unified reasoning API (catalog-advertised reasoning model)".to_owned()
             },
         }
+    } else if endpoint == Some(ANTHROPIC_CATALOG_ENDPOINT)
+        && config.provider.kind.value == KIND_ANTHROPIC_MESSAGES
+        && profile.capabilities.reasoning != ReasoningSupport::Unsupported
+        && let Some(controls) = catalog_controls.filter(|controls| !controls.efforts.is_empty())
+    {
+        // The official Messages endpoint accepts adaptive thinking with the
+        // advertised effort ladder on every catalog model that publishes one
+        // (deprecated budget-only models never reach the catalog). Smith keeps
+        // thinking on: omitting it means "off" on some models and "adaptive"
+        // on others, and `disabled` is rejected on the newest, so an off
+        // switch would mean something different per model.
+        ResolvedReasoningControls {
+            support: ReasoningSupport::Controllable,
+            switch: ReasoningSwitch::MandatoryOn,
+            efforts: controls.efforts.clone(),
+            default_enabled: Some(true),
+            default_effort: controls
+                .efforts
+                .iter()
+                .any(|effort| effort == ANTHROPIC_DEFAULT_EFFORT)
+                .then(|| ANTHROPIC_DEFAULT_EFFORT.to_owned()),
+            dialect: Some(ReasoningDialect::AnthropicEffort),
+            capability_source: "Models.dev advertised Anthropic effort levels".to_owned(),
+        }
     } else if endpoint == Some(GEMINI_ENDPOINT)
         && profile.capabilities.reasoning != ReasoningSupport::Unsupported
         && catalog_controls.is_some_and(|controls| !controls.efforts.is_empty())
@@ -580,6 +630,8 @@ pub fn resolve_reasoning_policy(
                 "{capability_source}; explicit OpenAI-compatible selection validated by endpoint"
             ),
             selection_source,
+            fallback_effort: None,
+            sends_default_effort: false,
         });
     }
     let known_unsupported = support == ReasoningSupport::Unsupported
@@ -696,6 +748,24 @@ pub fn resolve_reasoning_policy(
         ));
     }
 
+    // At the official Anthropic endpoint every request carries thinking
+    // controls, because the adapter attaches its block-binding control only
+    // to a request with an effort. The default is sent when nothing is
+    // selected, and the cheapest advertised level covers auxiliary calls.
+    let official_anthropic = endpoint == Some(ANTHROPIC_CATALOG_ENDPOINT)
+        && config.provider.kind.value == KIND_ANTHROPIC_MESSAGES
+        && dialect == Some(ReasoningDialect::AnthropicEffort)
+        && selected_enabled != Some(false);
+    let sends_default_effort = official_anthropic && default_effort.is_some();
+    let selection_source = if sends_default_effort && selected_effort.is_none() {
+        "Smith Anthropic binding default".to_owned()
+    } else {
+        selection_source
+    };
+    let fallback_effort = official_anthropic
+        .then(|| efforts.first().cloned())
+        .flatten();
+
     Ok(ReasoningRuntimePolicy {
         support,
         switch,
@@ -707,6 +777,8 @@ pub fn resolve_reasoning_policy(
         dialect,
         capability_source,
         selection_source,
+        fallback_effort,
+        sends_default_effort,
     })
 }
 

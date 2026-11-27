@@ -948,7 +948,37 @@ Models.dev snapshot used by `/model` and setup; no `[models]` entry is needed
 for catalog-backed Gemini models. The provider sends native Gemini
 `thinking_level` values when the selected catalog model advertises them.
 
-An Anthropic Messages-compatible route must declare native adaptive-effort
+The Claude API is a native catalog-backed connection. Create an API key in the
+[Claude Console](https://platform.claude.com/settings/keys), then run
+`/connect anthropic` or use this minimal user configuration:
+
+```toml
+default_profile = "claude"
+
+[profiles.claude]
+provider = "anthropic"
+model = "claude-opus-5-5"
+
+[providers.anthropic]
+kind = "anthropic-messages"
+base_url = "https://api.anthropic.com/v1"
+credential = "env:ANTHROPIC_API_KEY"
+```
+
+At exactly this endpoint (or with `base_url` omitted, which resolves to it),
+model limits, modalities, prices, and effort ladders come from the Models.dev
+`anthropic` catalog, so no `[models]` entry is needed. Thinking is mandatory:
+Smith sends adaptive thinking on every request, at the selected effort or
+`high` when none is selected, and `/think off` is rejected. Smith also sets
+`thinking.block_binding.prefix_mismatch_behavior = "drop_block"` with the
+`thinking-binding-controls-2026-08-01` beta. Current Claude models reject a
+replayed thinking block once the earlier history changes, and compaction and
+summary calls change it, so mismatched blocks are dropped instead of failing
+the request. Summary and other one-shot calls on this provider run at the
+lowest advertised effort. Models whose catalog entry advertises no effort
+ladder (Claude Haiku 4.5) run without thinking controls.
+
+An Anthropic Messages-compatible gateway must declare native adaptive-effort
 support explicitly on the exact provider/model binding. For example, this is
 the complete dddai Fable 5.1 declaration (keep the credential in an environment
 or another supported secret store):
@@ -1018,6 +1048,8 @@ on ChatGPT offer the default `272k` window and an `872k` option. Usage beyond 27
 about twice as much, so the extended window can cost more. On the exact OpenAI
 Platform endpoint, those model IDs offer `1m` (1,050,000 tokens) by default
 and `272k`; input beyond 272k is billed at the premium tier.
+
+## Model limits and reasoning controls
 
 The selected `provider/model` must resolve exact `context_tokens`,
 `max_input_tokens`, and `max_output_tokens` from configured values, trusted
@@ -1098,9 +1130,10 @@ endpoint grants the same OpenAI-effort dialect for catalog-backed Grok
 reasoning models, the OpenRouter endpoint speaks the unified `reasoning`
 object with an on/off switch, the Z.AI Coding Plan endpoint speaks its
 documented thinking toggle, and the native Gemini endpoint speaks
-catalog-advertised `thinking_level` values. Anthropic adaptive effort is
-available only from trusted exact model metadata; Smith does not infer it from
-an endpoint or model name. On those endpoint-bound integrations the frozen
+catalog-advertised `thinking_level` values. Anthropic adaptive effort comes
+from the Models.dev `anthropic` catalog at the official endpoint and from
+trusted exact model metadata elsewhere; Smith does not infer it from a gateway
+endpoint or a model name. On those endpoint-bound integrations the frozen
 Models.dev snapshot
 supplies each model's advertised control shape — its exact effort ladder
 (for example `none…xhigh` on newer OpenAI families, `low…high` on Grok and

@@ -77,8 +77,9 @@ MUST NOT offer an off switch.
 - **GIVEN** the idle binding is `anthropic/claude-opus-5-5` with a catalog
   ladder of `low` through `max`
 - **WHEN** the user opens `/effort`
-- **THEN** the picker lists those levels in advertised order with `high`
-  marked as the default
+- **THEN** the picker lists those levels in advertised order after a
+  `default (high)` entry
+- **AND** no startup notice presents the default as a session override
 - **AND** opening or choosing the setting sends no provider request
 
 #### Scenario: Thinking cannot be turned off

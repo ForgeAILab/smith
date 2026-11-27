@@ -530,9 +530,11 @@ fn anthropic_effort_resources_keep_the_ladder_and_disable_thinking_off() {
         dialect: Some(smith_config::model::ReasoningDialect::AnthropicEffort),
         capability_source: "configured model metadata".to_owned(),
         selection_source: "provider/model default".to_owned(),
+        fallback_effort: None,
+        sends_default_effort: false,
     };
     let resources = runtime_resources(
-        inventory,
+        inventory.clone(),
         Vec::new(),
         "session",
         project.path(),
@@ -552,6 +554,25 @@ fn anthropic_effort_resources_keep_the_ladder_and_disable_thinking_off() {
             .collect::<Vec<_>>(),
         ["provider default", "low", "medium", "high", "xhigh", "max"]
     );
+    // A binding that sends its own default names the level it sends.
+    let sent_default = smith_runtime::reasoning::ReasoningRuntimePolicy {
+        sends_default_effort: true,
+        ..reasoning.clone()
+    };
+    let named = runtime_resources(
+        inventory,
+        Vec::new(),
+        "session",
+        project.path(),
+        &resolution.config.agent,
+        &sent_default,
+        &[],
+        None,
+        None,
+        None,
+    );
+    assert_eq!(named.efforts[0].label, "default (high)");
+    assert!(named.efforts[0].active);
     assert!(
         resources
             .thinking

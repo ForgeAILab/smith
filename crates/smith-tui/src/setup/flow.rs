@@ -281,6 +281,7 @@ impl SetupApp {
                     SetupQuickKey::Glm => SetupAction::QuickGlm,
                     SetupQuickKey::Xai => SetupAction::QuickXai,
                     SetupQuickKey::Google => SetupAction::QuickGoogle,
+                    SetupQuickKey::Anthropic => SetupAction::QuickAnthropic,
                 });
                 self.provider = provider;
                 self.endpoint = endpoint;
@@ -653,6 +654,10 @@ impl SetupApp {
                 model: self.model.clone(),
             }),
             SetupAction::QuickGoogle => Some(SetupSubmission::QuickGoogle {
+                credential: credential()?,
+                model: self.model.clone(),
+            }),
+            SetupAction::QuickAnthropic => Some(SetupSubmission::QuickAnthropic {
                 credential: credential()?,
                 model: self.model.clone(),
             }),

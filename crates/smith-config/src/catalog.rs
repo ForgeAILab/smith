@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::model::{
-    KIND_CHATGPT_RESPONSES, KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE,
-    KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
+    ANTHROPIC_DEFAULT_ENDPOINT, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES,
+    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
 };
 
 /// The only public origin Smith accepts provider model metadata from.
@@ -41,6 +41,12 @@ pub const XAI_CATALOG_PROVIDER: &str = "xai";
 
 /// Models.dev's Google provider identity.
 pub const GOOGLE_CATALOG_PROVIDER: &str = "google";
+
+/// Models.dev's Anthropic provider identity.
+pub const ANTHROPIC_CATALOG_PROVIDER: &str = "anthropic";
+
+/// The exact normalized Anthropic Messages endpoint Smith binds to its catalog.
+pub const ANTHROPIC_CATALOG_ENDPOINT: &str = ANTHROPIC_DEFAULT_ENDPOINT;
 
 /// The exact normalized OpenAI endpoint Smith binds to its catalog.
 pub const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1";
@@ -445,6 +451,11 @@ pub fn catalog_provider_for(kind: &str, base_url: Option<&str>) -> Option<&'stat
     if kind == KIND_GEMINI_INTERACTIONS && base_url.is_none() {
         return Some(GOOGLE_CATALOG_PROVIDER);
     }
+    // An Anthropic Messages provider without a URL talks to the official
+    // endpoint, which is exactly the deployment the catalog describes.
+    if kind == KIND_ANTHROPIC_MESSAGES && base_url.is_none() {
+        return Some(ANTHROPIC_CATALOG_PROVIDER);
+    }
     let endpoint = normalized_endpoint(base_url?)?;
     // The pairing is exact on both sides. A catalog entry describes a model as
     // one deployment serves it, so inheriting limits from a matching name at a
@@ -461,6 +472,7 @@ pub fn catalog_provider_for(kind: &str, base_url: Option<&str>) -> Option<&'stat
             Some(XAI_CATALOG_PROVIDER)
         }
         (KIND_GEMINI_INTERACTIONS, GEMINI_ENDPOINT) => Some(GOOGLE_CATALOG_PROVIDER),
+        (KIND_ANTHROPIC_MESSAGES, ANTHROPIC_CATALOG_ENDPOINT) => Some(ANTHROPIC_CATALOG_PROVIDER),
         _ => None,
     }
 }
@@ -558,6 +570,40 @@ mod tests {
         assert!(
             value.as_object().unwrap().get("cost").is_none(),
             "an absent price must not appear in the serialized model at all"
+        );
+    }
+
+    #[test]
+    fn anthropic_binds_only_at_the_official_endpoint() {
+        for base_url in [
+            None,
+            Some("https://api.anthropic.com/v1"),
+            Some("https://API.anthropic.com/v1/"),
+        ] {
+            assert_eq!(
+                catalog_provider_for(KIND_ANTHROPIC_MESSAGES, base_url),
+                Some(ANTHROPIC_CATALOG_PROVIDER),
+                "{base_url:?}"
+            );
+        }
+        for base_url in [
+            "https://api.anthropic.com/v1/messages",
+            "https://api.anthropic.com",
+            "https://gateway.example/v1",
+        ] {
+            assert_eq!(
+                catalog_provider_for(KIND_ANTHROPIC_MESSAGES, Some(base_url)),
+                None,
+                "{base_url}"
+            );
+        }
+        assert_eq!(
+            catalog_provider_for(KIND_OPENAI_COMPATIBLE, Some(ANTHROPIC_CATALOG_ENDPOINT)),
+            None
+        );
+        assert_eq!(
+            modality_catalog_provider_for(KIND_ANTHROPIC_MESSAGES, None),
+            Some(ANTHROPIC_CATALOG_PROVIDER)
         );
     }
 

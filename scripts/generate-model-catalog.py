@@ -18,7 +18,7 @@ SOURCE_URL = "https://models.dev/api.json"
 # Smith's existing stale-revision check rejects it and falls back to the
 # embedded seed rather than silently loading a permanently unpriced catalog.
 SCHEMA_REVISION = 2
-SUPPORTED_PROVIDERS = ("openai", "openrouter", "xai", "zai-coding-plan", "google")
+SUPPORTED_PROVIDERS = ("openai", "openrouter", "xai", "zai-coding-plan", "google", "anthropic")
 MAX_U32 = 2**32 - 1
 MAX_U64 = 2**64 - 1
 MAX_MODELS_PER_PROVIDER = 10_000

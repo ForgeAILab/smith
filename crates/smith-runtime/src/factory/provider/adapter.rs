@@ -281,6 +281,21 @@ pub(in crate::factory) fn endpoint(
     Ok(endpoint)
 }
 
+/// How the Anthropic adapter treats a replayed thinking block whose history
+/// changed.
+///
+/// Current Claude models bind each thinking block to the history that
+/// produced it and reject its replay once that history changes. Compaction and
+/// summary calls change it, so the official endpoint drops such blocks instead
+/// of failing the request. Gateways may not accept the control and keep the
+/// provider default.
+pub(in crate::factory) fn anthropic_block_binding(
+    endpoint: &str,
+) -> Option<agent_runtime::provider::anthropic::ThinkingBlockBinding> {
+    (endpoint == smith_config::catalog::ANTHROPIC_CATALOG_ENDPOINT)
+        .then_some(agent_runtime::provider::anthropic::ThinkingBlockBinding::DropBlock)
+}
+
 fn remember_image_binding(
     binding: &mut Option<ImageBackendBinding>,
     adapter: Adapter,
@@ -425,10 +440,12 @@ pub(super) fn construct(
         Adapter::AnthropicMessages => {
             let transport = ReqwestTransport::new(request.transport.clone())
                 .map_err(FactoryError::Transport)?;
-            let mut config = AnthropicConfig::new(
-                endpoint.unwrap_or_default(),
-                request.config.model.value.clone(),
-            );
+            let endpoint = endpoint.unwrap_or_default();
+            let block_binding = anthropic_block_binding(&endpoint);
+            let mut config = AnthropicConfig::new(endpoint, request.config.model.value.clone());
+            if let Some(behavior) = block_binding {
+                config = config.with_thinking_block_binding(behavior);
+            }
             // The resolved profile governs request validation, so the adapter
             // is told what the profile declared rather than a provider-wide
             // guess about every model the endpoint might serve.

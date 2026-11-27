@@ -125,6 +125,8 @@ pub enum SetupQuickKey {
     Xai,
     /// Native interactions catalog model.
     Google,
+    /// Native Anthropic Messages catalog model.
+    Anthropic,
 }
 
 /// Provider-specific review text supplied by the configuration owner.
@@ -248,6 +250,13 @@ pub enum SetupSubmission {
         /// Reviewed authentication choice.
         credential: SetupCredential,
         /// Exact model selected from the frozen Google catalog.
+        model: String,
+    },
+    /// Native Anthropic connection and its reviewed catalog model.
+    QuickAnthropic {
+        /// Reviewed authentication choice.
+        credential: SetupCredential,
+        /// Exact model selected from the frozen Anthropic catalog.
         model: String,
     },
     /// A provider and its first model collected by the shared wizard.
@@ -378,6 +387,7 @@ enum SetupAction {
     QuickGlm,
     QuickXai,
     QuickGoogle,
+    QuickAnthropic,
     AddProvider,
     AddModel,
     ChangeDefault,

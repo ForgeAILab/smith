@@ -25,10 +25,11 @@ use smith_config::model::{
 };
 use smith_config::resolve::{ConfigReadiness, ResolveRequest, inspect};
 use smith_config::setup::{
-    CHATGPT_PROVIDER, CHATGPT_TERRA, GLM_5_3, GLM_ENDPOINT, GLM_PROFILE, GLM_PROVIDER,
-    GOOGLE_PROFILE, GOOGLE_PROVIDER, ProviderSetupDescriptor, ProviderSetupFlow, QuickKeySetup,
-    SETUP_ENVIRONMENT_VARIABLE_ERROR, SETUP_PROVIDER_NAME_HELP, XAI_ENDPOINT, XAI_PROFILE,
-    XAI_PROVIDER, connectable_provider_descriptors, provider_descriptors, setup_endpoint_help,
+    ANTHROPIC_ENDPOINT, ANTHROPIC_PROFILE, ANTHROPIC_PROVIDER, CHATGPT_PROVIDER, CHATGPT_TERRA,
+    GLM_5_3, GLM_ENDPOINT, GLM_PROFILE, GLM_PROVIDER, GOOGLE_PROFILE, GOOGLE_PROVIDER,
+    ProviderSetupDescriptor, ProviderSetupFlow, QuickKeySetup, SETUP_ENVIRONMENT_VARIABLE_ERROR,
+    SETUP_PROVIDER_NAME_HELP, XAI_ENDPOINT, XAI_PROFILE, XAI_PROVIDER,
+    connectable_provider_descriptors, provider_descriptors, setup_endpoint_help,
 };
 use smith_config::user_config::{prepare_checkpoint_key_source_removal, prepare_user_config_edit};
 use smith_runtime::checkpoint::{CheckpointKeyProvider, ConfiguredCheckpointKeyProvider};
@@ -84,6 +85,7 @@ fn completion_summary(submission: &SetupSubmission, destination: &Path) -> Strin
         SetupSubmission::QuickGlm { .. } => added(GLM_PROVIDER, GLM_5_3.model, true),
         SetupSubmission::QuickXai { model, .. } => added(XAI_PROVIDER, model, true),
         SetupSubmission::QuickGoogle { model, .. } => added(GOOGLE_PROVIDER, model, true),
+        SetupSubmission::QuickAnthropic { model, .. } => added(ANTHROPIC_PROVIDER, model, true),
         SetupSubmission::AddProvider {
             provider,
             model,

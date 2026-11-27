@@ -1,6 +1,6 @@
 ---
 created_at: 2026-11-27T07:22:39Z
-updated_at: 2026-11-27T07:22:39Z
+updated_at: 2026-11-27T08:43:24Z
 ---
 
 ## Why
@@ -32,8 +32,9 @@ and pick a Claude model the way they connect Google or xAI.
 - At the official endpoint, set the adapter's thinking block binding to
   `drop_block`. Current Claude models reject replayed thinking blocks once the
   earlier history changes, and Smith's compaction and summary calls change it.
-  One-shot calls on the same provider (summary, advisor) inherit the binding's
-  effort, so they carry the control too.
+  Requests that reach the provider without a reasoning selection (the
+  semantic-summary call) run at the lowest advertised effort, so they carry
+  the control too.
 - Repurpose the existing `anthropic-messages` setup entry as the
   Anthropic-compatible gateway path. It collects the endpoint instead of fixing
   it to the official one, so the official endpoint has a single setup route.

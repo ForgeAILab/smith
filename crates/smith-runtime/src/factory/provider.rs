@@ -152,9 +152,11 @@ pub(super) fn construct_runtime(
             .map(|policy| policy.value),
     );
     let provider = match reasoning.dialect {
-        Some(dialect) => {
-            Arc::new(ReasoningDialectProvider::new(provider, dialect)) as Arc<dyn Provider>
-        }
+        Some(dialect) => Arc::new(ReasoningDialectProvider::new(
+            provider,
+            dialect,
+            reasoning.fallback_request_config(),
+        )) as Arc<dyn Provider>,
         None => provider,
     };
     let module_image_binding = image_binding
